@@ -311,6 +311,27 @@ def get_vehicles(rids: str = "", curk: str = "0"):
         if anim_key and str(anim_key).isdigit():
             max_curk = max(max_curk, int(anim_key))
 
+        # Process anim_points: API uses snake_case, coords are in microdegrees (e.g. 51819306 = 51.819306)
+        raw_anim_points = item.get("anim_points", [])
+        anim_points = []
+        if isinstance(raw_anim_points, list):
+            for pt in raw_anim_points:
+                try:
+                    pt_lat = float(pt.get("lat", 0))
+                    pt_lng = float(pt.get("lon", pt.get("lng", 0)))
+                    if abs(pt_lat) > 1000:
+                        pt_lat /= 1_000_000
+                    if abs(pt_lng) > 1000:
+                        pt_lng /= 1_000_000
+                    anim_points.append({
+                        "percent": float(pt.get("percent", 0)),
+                        "lat": pt_lat,
+                        "lng": pt_lng,
+                        "dir": float(pt.get("dir", 0))
+                    })
+                except:
+                    continue
+
         vehicles.append({
             "id": str(item.get("vehid") or item.get("id") or ""),
             "lat": lat,
@@ -322,7 +343,7 @@ def get_vehicles(rids: str = "", curk: str = "0"):
             "type": str(item.get("rtype") or ""),
             "rid": str(item.get("rid") or ""),
             "anim_key": str(anim_key),
-            "animPoints": item.get("animPoints", [])
+            "animPoints": anim_points
         })
         
     result = {"vehicles": vehicles, "next_curk": str(max_curk)}
