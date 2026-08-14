@@ -5,7 +5,21 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import "./App.css";
 
 const TILE_URL = "/tiles/{z}/{x}/{y}.pbf";
+
+/**
+ * ⚠️ SECURITY NOTE
+ * Anything prefixed VITE_ is compiled into the public JS bundle, so this
+ * "secret" is visible to anyone who opens DevTools. The timestamp+HMAC-ish
+ * signature below is therefore only a *scraper deterrent*, not authentication.
+ * Real protection must live server-side (sessions, tokens, rate limiting).
+ */
 const API_SECRET = import.meta.env.VITE_API_SECRET;
+
+/** Escape HTML special chars to prevent XSS from upstream data. */
+function escapeHtml(str) {
+  if (typeof str !== "string") return String(str ?? "");
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
 
 async function apiFetch(url, options = {}) {
   const timestamp = Math.floor(Date.now() / 1000).toString();
@@ -335,13 +349,13 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
 
             html += `<li style="display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f5f9;">
               <div style="width: 55px; flex-shrink: 0; display: flex; justify-content: center;">
-                <div style="background-color: ${bgColor}; color: white; border-radius: 6px; width: 45px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold;">${rnum}</div>
+                <div style="background-color: ${bgColor}; color: white; border-radius: 6px; width: 45px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold;">${escapeHtml(rnum)}</div>
               </div>
               <div style="margin-left: 8px; flex-shrink: 0; width: 70px; display: flex; justify-content: center;">
-                <div style="background-color: #f1f5f9; border-radius: 6px; display: flex; align-items: center; justify-content: center; height: 28px; width: 62px; font-size: 13px; font-weight: 600; color: #0f172a;">${f.time} мин.</div>
+                <div style="background-color: #f1f5f9; border-radius: 6px; display: flex; align-items: center; justify-content: center; height: 28px; width: 62px; font-size: 13px; font-weight: 600; color: #0f172a;">${escapeHtml(f.time)} мин.</div>
               </div>
               <div class="dest-wrapper" style="margin-left: 12px; flex-grow: 1; overflow: hidden; white-space: nowrap; position: relative; text-overflow: ellipsis;">
-                <div class="dest-text" style="display: inline-block; font-size: 14px; color: #0f172a;">${dest}</div>
+                <div class="dest-text" style="display: inline-block; font-size: 14px; color: #0f172a;">${escapeHtml(dest)}</div>
               </div>
             </li>`;
           });
@@ -616,10 +630,7 @@ export default function App() {
         rtRes = await apiFetch("/api/routes");
         if (!stRes.ok) throw new Error(`HTTP ${stRes.status}`);
       } catch (e) {
-        // Fall back to window.location.hostname:8000 so VPS remote clients connect properly
-        const host = typeof window !== "undefined" && window.location.hostname ? window.location.hostname : "127.0.0.1";
-        stRes = await apiFetch(`http://${host}:8000/api/stations`);
-        rtRes = await apiFetch(`http://${host}:8000/api/routes`);
+        throw e; // Let the outer catch handle it
       }
       const stData = await stRes.json();
       const rtData = await rtRes.json();
@@ -1593,7 +1604,7 @@ export default function App() {
                   </div>
                 </div>
                 <div class="forecast-station-name" style="display: none; margin-top: 4px; font-size: 10px; color: #64748b; font-weight: normal; white-space: nowrap; align-self: flex-end;">
-                  ${nameText}
+                  ${escapeHtml(nameText)}
                 </div>
               `;
 
