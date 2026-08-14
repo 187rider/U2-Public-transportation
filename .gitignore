@@ -6,6 +6,5 @@ __pycache__/
 .DS_Store
 web.tar.gz
 web_app_b64.txt
-ulan-ude.mbtiles
 .agents/
 .gemini/
