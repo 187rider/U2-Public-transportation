@@ -1279,10 +1279,17 @@ export default function App() {
               const mDiv = el.querySelector(".vehicle-marker");
               const tSpan = el.querySelector(".vehicle-text");
 
-              // Set rotation directly from API (handles dir > 360 fine via CSS)
-              if (mDiv) mDiv.style.transform = `rotate(${v.dir}deg)`;
-              if (tSpan) tSpan.style.transform = `rotate(${-v.dir}deg)`;
-              marker._currentRot = v.dir;
+              // Get current marker rotation for smooth interpolation
+              let currentRot = marker._currentRot !== undefined ? marker._currentRot : rotation;
+              let rotDiff = v.dir - currentRot;
+              while (rotDiff < -180) rotDiff += 360;
+              while (rotDiff > 180) rotDiff -= 360;
+
+              const duration = 15000; // 15 seconds, matching reference app
+              const startTimestamp = performance.now();
+
+              // Always start from server position (ground truth)
+              marker.setLngLat([v.lng, v.lat]);
 
               if (v.animPoints && v.animPoints.length > 0) {
                 // CRITICAL: percent is a SEGMENT DURATION (not cumulative position!)
@@ -1292,7 +1299,7 @@ export default function App() {
                 const animPoints = v.animPoints.map(p => {
                   cumulative += p.percent;
                   return {
-                    cumulativePercent: cumulative / 100, // normalize to 0-1
+                    cumulativePercent: cumulative / 100,
                     lat: p.lat,
                     lng: p.lng,
                     dir: p.dir
@@ -1300,40 +1307,48 @@ export default function App() {
                 });
 
                 const lastPt = animPoints[animPoints.length - 1];
-                const duration = 15000; // 15 seconds, matching reference app
 
                 activeAnimationsRef.current[v.id] = {
-                  startTimestamp: performance.now(),
+                  startTimestamp,
                   duration,
                   startLng: v.lng,
                   startLat: v.lat,
                   targetLng: lastPt.lng,
                   targetLat: lastPt.lat,
                   animPoints,
-                  currentRot: v.dir,
-                  rotDiff: 0,
+                  currentRot,
+                  rotDiff,
                   marker,
                   mDiv,
                   tSpan
                 };
 
-                // Snap to server position to start trajectory from correct origin
-                marker.setLngLat([v.lng, v.lat]);
                 startGlobalAnimation();
               } else {
-                // No animPoints: stop any running animation, snap to server position
-                delete activeAnimationsRef.current[v.id];
-                // Only snap position if the marker hasn't been animated far away
-                // (prevents rollback when previous animPoints overshot)
-                const cur = marker.getLngLat();
-                const distLat = Math.abs(cur.lat - v.lat) * 111320;
-                const distLng = Math.abs(cur.lng - v.lng) * 111320 * Math.cos(v.lat * Math.PI / 180);
-                const dist = Math.sqrt(distLat * distLat + distLng * distLng);
-                // Only snap if within 50 meters (normal GPS drift)
-                // If further, the previous animPoints projected us forward - stay there
-                if (dist < 50) {
-                  marker.setLngLat([v.lng, v.lat]);
-                }
+                // Dead reckoning: project forward using speed & direction
+                const speed = v.speed || 0; // km/h
+                const dirRad = (v.dir || 0) * Math.PI / 180;
+                // Project 15 seconds of travel at current speed
+                const d = speed * (15 / 3600); // km traveled in 15s
+                const deltaLat = (d / 111.32) * Math.cos(dirRad);
+                const deltaLng = (d / (111.32 * Math.cos(v.lat * Math.PI / 180))) * Math.sin(dirRad);
+
+                activeAnimationsRef.current[v.id] = {
+                  startTimestamp,
+                  duration,
+                  startLng: v.lng,
+                  startLat: v.lat,
+                  targetLng: v.lng + deltaLng,
+                  targetLat: v.lat + deltaLat,
+                  animPoints: null,
+                  currentRot,
+                  rotDiff,
+                  marker,
+                  mDiv,
+                  tSpan
+                };
+
+                startGlobalAnimation();
               }
 
               if (mDiv) {
