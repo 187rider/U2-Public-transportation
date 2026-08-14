@@ -1233,7 +1233,7 @@ export default function App() {
           globalAnimationId.current = null;
         }
         curk = "0";
-        setTimeout(fetchVehicles, 5000);
+        setTimeout(fetchVehicles, 10000);
         return;
       }
 
@@ -1442,7 +1442,7 @@ export default function App() {
       }
 
       if (isActive) {
-        setTimeout(fetchVehicles, 5000); // Continuous loop delay
+        setTimeout(fetchVehicles, 10000); // Continuous loop delay
       }
     };
 
