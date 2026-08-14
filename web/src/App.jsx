@@ -1271,64 +1271,53 @@ export default function App() {
               marker._anim_key = v.anim_key;
               marker._lastUpdateTime = Date.now();
 
-              // Use direct numeric rotation stored on marker object (zero DOM query or regex)
-              let currentRot = marker._currentRot !== undefined ? marker._currentRot : rotation;
+              // Always snap marker to the server's reported position first.
+              // Server positions change by < 1 meter between polls, so snap is imperceptible.
+              // This prevents the 294m rollback that happens when animPoints overshoot.
+              marker.setLngLat([v.lng, v.lat]);
 
               // Smooth shortest-path rotation toward API-reported direction
-              let rotDiff = v.dir - currentRot;
-              while (rotDiff < -180) rotDiff += 360;
-              while (rotDiff > 180) rotDiff -= 360;
+              const el = marker.getElement();
+              const mDiv = el.querySelector(".vehicle-marker");
+              const tSpan = el.querySelector(".vehicle-text");
+              if (mDiv) mDiv.style.transform = `rotate(${v.dir}deg)`;
+              if (tSpan) tSpan.style.transform = `rotate(${-v.dir}deg)`;
+              marker._currentRot = v.dir;
 
-              const duration = 15000; // 15 seconds, matching reference app (polled every 10s, interrupted at ~67%)
-              const startTimestamp = performance.now();
-
-              // Always start from the marker's CURRENT animated position (no snap = no rollback)
-              const startLng = marker.getLngLat().lng;
-              const startLat = marker.getLngLat().lat;
-
-              let animPoints = [];
+              // Only animate if we have animPoints (no dead reckoning — API speed is always 0)
               if (v.animPoints && v.animPoints.length > 0) {
                 // Sort by percent (API returns them unsorted!) and normalize to 0-1
-                animPoints = v.animPoints
+                const animPoints = v.animPoints
                   .map(p => ({
                     percent: p.percent / 100,
                     lat: p.lat,
                     lng: p.lng
                   }))
                   .sort((a, b) => a.percent - b.percent);
+
+                const duration = 15000; // 15 seconds, matching reference app
+
+                activeAnimationsRef.current[v.id] = {
+                  startTimestamp: performance.now(),
+                  duration,
+                  startLng: v.lng,
+                  startLat: v.lat,
+                  targetLng: animPoints[animPoints.length - 1].lng,
+                  targetLat: animPoints[animPoints.length - 1].lat,
+                  animPoints,
+                  currentRot: v.dir,
+                  rotDiff: 0, // rotation is set directly from v.dir, no interpolation needed
+                  marker,
+                  mDiv,
+                  tSpan
+                };
+
+                startGlobalAnimation();
+              } else {
+                // No animPoints: just stay at server position (already snapped above)
+                // Remove any leftover animation for this vehicle
+                delete activeAnimationsRef.current[v.id];
               }
-
-              // Target for dead reckoning fallback: just go to the server's reported position
-              // (speed is always 0/N/A from this API, so dead reckoning = snap to server pos)
-              const targetLng = animPoints.length > 0
-                ? animPoints[animPoints.length - 1].lng
-                : v.lng;
-              const targetLat = animPoints.length > 0
-                ? animPoints[animPoints.length - 1].lat
-                : v.lat;
-
-              const el = marker.getElement();
-              const mDiv = el.querySelector(".vehicle-marker");
-              const tSpan = el.querySelector(".vehicle-text");
-
-              // Register new animation state
-              activeAnimationsRef.current[v.id] = {
-                startTimestamp,
-                duration,
-                startLng,
-                startLat,
-                targetLng,
-                targetLat,
-                animPoints,
-                currentRot,
-                rotDiff,
-                marker,
-                mDiv,
-                tSpan
-              };
-
-              // Ensure the global loop is running
-              startGlobalAnimation();
 
               if (mDiv) {
                 const isSelected = selectedVehicleRef.current && selectedVehicleRef.current.id === v.id;
