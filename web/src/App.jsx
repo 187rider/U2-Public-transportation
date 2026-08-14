@@ -1292,7 +1292,7 @@ export default function App() {
               const deltaLat = (d / 111.32) * Math.cos(dirRad);
               const deltaLng = (d / (111.32 * Math.cos(v.lat * Math.PI / 180))) * Math.sin(dirRad);
 
-              const duration = 15000; // 15 seconds
+              const duration = 10000; // 10 seconds, matching the polling interval
               const startTimestamp = performance.now();
 
               const startLng = marker.getLngLat().lng;
