@@ -26,8 +26,8 @@ session.mount("http://", adapter)
 session.mount("https://", adapter)
 
 CACHE = {}
-CACHE_TTL_VEHICLES = 1.0
-CACHE_TTL_FORECASTS = 1.0
+CACHE_TTL_VEHICLES = 10.0
+CACHE_TTL_FORECASTS = 10.0
 CACHE_TTL_STATIC = 6200.0
 
 def get_from_cache(key: str, ttl: float):
