@@ -734,49 +734,35 @@ export default function App() {
         let curLng, curLat, curRot;
 
         if (anim.animPoints && anim.animPoints.length > 0) {
-          const catchupRatio = 0.2; // 2 seconds to traverse animPoints
+          // Play back future trajectory over the full 15 seconds
+          let pStart = { percent: 0, lat: anim.startLat, lng: anim.startLng, dir: anim.currentRot };
+          let pEnd = anim.animPoints[0];
           
-          if (progress <= catchupRatio) {
-            // 1. Catch-up phase (Play back historical animPoints quickly)
-            const localProgress = progress / catchupRatio; // 0 to 1 over 2s
-            
-            let pStart = { percent: 0, lat: anim.startLat, lng: anim.startLng, dir: anim.currentRot };
-            let pEnd = anim.animPoints[0];
-            
-            for (let i = 0; i < anim.animPoints.length; i++) {
-              if (localProgress <= anim.animPoints[i].percent) {
-                pEnd = anim.animPoints[i];
-                if (i > 0) pStart = anim.animPoints[i - 1];
-                break;
-              }
-              if (i === anim.animPoints.length - 1) {
-                pStart = anim.animPoints[i];
-                pEnd = anim.animPoints[i];
-              }
+          for (let i = 0; i < anim.animPoints.length; i++) {
+            if (progress <= anim.animPoints[i].percent) {
+              pEnd = anim.animPoints[i];
+              if (i > 0) pStart = anim.animPoints[i - 1];
+              break;
             }
-
-            const segmentProgress = (pEnd.percent === pStart.percent) 
-              ? 1 
-              : (localProgress - pStart.percent) / (pEnd.percent - pStart.percent);
-            
-            curLng = pStart.lng + (pEnd.lng - pStart.lng) * segmentProgress;
-            curLat = pStart.lat + (pEnd.lat - pStart.lat) * segmentProgress;
-            
-            let rDiff = pEnd.dir - pStart.dir;
-            while (rDiff < -180) rDiff += 360;
-            while (rDiff > 180) rDiff -= 360;
-            curRot = pStart.dir + rDiff * segmentProgress;
-          } else {
-            // 2. Dead Reckoning phase (Predict into the future for the remaining 8s)
-            const localProgress = (progress - catchupRatio) / (1 - catchupRatio); // 0 to 1 over 8s
-            const lastAnimPoint = anim.animPoints[anim.animPoints.length - 1];
-            
-            curLng = lastAnimPoint.lng + (anim.targetLng - lastAnimPoint.lng) * localProgress;
-            curLat = lastAnimPoint.lat + (anim.targetLat - lastAnimPoint.lat) * localProgress;
-            curRot = lastAnimPoint.dir; // Bus drives straight during dead reckoning
+            if (i === anim.animPoints.length - 1) {
+              pStart = anim.animPoints[i];
+              pEnd = anim.animPoints[i];
+            }
           }
+
+          const segmentProgress = (pEnd.percent === pStart.percent) 
+            ? 1 
+            : (progress - pStart.percent) / (pEnd.percent - pStart.percent);
+          
+          curLng = pStart.lng + (pEnd.lng - pStart.lng) * segmentProgress;
+          curLat = pStart.lat + (pEnd.lat - pStart.lat) * segmentProgress;
+          
+          let rDiff = pEnd.dir - pStart.dir;
+          while (rDiff < -180) rDiff += 360;
+          while (rDiff > 180) rDiff -= 360;
+          curRot = pStart.dir + rDiff * segmentProgress;
         } else {
-          // Fallback to pure straight-line dead reckoning over the full 10 seconds
+          // Fallback to straight-line dead reckoning over 15 seconds
           curLng = anim.startLng + (anim.targetLng - anim.startLng) * progress;
           curLat = anim.startLat + (anim.targetLat - anim.startLat) * progress;
           curRot = anim.currentRot + anim.rotDiff * progress;
@@ -1297,18 +1283,16 @@ export default function App() {
               while (rotDiff < -180) rotDiff += 360;
               while (rotDiff > 180) rotDiff -= 360;
 
-              // Future Prediction (Dead Reckoning)
-              // We predict 25 seconds into the future. Since the animation takes 10s, 
-              // the bus will naturally settle into a perpetual state of being exactly 
-              // 15 seconds ahead of the raw server data (matching its03.ru's client-side prediction).
+              // Future Prediction (Dead Reckoning) fallback if no animPoints
+              // Project exactly 15 seconds into the future to match animationDuration
               const speed = v.speed || 0; // km/h
               const dirRad = (v.dir || 0) * Math.PI / 180;
 
-              const d = speed * (25 / 3600);
+              const d = speed * (15 / 3600);
               const deltaLat = (d / 111.32) * Math.cos(dirRad);
               const deltaLng = (d / (111.32 * Math.cos(v.lat * Math.PI / 180))) * Math.sin(dirRad);
 
-              const duration = 10000;
+              const duration = 15000; // 15 seconds
               const startTimestamp = performance.now();
 
               const startLng = marker.getLngLat().lng;
