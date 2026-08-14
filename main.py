@@ -30,9 +30,6 @@ CACHE_TTL_VEHICLES = 1.0
 CACHE_TTL_FORECASTS = 10.0
 CACHE_TTL_STATIC = 6200.0
 
-# Track last-known vehicle positions to compute speed from delta
-import math
-VEHICLE_HISTORY = {}  # {vehicle_id: {"lat": float, "lng": float, "time": float}}
 
 def get_from_cache(key: str, ttl: float):
     if key in CACHE:
@@ -336,32 +333,7 @@ def get_vehicles(rids: str = "", curk: str = "0"):
                 except:
                     continue
 
-        # Compute speed from position change if API doesn't provide it
-        raw_speed = item.get("speed")
         veh_id = str(item.get("vehid") or item.get("id") or "")
-        now = time.time()
-        
-        if raw_speed is not None and str(raw_speed).strip():
-            try:
-                computed_speed = float(raw_speed)
-            except:
-                computed_speed = 0.0
-        else:
-            # Calculate speed from position delta
-            computed_speed = 0.0
-            if veh_id in VEHICLE_HISTORY:
-                prev = VEHICLE_HISTORY[veh_id]
-                dt = now - prev["time"]
-                if 1.0 < dt < 60.0:  # Only compute if reasonable interval
-                    dlat = (lat - prev["lat"]) * 111320  # meters
-                    dlng = (lng - prev["lng"]) * 111320 * math.cos(math.radians(lat))
-                    dist_m = math.sqrt(dlat * dlat + dlng * dlng)
-                    computed_speed = (dist_m / dt) * 3.6  # m/s → km/h
-                    # Clamp to reasonable values (0-120 km/h for city transit)
-                    computed_speed = min(computed_speed, 120.0)
-        
-        # Update position history
-        VEHICLE_HISTORY[veh_id] = {"lat": lat, "lng": lng, "time": now}
         
         # Normalize dir to 0-360 range (API sometimes sends values > 360)
         raw_dir = float(item.get("dir", 0))
@@ -373,7 +345,7 @@ def get_vehicles(rids: str = "", curk: str = "0"):
             "lng": lng,
             "route": str(item.get("rnum", "")),
             "dir": normalized_dir,
-            "speed": round(computed_speed, 1),
+            "speed": float(item.get("speed", 0)),
             "gosNum": str(item.get("gosNum") or item.get("gos_num") or ""),
             "type": str(item.get("rtype") or ""),
             "rid": str(item.get("rid") or ""),
