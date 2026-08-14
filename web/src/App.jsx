@@ -706,8 +706,14 @@ export default function App() {
       if (z < 12) {
         for (const id in anims) {
           const anim = anims[id];
-          anim.marker.setLngLat([anim.targetLng, anim.targetLat]);
-          anim.marker._currentRot = anim.currentRot + anim.rotDiff;
+          if (anim.animPoints && anim.animPoints.length > 0) {
+            const last = anim.animPoints[anim.animPoints.length - 1];
+            anim.marker.setLngLat([last.lng, last.lat]);
+            anim.marker._currentRot = last.dir;
+          } else {
+            anim.marker.setLngLat([anim.targetLng, anim.targetLat]);
+            anim.marker._currentRot = anim.currentRot + anim.rotDiff;
+          }
           delete anims[id];
         }
         globalAnimationId.current = null;
@@ -725,19 +731,50 @@ export default function App() {
         const elapsed = timestamp - anim.startTimestamp;
         const progress = Math.min(elapsed / anim.duration, 1);
 
-        const curLng = anim.startLng + (anim.targetLng - anim.startLng) * progress;
-        const curLat = anim.startLat + (anim.targetLat - anim.startLat) * progress;
+        let curLng, curLat, curRot;
+
+        if (anim.animPoints && anim.animPoints.length > 0) {
+          // Find the segment we are currently traversing
+          let pStart = { percent: 0, lat: anim.startLat, lng: anim.startLng, dir: anim.currentRot };
+          let pEnd = anim.animPoints[0];
+          
+          for (let i = 0; i < anim.animPoints.length; i++) {
+            if (progress <= anim.animPoints[i].percent) {
+              pEnd = anim.animPoints[i];
+              if (i > 0) pStart = anim.animPoints[i - 1];
+              break;
+            }
+            if (i === anim.animPoints.length - 1) {
+              pStart = anim.animPoints[i];
+              pEnd = anim.animPoints[i];
+            }
+          }
+
+          const segmentProgress = (pEnd.percent === pStart.percent) 
+            ? 1 
+            : (progress - pStart.percent) / (pEnd.percent - pStart.percent);
+          
+          curLng = pStart.lng + (pEnd.lng - pStart.lng) * segmentProgress;
+          curLat = pStart.lat + (pEnd.lat - pStart.lat) * segmentProgress;
+          
+          let rDiff = pEnd.dir - pStart.dir;
+          while (rDiff < -180) rDiff += 360;
+          while (rDiff > 180) rDiff -= 360;
+          curRot = pStart.dir + rDiff * segmentProgress;
+        } else {
+          // Fallback to straight-line dead reckoning
+          curLng = anim.startLng + (anim.targetLng - anim.startLng) * progress;
+          curLat = anim.startLat + (anim.targetLat - anim.startLat) * progress;
+          curRot = anim.currentRot + anim.rotDiff * progress;
+        }
 
         // Viewport culling: only update DOM transform if marker is within visible viewport
         if (curLng >= west && curLng <= east && curLat >= south && curLat <= north) {
           anim.marker.setLngLat([curLng, curLat]);
 
-          if (Math.abs(anim.rotDiff) > 0.1) {
-            const curRot = anim.currentRot + anim.rotDiff * progress;
-            if (anim.mDiv) anim.mDiv.style.transform = `rotate(${curRot}deg)`;
-            if (anim.tSpan) anim.tSpan.style.transform = `rotate(${-curRot}deg)`;
-            anim.marker._currentRot = curRot;
-          }
+          if (anim.mDiv) anim.mDiv.style.transform = `rotate(${curRot}deg)`;
+          if (anim.tSpan) anim.tSpan.style.transform = `rotate(${-curRot}deg)`;
+          anim.marker._currentRot = curRot;
         }
 
         if (progress >= 1) {
@@ -1247,7 +1284,6 @@ export default function App() {
               while (rotDiff > 180) rotDiff -= 360;
 
               // Future Prediction (Dead Reckoning)
-              // Future Prediction (Dead Reckoning)
               // We predict 25 seconds into the future. Since the animation takes 10s, 
               // the bus will naturally settle into a perpetual state of being exactly 
               // 15 seconds ahead of the raw server data (matching its03.ru's client-side prediction).
@@ -1261,11 +1297,18 @@ export default function App() {
               const duration = 10000;
               const startTimestamp = performance.now();
 
-              // Smoothly glide from current visual location to the predicted future
               const startLng = marker.getLngLat().lng;
               const startLat = marker.getLngLat().lat;
-              const targetLng = v.lng + deltaLng;
-              const targetLat = v.lat + deltaLat;
+              
+              let animPoints = [];
+              if (v.animPoints && v.animPoints.length > 0) {
+                animPoints = v.animPoints.map(p => ({
+                  percent: p.percent / 100, // Normalize to 0-1
+                  lat: p.lat,
+                  lng: p.lng,
+                  dir: p.dir
+                }));
+              }
 
               const el = marker.getElement();
               const mDiv = el.querySelector(".vehicle-marker");
@@ -1277,8 +1320,9 @@ export default function App() {
                 duration,
                 startLng,
                 startLat,
-                targetLng,
-                targetLat,
+                targetLng: v.lng + deltaLng,
+                targetLat: v.lat + deltaLat,
+                animPoints,
                 currentRot,
                 rotDiff,
                 marker,
