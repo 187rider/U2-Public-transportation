@@ -778,8 +778,14 @@ export default function App() {
         }
 
         if (progress >= 1) {
-          anim.marker.setLngLat([anim.targetLng, anim.targetLat]);
-          anim.marker._currentRot = anim.currentRot + anim.rotDiff;
+          if (anim.animPoints && anim.animPoints.length > 0) {
+            const last = anim.animPoints[anim.animPoints.length - 1];
+            anim.marker.setLngLat([last.lng, last.lat]);
+            anim.marker._currentRot = last.dir;
+          } else {
+            anim.marker.setLngLat([anim.targetLng, anim.targetLat]);
+            anim.marker._currentRot = anim.currentRot + anim.rotDiff;
+          }
           delete anims[id];
         } else {
           hasActive = true;
@@ -1284,28 +1290,40 @@ export default function App() {
               while (rotDiff > 180) rotDiff -= 360;
 
               // Future Prediction (Dead Reckoning) fallback if no animPoints
-              // Project exactly 15 seconds into the future to match animationDuration
               const speed = v.speed || 0; // km/h
               const dirRad = (v.dir || 0) * Math.PI / 180;
 
-              const d = speed * (15 / 3600);
+              const d = speed * (10 / 3600); // 10 seconds to match polling
               const deltaLat = (d / 111.32) * Math.cos(dirRad);
               const deltaLng = (d / (111.32 * Math.cos(v.lat * Math.PI / 180))) * Math.sin(dirRad);
 
               const duration = 10000; // 10 seconds, matching the polling interval
               const startTimestamp = performance.now();
 
-              const startLng = marker.getLngLat().lng;
-              const startLat = marker.getLngLat().lat;
-              
               let animPoints = [];
+              let startLng, startLat, startRot;
+
               if (v.animPoints && v.animPoints.length > 0) {
+                // When we have animPoints, start from the SERVER's reported position
+                // (not the marker's animated position) to prevent rollback
+                startLng = v.lng;
+                startLat = v.lat;
+                startRot = v.dir; // Use API direction, not interpolated rotation
+
                 animPoints = v.animPoints.map(p => ({
                   percent: p.percent / 100, // Normalize to 0-1
                   lat: p.lat,
                   lng: p.lng,
                   dir: p.dir
                 }));
+
+                // Snap marker to server position immediately to prevent visual jitter
+                marker.setLngLat([startLng, startLat]);
+              } else {
+                // Dead reckoning: start from wherever the marker currently is
+                startLng = marker.getLngLat().lng;
+                startLat = marker.getLngLat().lat;
+                startRot = currentRot;
               }
 
               const el = marker.getElement();
@@ -1321,8 +1339,8 @@ export default function App() {
                 targetLng: v.lng + deltaLng,
                 targetLat: v.lat + deltaLat,
                 animPoints,
-                currentRot,
-                rotDiff,
+                currentRot: startRot,
+                rotDiff: startRot === currentRot ? rotDiff : 0,
                 marker,
                 mDiv,
                 tSpan
