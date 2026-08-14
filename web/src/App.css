@@ -1,0 +1,969 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow: hidden;
+  background-color: #f2f0e9;
+  overscroll-behavior: none;
+  height: 100%;
+  height: 100dvh;
+}
+
+#root,
+.app-root,
+.map-container,
+.map {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+
+
+/* Ensure map controls (zoom, 3D, compass) render above high z-index markers */
+.maplibregl-control-container,
+.maplibregl-ctrl-top-right,
+.maplibregl-ctrl-group {
+  z-index: 3500 !important;
+}
+
+/* MUI Top Search Bar Container */
+.mui-top-bar {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  max-width: 480px;
+  margin: 0 auto;
+  z-index: 9990;
+}
+
+.mui-search-paper {
+  box-sizing: border-box;
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 6px 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e2e8f0;
+}
+
+.mui-brand-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: #1E75EC;
+  /* Royal Blue icon */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  flex-shrink: 0;
+}
+
+.mui-search-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 15px;
+  font-weight: 500;
+  color: #1e293b;
+  background: transparent;
+  padding: 6px 0;
+}
+
+.mui-search-input::placeholder {
+  color: #94a3b8;
+}
+
+/* Category Quick Action Chips */
+.mui-category-chips {
+  position: absolute;
+  top: 74px;
+  left: 14px;
+  right: 14px;
+  max-width: 480px;
+  margin: 0 auto;
+  z-index: 9989;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+}
+
+.mui-category-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.mui-chip {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transition: all 0.2s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) {
+  .mui-chip:hover {
+    background: #1E75EC;
+    color: #ffffff;
+    border-color: #1E75EC;
+    box-shadow: 0 6px 16px rgba(30, 117, 236, 0.3);
+  }
+}
+
+.mui-chip.active {
+  background: #1E75EC;
+  color: #ffffff;
+  border-color: #1E75EC;
+  box-shadow: 0 6px 16px rgba(30, 117, 236, 0.3);
+}
+
+.mui-chip.active.bus {
+  background: #1E75EC;
+  border-color: #1E75EC;
+  box-shadow: 0 6px 16px rgba(30, 117, 236, 0.3);
+}
+
+.mui-chip.active.tram {
+  background: #1E75EC;
+  border-color: #1E75EC;
+  box-shadow: 0 6px 16px rgba(30, 117, 236, 0.3);
+}
+
+/* Search Dropdown Panel */
+.mui-search-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid #f1f5f9;
+  z-index: 9991;
+}
+
+.mui-dropdown-item {
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #f8fafc;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.mui-dropdown-item:hover {
+  background: #f1f5f9;
+}
+
+/* Sliding Bottom Sheet Drawer */
+.mui-bottom-drawer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #ffffff;
+  border-top-left-radius: 24px;
+  border-top-right-radius: 24px;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.12);
+  z-index: 9990;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mui-drawer-handle-bar {
+  width: 36px;
+  height: 4px;
+  background: #cbd5e1;
+  border-radius: 2px;
+  margin: 10px auto 6px;
+  cursor: pointer;
+}
+
+.mui-drawer-header {
+  padding: 8px 20px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.mui-drawer-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.mui-drawer-content {
+  box-sizing: border-box;
+  padding: 12px 16px 20px 16px;
+  margin-bottom: 90px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* Route List & Cards */
+.route-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 12px 16px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.route-card:hover {
+  background: #ffffff;
+  border-color: #2563eb;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.1);
+  transform: translateY(-1px);
+}
+
+.route-number-badge {
+  min-width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #f59e0b;
+  /* Amber gold badge */
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.route-number-badge.tram {
+  background: #f59e0b;
+}
+
+.route-info {
+  flex: 1;
+}
+
+.vehicle-marker-text {
+  font-size: 11px;
+  font-weight: 900;
+  color: #ffffff;
+  z-index: 2;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+  /* Text counter-rotates so it stays upright */
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.route-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 2px;
+}
+
+.route-terminals {
+  font-size: 12px;
+  color: #64748b;
+}
+
+/* Stop Item Cards */
+.stop-card {
+  background: #ffffff;
+  border: 1px solid #f1f5f9;
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.stop-card:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.stop-card-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fav-star {
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, transform 0.15s ease;
+  user-select: none;
+  font-variation-settings: 'FILL' 0;
+}
+
+.fav-star:hover {
+  transform: scale(1.15);
+}
+
+.fav-star.active {
+  color: #f59e0b !important;
+  font-variation-settings: 'FILL' 1 !important;
+}
+
+/* Floating Rounded Transparent Glass Pill */
+.mui-bottom-nav {
+  position: absolute;
+  bottom: 24px; /* Safari default: 100dvh handles the resizing automatically */
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 32px);
+  max-width: 440px;
+  height: 56px;
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  z-index: 9995;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+@media all and (display-mode: standalone) {
+  .mui-bottom-nav {
+    /* Place pill above home indicator */
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  }
+  .mui-drawer-content {
+    /* Push the scroll boundary higher to clear the PWA-shifted pill */
+    margin-bottom: calc(env(safe-area-inset-bottom, 0px) + 78px) !important;
+  }
+}
+
+.mui-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  width: 48px;
+  height: 44px;
+  border-radius: 12px;
+  transition: all 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
+
+.mui-nav-item:focus,
+.mui-nav-item:active,
+.mui-nav-item:focus-visible {
+  outline: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.mui-nav-item.active {
+  color: #1E75EC;
+  background: rgba(30, 117, 236, 0.12);
+}
+
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 26px;
+  line-height: 1;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+}
+
+.mui-nav-icon {
+  font-size: 26px;
+  line-height: 1;
+}
+
+/* Custom Pill Markers matching modern UI without thick borders */
+.stop-pill-marker {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 3px 10px 3px 4px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  white-space: nowrap;
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: auto;
+}
+
+.stop-pill-marker.bus {
+  border: none;
+}
+
+.stop-pill-marker.tram {
+  border: none;
+}
+
+.stop-pill-marker:hover {
+  transform: scale(1.08);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  z-index: 1000 !important;
+}
+
+.stop-pill-title {
+  display: inline-block !important;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  line-height: 1.2;
+}
+
+.stop-pill-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: #7c3aed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(124, 58, 237, 0.3);
+}
+
+.stop-pill-icon.tram {
+  background: #e11d48;
+  box-shadow: 0 2px 6px rgba(225, 29, 72, 0.3);
+}
+
+/* Small Mode for regular markers - sleek rounded icon without double borders */
+.stop-pill-marker.small-mode {
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.stop-pill-marker.small-mode .stop-pill-title {
+  display: none !important;
+}
+
+/* Cluster Marker */
+.cluster-marker {
+  background-color: #7c3aed;
+  color: white;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-weight: 800;
+  font-size: 14px;
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(124, 58, 237, 0.4);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  user-select: none;
+}
+
+.cluster-marker:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.6);
+  z-index: 1000 !important;
+}
+
+/* MapLibre Popup */
+.maplibregl-popup {
+  z-index: 3000 !important;
+}
+
+.maplibregl-popup-content {
+  padding: 0 !important;
+  border-radius: 16px !important;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16) !important;
+  overflow: hidden;
+  border: none !important;
+}
+
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
+  border-top-color: #ffffff !important;
+}
+
+.stop-popup {
+  width: 240px;
+}
+
+.stop-popup-header {
+  padding: 10px 12px;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.popup-fav-btn {
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.85);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.popup-fav-btn:hover {
+  background: rgba(255, 255, 255, 0.15) !important;
+  transform: scale(1.1);
+}
+
+.popup-fav-btn:focus,
+.popup-fav-btn:active,
+.popup-fav-btn:focus-visible {
+  outline: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.popup-fav-btn.active {
+  color: #fbbf24 !important;
+}
+
+.popup-fav-btn .material-symbols-outlined {
+  font-size: 22px;
+  font-variation-settings: 'FILL' 0;
+  transition: all 0.2s ease;
+}
+
+.popup-fav-btn.active .material-symbols-outlined {
+  font-variation-settings: 'FILL' 1 !important;
+  color: #fbbf24 !important;
+}
+
+.stop-popup-header.bus {
+  background: #1E75EC;
+}
+
+.stop-popup-header.tram {
+  background: #1E75EC;
+}
+
+.stop-popup-body {
+  padding: 12px 14px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.station-forecast-list {
+  padding-left: 0;
+  margin: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.station-forecast-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.station-forecast-list::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 4px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.badge-bus {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.badge-tram {
+  background: #ffe4e6;
+  color: #9f1239;
+}
+
+/* Grouped Routes UI */
+.routes-group-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  background: #ffffff;
+  border-bottom: 2px solid #e2e8f0;
+  margin-top: 8px;
+  justify-content: space-between;
+}
+
+.routes-group-header.bus {
+  border-bottom-color: #ef4444;
+  /* Red border */
+  color: #ef4444;
+}
+
+.routes-group-header.tram {
+  border-bottom-color: #22c55e;
+  /* Green border */
+  color: #22c55e;
+}
+
+.routes-group-header.minibus {
+  border-bottom-color: #f59e0b;
+  /* Yellow/Orange border */
+  color: #f59e0b;
+}
+
+.routes-group-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.routes-group-header-left input[type="checkbox"],
+.route-checkbox-item input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  background: #ffffff;
+  border: 2px solid #94a3b8;
+  border-radius: 4px;
+  cursor: pointer;
+  position: relative;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.routes-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  padding: 16px;
+  background: #ffffff;
+}
+
+.route-checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  color: #0f172a;
+  cursor: pointer;
+}
+
+.routes-group-header-left input[type="checkbox"]:checked,
+.route-checkbox-item input[type="checkbox"]:checked {
+  background: #ffffff;
+  border-color: #64748b;
+}
+
+.routes-group-header-left input[type="checkbox"]:checked::after,
+.route-checkbox-item input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 5px;
+  width: 4px;
+  height: 9px;
+  border: solid #64748b;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Vehicle Markers */
+.vehicle-marker {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 14px;
+  color: #1e293b;
+  position: relative;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  transform-origin: center center;
+  z-index: 2000 !important;
+}
+
+/* Inner border effect like in the screenshot */
+.vehicle-marker::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+}
+
+/* The teardrop pointer */
+.vehicle-pointer {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-bottom: 14px solid currentColor;
+  z-index: -1;
+}
+
+/* Glowing effect for selected vehicle */
+@keyframes vehiclePulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.7), 0 2px 4px rgba(0, 0, 0, 0.3);
+  }
+
+  70% {
+    box-shadow: 0 0 0 15px rgba(0, 255, 4, 0.457), 0 2px 4px rgba(0, 0, 0, 0.3);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(3, 218, 50, 0.396), 0 2px 4px rgba(0, 0, 0, 0.3);
+  }
+}
+
+.vehicle-selected {
+  border: 3px solid #00ff48 !important;
+  animation: vehiclePulse 1.5s infinite;
+  z-index: 3000 !important;
+  /* Ensure selected vehicle is always on top of others */
+}
+
+/* The actual arrow tip for direction */
+/* Actually, the teardrop pointer itself points 'up'. We rotate the whole marker container using style.transform */
+
+@keyframes scroll-text-dist {
+
+  0%,
+  15% {
+    transform: translateX(0);
+  }
+
+  85%,
+  100% {
+    transform: translateX(var(--scroll-dist));
+  }
+}
+
+.vehicle-bus {
+  background-color: #ef4444;
+}
+
+.vehicle-bus .vehicle-pointer {
+  border-bottom-color: #ef4444;
+}
+
+.vehicle-minibus {
+  background-color: #fbbf24;
+}
+
+.vehicle-minibus .vehicle-pointer {
+  border-bottom-color: #fbbf24;
+}
+
+.vehicle-tram {
+  background-color: #22c55e;
+}
+
+.vehicle-tram .vehicle-pointer {
+  border-bottom-color: #22c55e;
+}
+
+/* Responsive Layout */
+.app-root {
+  display: block;
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* Desktop Styles (>= 768px) */
+@media (min-width: 768px) {
+  .app-root {
+    display: block; /* Remove flexbox */
+  }
+
+  /* Map container takes full screen; MapLibre internal padding handles the offset */
+  .map-container {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 100vh;
+  }
+
+  /* Side Rail fixed to left edge */
+  .mui-bottom-nav {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    flex-direction: column;
+    /* Increase width to absorb the notch, and use padding to push icons out of it */
+    width: calc(72px + env(safe-area-inset-left, 0px));
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    height: 100vh;
+    border: none;
+    border-right: 1px solid #e2e8f0;
+    border-radius: 0;
+    background: #ffffff;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+    transform: none;
+    justify-content: flex-start;
+    padding-top: 16px;
+    gap: 16px;
+    z-index: 9990;
+    box-sizing: border-box;
+  }
+
+  .mui-nav-item {
+    width: 100%;
+    padding: 12px 0;
+    color: #64748b;
+  }
+  
+  .mui-nav-item.active {
+    color: #2563eb;
+  }
+
+  /* Left Panel attached to Side Rail */
+  .mui-bottom-drawer {
+    position: absolute;
+    top: 0;
+    left: calc(72px + env(safe-area-inset-left, 0px));
+    bottom: 0;
+    width: 380px;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.04);
+    border-right: 1px solid #e2e8f0;
+    z-index: 9990;
+  }
+
+  .mui-drawer-handle-bar {
+    display: none;
+  }
+
+  /* Move Search Bar inside the Side Panel (or over it) */
+  .mui-top-bar {
+    position: absolute;
+    top: 16px;
+    /* 72px nav + 16px padding + notch safe area */
+    left: calc(88px + env(safe-area-inset-left, 0px));
+    width: 348px;
+    margin: 0;
+  }
+
+  /* Move Category Chips inside the Side Panel */
+  .mui-category-chips {
+    position: absolute;
+    top: 74px;
+    left: calc(88px + env(safe-area-inset-left, 0px));
+    width: 348px;
+    margin: 0;
+  }
+}
+
+/* Center MapLibre Controls Vertically */
+.maplibregl-ctrl-top-right {
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* Hide vehicle markers when zoomed out to prevent DOM overload */
+.map-zoomed-out .vehicle-marker-wrapper {
+  display: none !important;
+}

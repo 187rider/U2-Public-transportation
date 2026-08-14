@@ -1,0 +1,11 @@
+.env
+venv/
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+web.tar.gz
+web_app_b64.txt
+ulan-ude.mbtiles
+.agents/
+.gemini/
