@@ -321,7 +321,8 @@ def get_vehicles(rids: str = "", curk: str = "0"):
             "gosNum": str(item.get("gosNum") or item.get("gos_num") or ""),
             "type": str(item.get("rtype") or ""),
             "rid": str(item.get("rid") or ""),
-            "anim_key": str(anim_key)
+            "anim_key": str(anim_key),
+            "animPoints": item.get("animPoints", [])
         })
         
     result = {"vehicles": vehicles, "next_curk": str(max_curk)}
