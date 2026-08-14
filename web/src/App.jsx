@@ -728,13 +728,13 @@ export default function App() {
         let curLng, curLat, curRot;
 
         if (anim.animPoints && anim.animPoints.length > 0) {
-          // Interpolate position along sorted animPoints trajectory
-          // pStart is always the marker's starting position at percent=0
-          let pStart = { percent: 0, lat: anim.startLat, lng: anim.startLng };
+          // Interpolate position along animPoints using cumulative percent timeline
+          // pStart = start of current segment, pEnd = end of current segment
+          let pStart = { cumulativePercent: 0, lat: anim.startLat, lng: anim.startLng, dir: anim.currentRot };
           let pEnd = anim.animPoints[0];
           
           for (let i = 0; i < anim.animPoints.length; i++) {
-            if (progress <= anim.animPoints[i].percent) {
+            if (progress <= anim.animPoints[i].cumulativePercent) {
               pEnd = anim.animPoints[i];
               if (i > 0) pStart = anim.animPoints[i - 1];
               break;
@@ -746,15 +746,19 @@ export default function App() {
             }
           }
 
-          const segmentProgress = (pEnd.percent === pStart.percent) 
+          const segRange = pEnd.cumulativePercent - pStart.cumulativePercent;
+          const segmentProgress = segRange <= 0
             ? 1 
-            : Math.min(1, (progress - pStart.percent) / (pEnd.percent - pStart.percent));
+            : Math.min(1, (progress - pStart.cumulativePercent) / segRange);
           
           curLng = pStart.lng + (pEnd.lng - pStart.lng) * segmentProgress;
           curLat = pStart.lat + (pEnd.lat - pStart.lat) * segmentProgress;
           
-          // Use v.dir rotation (smooth interpolation), NOT animPoint dir (which is unreliable)
-          curRot = anim.currentRot + anim.rotDiff * progress;
+          // Interpolate direction from animPoint dir values (shortest path)
+          let rDiff = pEnd.dir - pStart.dir;
+          while (rDiff < -180) rDiff += 360;
+          while (rDiff > 180) rDiff -= 360;
+          curRot = pStart.dir + rDiff * segmentProgress;
         } else {
           // Fallback: smooth move to server-reported position
           curLng = anim.startLng + (anim.targetLng - anim.startLng) * progress;
@@ -1271,30 +1275,31 @@ export default function App() {
               marker._anim_key = v.anim_key;
               marker._lastUpdateTime = Date.now();
 
-              // Always snap marker to the server's reported position first.
-              // Server positions change by < 1 meter between polls, so snap is imperceptible.
-              // This prevents the 294m rollback that happens when animPoints overshoot.
-              marker.setLngLat([v.lng, v.lat]);
-
-              // Smooth shortest-path rotation toward API-reported direction
               const el = marker.getElement();
               const mDiv = el.querySelector(".vehicle-marker");
               const tSpan = el.querySelector(".vehicle-text");
+
+              // Set rotation directly from API (handles dir > 360 fine via CSS)
               if (mDiv) mDiv.style.transform = `rotate(${v.dir}deg)`;
               if (tSpan) tSpan.style.transform = `rotate(${-v.dir}deg)`;
               marker._currentRot = v.dir;
 
-              // Only animate if we have animPoints (no dead reckoning — API speed is always 0)
               if (v.animPoints && v.animPoints.length > 0) {
-                // Sort by percent (API returns them unsorted!) and normalize to 0-1
-                const animPoints = v.animPoints
-                  .map(p => ({
-                    percent: p.percent / 100,
+                // CRITICAL: percent is a SEGMENT DURATION (not cumulative position!)
+                // Values sum to ~100. Points are already in correct sequence order.
+                // Convert to cumulative timeline positions for interpolation.
+                let cumulative = 0;
+                const animPoints = v.animPoints.map(p => {
+                  cumulative += p.percent;
+                  return {
+                    cumulativePercent: cumulative / 100, // normalize to 0-1
                     lat: p.lat,
-                    lng: p.lng
-                  }))
-                  .sort((a, b) => a.percent - b.percent);
+                    lng: p.lng,
+                    dir: p.dir
+                  };
+                });
 
+                const lastPt = animPoints[animPoints.length - 1];
                 const duration = 15000; // 15 seconds, matching reference app
 
                 activeAnimationsRef.current[v.id] = {
@@ -1302,21 +1307,33 @@ export default function App() {
                   duration,
                   startLng: v.lng,
                   startLat: v.lat,
-                  targetLng: animPoints[animPoints.length - 1].lng,
-                  targetLat: animPoints[animPoints.length - 1].lat,
+                  targetLng: lastPt.lng,
+                  targetLat: lastPt.lat,
                   animPoints,
                   currentRot: v.dir,
-                  rotDiff: 0, // rotation is set directly from v.dir, no interpolation needed
+                  rotDiff: 0,
                   marker,
                   mDiv,
                   tSpan
                 };
 
+                // Snap to server position to start trajectory from correct origin
+                marker.setLngLat([v.lng, v.lat]);
                 startGlobalAnimation();
               } else {
-                // No animPoints: just stay at server position (already snapped above)
-                // Remove any leftover animation for this vehicle
+                // No animPoints: stop any running animation, snap to server position
                 delete activeAnimationsRef.current[v.id];
+                // Only snap position if the marker hasn't been animated far away
+                // (prevents rollback when previous animPoints overshot)
+                const cur = marker.getLngLat();
+                const distLat = Math.abs(cur.lat - v.lat) * 111320;
+                const distLng = Math.abs(cur.lng - v.lng) * 111320 * Math.cos(v.lat * Math.PI / 180);
+                const dist = Math.sqrt(distLat * distLat + distLng * distLng);
+                // Only snap if within 50 meters (normal GPS drift)
+                // If further, the previous animPoints projected us forward - stay there
+                if (dist < 50) {
+                  marker.setLngLat([v.lng, v.lat]);
+                }
               }
 
               if (mDiv) {
