@@ -754,36 +754,41 @@ export default function App() {
         const t = anims[id];
         hasActive = true;
 
-        if (t.currentFrame > 0) {
-            t.currentFrame -= 1;
-            t.currentLat += t.deltaLat;
-            t.currentLng += t.deltaLng;
+        if (t.timeRemaining > 0) {
+            const step = Math.min(dt, t.timeRemaining);
+            t.currentLat += t.velocityLat * step;
+            t.currentLng += t.velocityLng * step;
+            t.timeRemaining -= step;
             
-            if (t.currentDirectionFrame > 0) {
-                t.currentDirectionFrame -= 1;
-                t.currentDirection += t.deltaDirection;
+            if (t.directionTimeRemaining > 0) {
+                const dirStep = Math.min(dt, t.directionTimeRemaining);
+                t.currentDirection += t.velocityDirection * dirStep;
+                t.directionTimeRemaining -= dirStep;
             }
         } else if (t.animationPoints && t.animationPoints.length > 0) {
             const a = t.animationPoints.shift();
             
-            // Replicate exactly the legacy 500-frame budget from the original its03 bundle
-            const r = Math.trunc(500 * a.percent / 100) || 1;
-            const o = Math.trunc(500 * a.percent / 1e3) || 1;
+            // Convert the legacy 500-frame * 30ms budget directly into a pure 15000ms real-time window
+            const rMs = Math.max((15000 * a.percent) / 100, 1);
+            const oMs = Math.max((15000 * a.percent) / 1e3, 1);
             
-            t.deltaLat = (a.lat - t.currentLat) / r;
-            t.deltaLng = (a.lng - t.currentLng) / r;
-            t.deltaDirection = shortestAngleDiff(a.dir, t.currentDirection) / o;
+            t.velocityLat = (a.lat - t.currentLat) / rMs;
+            t.velocityLng = (a.lng - t.currentLng) / rMs;
+            t.velocityDirection = shortestAngleDiff(a.dir, t.currentDirection) / oMs;
             
-            t.currentFrame = r;
-            t.currentDirectionFrame = o;
+            t.timeRemaining = rMs;
+            t.directionTimeRemaining = oMs;
+            
+            // Apply initial sub-step immediately to avoid a 1-frame micro-stutter during segment transition
+            const step = Math.min(dt, t.timeRemaining);
+            t.currentLat += t.velocityLat * step;
+            t.currentLng += t.velocityLng * step;
+            t.timeRemaining -= step;
         } else if (t.fallbackTarget) {
-            const r = 500;
-            t.deltaLat = (t.fallbackTarget.lat - t.currentLat) / r;
-            t.deltaLng = (t.fallbackTarget.lng - t.currentLng) / r;
-            t.deltaDirection = 0;
-            
-            t.currentFrame = r;
-            t.currentDirectionFrame = 0;
+            // Disabled per user request (t.fallbackTarget = null in the fetch logic)
+            // But kept here as a fail-safe empty block if it ever gets set.
+            t.timeRemaining = 0;
+            t.directionTimeRemaining = 0;
             t.fallbackTarget = null;
         }
 
@@ -1313,8 +1318,8 @@ export default function App() {
               }
 
               // Handle Teleportation / Bad GPS fix (if jump is too big, reset)
-              // If difference > 0.005 degrees (~500m) it's a big jump
-              if (Math.abs(v.lat - t.currentLat) > 0.005 || Math.abs(v.lng - t.currentLng) > 0.005) {
+              // If difference > 0.01 degrees (~1km) it's a big jump
+              if (Math.abs(v.lat - t.currentLat) > 0.01 || Math.abs(v.lng - t.currentLng) > 0.01) {
                   t.animationPoints = [];
                   t.currentFrame = 0;
                   t.currentDirectionFrame = 0;
