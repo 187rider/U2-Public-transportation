@@ -705,6 +705,7 @@ export default function App() {
     if (globalAnimationId.current) return;
 
     let lastTime = performance.now();
+    let logicAccumulator = 0;
 
     const animate = (timestamp) => {
       if (!map.current) {
@@ -714,6 +715,9 @@ export default function App() {
 
       const dt = timestamp - lastTime;
       lastTime = timestamp;
+      
+      // Cap dt to prevent massive spirals if tab is backgrounded
+      logicAccumulator += Math.min(dt, 100);
 
       let hasActive = false;
       const anims = activeAnimationsRef.current;
@@ -734,15 +738,6 @@ export default function App() {
         return;
       }
 
-      // Viewport culling with 20% padding matching Leaflet pad(.2)
-      const bounds = map.current.getBounds();
-      const padLat = (bounds.getNorth() - bounds.getSouth()) * 0.2;
-      const padLng = (bounds.getEast() - bounds.getWest()) * 0.2;
-      const west = bounds.getWest() - padLng;
-      const east = bounds.getEast() + padLng;
-      const south = bounds.getSouth() - padLat;
-      const north = bounds.getNorth() + padLat;
-
       const shortestAngleDiff = (targetAngle, currentAngle) => {
           let t = targetAngle - currentAngle;
           if (t > 180) t -= 360;
@@ -754,47 +749,83 @@ export default function App() {
         const t = anims[id];
         hasActive = true;
 
-        if (t.currentFrame > 0) {
-            t.currentFrame -= 1;
-            t.currentLat += t.deltaLat;
-            t.currentLng += t.deltaLng;
-            
-            if (t.currentDirectionFrame > 0) {
-                t.currentDirectionFrame -= 1;
-                t.currentDirection += t.deltaDirection;
+        // Flawless sub-frame time integration
+        let dtLeft = dt;
+        while (dtLeft > 0) {
+            if (t.timeRemaining > 0) {
+                const step = Math.min(dtLeft, t.timeRemaining);
+                t.currentLat += t.velocityLat * step;
+                t.currentLng += t.velocityLng * step;
+                t.timeRemaining -= step;
+                
+                if (t.directionTimeRemaining > 0) {
+                    const dirStep = Math.min(dtLeft, t.directionTimeRemaining);
+                    t.currentDirection += t.velocityDirection * dirStep;
+                    t.directionTimeRemaining -= dirStep;
+                }
+                
+                dtLeft -= step;
+            } else if (t.animationPoints && t.animationPoints.length > 0) {
+                const a = t.animationPoints.shift();
+                
+                // API sends percent as RELATIVE segment duration, not cumulative.
+                // 15000ms distributed across the segment's relative percentage
+                const rMs = Math.max((15000 * a.percent) / 100, 1);
+                const oMs = Math.max(rMs / 10, 1); // Turn completes 10x faster than movement
+                
+                t.velocityLat = (a.lat - t.currentLat) / rMs;
+                t.velocityLng = (a.lng - t.currentLng) / rMs;
+                
+                // Calculate TRUE physical heading using atan2 (API does not provide sub-point direction)
+                // Correct longitude scale for Earth's curvature at this latitude
+                const latRad = t.currentLat * Math.PI / 180;
+                let targetAngle = Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * (180 / Math.PI);
+                
+                // If velocity is practically zero (e.g. standing at a stop), keep current direction
+                const dist = Math.sqrt(Math.pow(a.lat - t.currentLat, 2) + Math.pow(a.lng - t.currentLng, 2));
+                if (dist < 0.000001) {
+                    targetAngle = t.currentDirection;
+                }
+                
+                t.velocityDirection = shortestAngleDiff(targetAngle, t.currentDirection) / oMs;
+                
+                t.timeRemaining = rMs;
+                t.directionTimeRemaining = oMs;
+            } else {
+                if (t.fallbackTarget) {
+                    t.timeRemaining = 0;
+                    t.directionTimeRemaining = 0;
+                    t.fallbackTarget = null;
+                }
+                break;
             }
-        } else if (t.animationPoints && t.animationPoints.length > 0) {
-            const a = t.animationPoints.shift();
-            
-            // 900 frames at 60 FPS = exactly 15 seconds (matching the polling window)
-            const r = Math.trunc(900 * a.percent / 100) || 1;
-            const o = Math.trunc(900 * a.percent / 1e3) || 1;
-            
-            t.deltaLat = (a.lat - t.currentLat) / r;
-            t.deltaLng = (a.lng - t.currentLng) / r;
-            t.deltaDirection = shortestAngleDiff(a.dir, t.currentDirection) / o;
-            
-            t.currentFrame = r;
-            t.currentDirectionFrame = o;
-        } else if (t.fallbackTarget) {
-            // Disabled per user request (t.fallbackTarget = null in the fetch logic)
-            t.currentFrame = 0;
-            t.currentDirectionFrame = 0;
-            t.fallbackTarget = null;
         }
+      }
 
-        // Viewport culling
-        if (t.currentLng >= west && t.currentLng <= east && t.currentLat >= south && t.currentLat <= north) {
-          t.marker.setLngLat([t.currentLng, t.currentLat]);
-          if (t.mDiv) {
-              t.mDiv.style.transform = `rotate(${t.currentDirection}deg)`;
+      // Viewport culling with 20% padding matching Leaflet pad(.2)
+      // Done ONCE per render frame, NOT per logic tick, to save CPU.
+      const bounds = map.current.getBounds();
+      const padLat = (bounds.getNorth() - bounds.getSouth()) * 0.2;
+      const padLng = (bounds.getEast() - bounds.getWest()) * 0.2;
+      const west = bounds.getWest() - padLng;
+      const east = bounds.getEast() + padLng;
+      const south = bounds.getSouth() - padLat;
+      const north = bounds.getNorth() + padLat;
+
+      // APPLY RENDERS
+      for (const id in anims) {
+          const t = anims[id];
+          if (t.currentLng >= west && t.currentLng <= east && t.currentLat >= south && t.currentLat <= north) {
+            t.marker.setLngLat([t.currentLng, t.currentLat]);
+            if (t.mDiv) {
+                t.mDiv.style.transform = `rotate(${t.currentDirection}deg)`;
+            }
+            if (t.tSpan) {
+                // Perfectly cancel out the parent's rotation to keep text strictly upright
+                t.tSpan.style.transform = `rotate(${-t.currentDirection}deg)`;
+            }
+            t.marker._currentRot = t.currentDirection;
           }
-          if (t.tSpan) {
-              // Perfectly cancel out the parent's rotation to keep text strictly upright
-              t.tSpan.style.transform = `rotate(${-t.currentDirection}deg)`;
-          }
-          t.marker._currentRot = t.currentDirection;
-        }
       }
 
       if (hasActive) {
@@ -1312,8 +1343,8 @@ export default function App() {
               // If difference > 0.01 degrees (~1km) it's a big jump
               if (Math.abs(v.lat - t.currentLat) > 0.01 || Math.abs(v.lng - t.currentLng) > 0.01) {
                   t.animationPoints = [];
-                  t.currentFrame = 0;
-                  t.currentDirectionFrame = 0;
+                  t.timeRemaining = 0;
+                  t.directionTimeRemaining = 0;
                   t.currentLat = v.lat;
                   t.currentLng = v.lng;
                   t.currentDirection = rotation;
@@ -1375,8 +1406,8 @@ export default function App() {
                               t.lastAddedPoint = null;
                           }
                           // Force immediate pivot
-                          t.currentFrame = 0;
-                          t.currentDirectionFrame = 0;
+                          t.timeRemaining = 0;
+                          t.directionTimeRemaining = 0;
                       }
 
                       t.anim_key = v.anim_key;
@@ -1469,11 +1500,11 @@ export default function App() {
                   currentLng: v.lng,
                   currentDirection: rotation,
                   animationPoints: [],
-                  currentFrame: 0,
-                  currentDirectionFrame: 0,
-                  deltaLat: 0,
-                  deltaLng: 0,
-                  deltaDirection: 0,
+                  timeRemaining: 0,
+                  directionTimeRemaining: 0,
+                  velocityLat: 0,
+                  velocityLng: 0,
+                  velocityDirection: 0,
                   anim_key: v.anim_key,
                   lastAddedPoint: null,
                   fallbackTarget: {
