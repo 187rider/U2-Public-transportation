@@ -704,95 +704,100 @@ export default function App() {
   const startGlobalAnimation = () => {
     if (globalAnimationId.current) return;
 
+    let lastTime = performance.now();
+
     const animate = (timestamp) => {
-      let hasActive = false;
-      const anims = activeAnimationsRef.current;
       if (!map.current) {
         globalAnimationId.current = null;
         return;
       }
 
+      const dt = timestamp - lastTime;
+      lastTime = timestamp;
+
+      let hasActive = false;
+      const anims = activeAnimationsRef.current;
       const z = map.current.getZoom();
-      // When zoomed out too far, snap all vehicles to destination instantly and stop animation loop
+      
       if (z < 12) {
+        // Snap everything
         for (const id in anims) {
           const anim = anims[id];
-          anim.marker.setLngLat([anim.targetLng, anim.targetLat]);
-          anim.marker._currentRot = anim.currentRot + anim.rotDiff;
+          if (anim.animationPoints && anim.animationPoints.length > 0) {
+            const lastPt = anim.animationPoints[anim.animationPoints.length - 1];
+            anim.marker.setLngLat([lastPt.lng, lastPt.lat]);
+            anim.marker._currentRot = lastPt.dir;
+          }
           delete anims[id];
         }
         globalAnimationId.current = null;
         return;
       }
 
+      // Viewport culling with 20% padding matching Leaflet pad(.2)
       const bounds = map.current.getBounds();
-      const west = bounds.getWest() - 0.03;
-      const east = bounds.getEast() + 0.03;
-      const south = bounds.getSouth() - 0.03;
-      const north = bounds.getNorth() + 0.03;
+      const padLat = (bounds.getNorth() - bounds.getSouth()) * 0.2;
+      const padLng = (bounds.getEast() - bounds.getWest()) * 0.2;
+      const west = bounds.getWest() - padLng;
+      const east = bounds.getEast() + padLng;
+      const south = bounds.getSouth() - padLat;
+      const north = bounds.getNorth() + padLat;
+
+      const shortestAngleDiff = (targetAngle, currentAngle) => {
+          let t = targetAngle - currentAngle;
+          if (t > 180) t -= 360;
+          if (t < -180) t += 360;
+          return t;
+      };
 
       for (const id in anims) {
-        const anim = anims[id];
-        const elapsed = timestamp - anim.startTimestamp;
-        const progress = Math.min(elapsed / anim.duration, 1);
+        const t = anims[id];
+        hasActive = true;
 
-        let curLng, curLat, curRot;
+        if (t.currentFrame > 0) {
+            t.currentFrame -= 1;
+            t.currentLat += t.deltaLat;
+            t.currentLng += t.deltaLng;
+            
+            if (t.currentDirectionFrame > 0) {
+                t.currentDirectionFrame -= 1;
+                t.currentDirection += t.deltaDirection;
+            }
+        } else if (t.animationPoints && t.animationPoints.length > 0) {
+            const a = t.animationPoints.shift();
+            
+            // Replicate exactly the legacy 500-frame budget from the original its03 bundle
+            const r = Math.trunc(500 * a.percent / 100) || 1;
+            const o = Math.trunc(500 * a.percent / 1e3) || 1;
+            
+            t.deltaLat = (a.lat - t.currentLat) / r;
+            t.deltaLng = (a.lng - t.currentLng) / r;
+            t.deltaDirection = shortestAngleDiff(a.dir, t.currentDirection) / o;
+            
+            t.currentFrame = r;
+            t.currentDirectionFrame = o;
+        } else if (t.fallbackTarget) {
+            const r = 500;
+            t.deltaLat = (t.fallbackTarget.lat - t.currentLat) / r;
+            t.deltaLng = (t.fallbackTarget.lng - t.currentLng) / r;
+            t.deltaDirection = 0;
+            
+            t.currentFrame = r;
+            t.currentDirectionFrame = 0;
+            t.fallbackTarget = null;
+        }
 
-        if (anim.animPoints && anim.animPoints.length > 0) {
-          // Interpolate position along animPoints using cumulative percent timeline
-          // pStart = start of current segment, pEnd = end of current segment
-          let pStart = { cumulativePercent: 0, lat: anim.startLat, lng: anim.startLng, dir: anim.currentRot };
-          let pEnd = anim.animPoints[0];
-          
-          for (let i = 0; i < anim.animPoints.length; i++) {
-            if (progress <= anim.animPoints[i].cumulativePercent) {
-              pEnd = anim.animPoints[i];
-              if (i > 0) pStart = anim.animPoints[i - 1];
-              break;
-            }
-            // Past the last animPoint — hold at the last position
-            if (i === anim.animPoints.length - 1) {
-              pStart = anim.animPoints[i];
-              pEnd = anim.animPoints[i];
-            }
+        // Viewport culling
+        if (t.currentLng >= west && t.currentLng <= east && t.currentLat >= south && t.currentLat <= north) {
+          t.marker.setLngLat([t.currentLng, t.currentLat]);
+          if (t.mDiv) {
+              t.mDiv.style.transform = `rotate(${t.currentDirection}deg)`;
           }
-
-          const segRange = pEnd.cumulativePercent - pStart.cumulativePercent;
-          const segmentProgress = segRange <= 0
-            ? 1 
-            : Math.min(1, (progress - pStart.cumulativePercent) / segRange);
-          
-          curLng = pStart.lng + (pEnd.lng - pStart.lng) * segmentProgress;
-          curLat = pStart.lat + (pEnd.lat - pStart.lat) * segmentProgress;
-          
-          // Interpolate direction from animPoint dir values (shortest path)
-          let rDiff = pEnd.dir - pStart.dir;
-          while (rDiff < -180) rDiff += 360;
-          while (rDiff > 180) rDiff -= 360;
-          curRot = pStart.dir + rDiff * segmentProgress;
-        } else {
-          // Fallback: smooth move to server-reported position
-          curLng = anim.startLng + (anim.targetLng - anim.startLng) * progress;
-          curLat = anim.startLat + (anim.targetLat - anim.startLat) * progress;
-          curRot = anim.currentRot + anim.rotDiff * progress;
-        }
-
-        // Viewport culling: only update DOM transform if marker is within visible viewport
-        if (curLng >= west && curLng <= east && curLat >= south && curLat <= north) {
-          anim.marker.setLngLat([curLng, curLat]);
-
-          if (anim.mDiv) anim.mDiv.style.transform = `rotate(${curRot}deg)`;
-          if (anim.tSpan) anim.tSpan.style.transform = `rotate(${-curRot}deg)`;
-          anim.marker._currentRot = curRot;
-        }
-
-        if (progress >= 1) {
-          // Animation complete (only happens if poll is late — normally interrupted at ~67%)
-          anim.marker.setLngLat([anim.targetLng, anim.targetLat]);
-          anim.marker._currentRot = anim.currentRot + anim.rotDiff;
-          delete anims[id];
-        } else {
-          hasActive = true;
+          if (t.tSpan) {
+              // Perfectly cancel out the parent's rotation to keep text strictly upright
+              t.tSpan.style.transform = `rotate(${-t.currentDirection}deg)`;
+          }
+          t.marker._currentRot = t.currentDirection;
         }
       }
 
@@ -1290,76 +1295,102 @@ export default function App() {
               const mDiv = el.querySelector(".vehicle-marker");
               const tSpan = el.querySelector(".vehicle-text");
 
-              // Get current marker rotation for smooth interpolation
-              let currentRot = marker._currentRot !== undefined ? marker._currentRot : rotation;
-              let rotDiff = v.dir - currentRot;
-              while (rotDiff < -180) rotDiff += 360;
-              while (rotDiff > 180) rotDiff -= 360;
+              let anims = activeAnimationsRef.current;
+              let t = anims[v.id];
 
-              const duration = 15000; // 15 seconds, matching reference app
-              const startTimestamp = performance.now();
+              if (!t) {
+                t = {
+                  marker,
+                  mDiv,
+                  tSpan,
+                  currentLat: v.lat,
+                  currentLng: v.lng,
+                  currentDirection: marker._currentRot !== undefined ? marker._currentRot : rotation,
+                  animationPoints: [],
+                  segment: null
+                };
+                anims[v.id] = t;
+              }
 
-              // Always start from server position (ground truth)
-              marker.setLngLat([v.lng, v.lat]);
+              // Handle Teleportation / Bad GPS fix (if jump is too big, reset)
+              // If difference > 0.005 degrees (~500m) it's a big jump
+              if (Math.abs(v.lat - t.currentLat) > 0.005 || Math.abs(v.lng - t.currentLng) > 0.005) {
+                  t.animationPoints = [];
+                  t.currentFrame = 0;
+                  t.currentDirectionFrame = 0;
+                  t.currentLat = v.lat;
+                  t.currentLng = v.lng;
+                  t.currentDirection = rotation;
+                  t.lastAddedPoint = null;
+              }
 
               if (v.animPoints && v.animPoints.length > 0) {
-                // CRITICAL: percent is a SEGMENT DURATION (not cumulative position!)
-                // Values sum to ~100. Points are already in correct sequence order.
-                // Convert to cumulative timeline positions for interpolation.
-                let cumulative = 0;
-                const animPoints = v.animPoints.map(p => {
-                  cumulative += p.percent;
-                  return {
-                    cumulativePercent: cumulative / 100,
-                    lat: p.lat,
-                    lng: p.lng,
-                    dir: p.dir
-                  };
-                });
+                  const newKey = parseInt(v.anim_key, 10) || 0;
+                  const oldKey = parseInt(t.anim_key, 10) || 0;
+                  
+                  // Strictly ensure we only accept newer animation sequences to prevent old data from causing rollbacks
+                  if (newKey > oldKey) {
+                      let matchIdx = -1;
+                      
+                      // Find the robust overlap point from our last appended trajectory
+                      if (t.lastAddedPoint) {
+                          let closestIdx = -1;
+                          let minDist = Infinity;
+                          for (let i = 0; i < v.animPoints.length; i++) {
+                              const pt = v.animPoints[i];
+                              const dist = Math.pow(pt.lat - t.lastAddedPoint.lat, 2) + Math.pow(pt.lng - t.lastAddedPoint.lng, 2);
+                              if (dist < minDist) {
+                                  minDist = dist;
+                                  closestIdx = i;
+                              }
+                          }
+                          // If the closest point is within ~400 meters (~0.000015 deg^2), treat it as the exact seam
+                          if (minDist < 0.000015) {
+                              matchIdx = closestIdx;
+                          }
+                      }
+                      
+                      if (matchIdx !== -1) {
+                          // Seam found! Append smoothly.
+                          const newPoints = v.animPoints.slice(matchIdx + 1);
+                          if (newPoints.length > 0) {
+                              t.animationPoints = t.animationPoints.concat(newPoints);
+                              t.lastAddedPoint = newPoints[newPoints.length - 1]; // Store the absolute last point added
+                          }
+                      } else {
+                          // Seam NOT found! The path diverged, jumped, or ran out.
+                          // Fallback: compare with the CURRENT visual position to prevent rollback
+                          let closestToCurrent = -1;
+                          let minCurrentDist = Infinity;
+                          for (let i = 0; i < v.animPoints.length; i++) {
+                              const pt = v.animPoints[i];
+                              const dist = Math.pow(pt.lat - t.currentLat, 2) + Math.pow(pt.lng - t.currentLng, 2);
+                              if (dist < minCurrentDist) {
+                                  minCurrentDist = dist;
+                                  closestToCurrent = i;
+                              }
+                          }
+                          
+                          // Wipe the stale queue and stitch from exactly where the bus physically is!
+                          t.animationPoints = v.animPoints.slice(closestToCurrent + 1);
+                          if (t.animationPoints.length > 0) {
+                              t.lastAddedPoint = t.animationPoints[t.animationPoints.length - 1];
+                          } else {
+                              t.lastAddedPoint = null;
+                          }
+                          // Force immediate pivot
+                          t.currentFrame = 0;
+                          t.currentDirectionFrame = 0;
+                      }
 
-                const lastPt = animPoints[animPoints.length - 1];
-
-                activeAnimationsRef.current[v.id] = {
-                  startTimestamp,
-                  duration,
-                  startLng: v.lng,
-                  startLat: v.lat,
-                  targetLng: lastPt.lng,
-                  targetLat: lastPt.lat,
-                  animPoints,
-                  currentRot,
-                  rotDiff,
-                  marker,
-                  mDiv,
-                  tSpan
-                };
-
-                startGlobalAnimation();
+                      t.anim_key = v.anim_key;
+                      t.fallbackTarget = null;
+                      startGlobalAnimation();
+                  }
               } else {
-                // Dead reckoning: project forward using speed & direction
-                const speed = v.speed || 0; // km/h
-                const dirRad = (v.dir || 0) * Math.PI / 180;
-                // Project 15 seconds of travel at current speed
-                const d = speed * (15 / 3600); // km traveled in 15s
-                const deltaLat = (d / 111.32) * Math.cos(dirRad);
-                const deltaLng = (d / (111.32 * Math.cos(v.lat * Math.PI / 180))) * Math.sin(dirRad);
-
-                activeAnimationsRef.current[v.id] = {
-                  startTimestamp,
-                  duration,
-                  startLng: v.lng,
-                  startLat: v.lat,
-                  targetLng: v.lng + deltaLng,
-                  targetLat: v.lat + deltaLat,
-                  animPoints: null,
-                  currentRot,
-                  rotDiff,
-                  marker,
-                  mDiv,
-                  tSpan
-                };
-
-                startGlobalAnimation();
+                  // User specifically requested: "don't move vehicle only when new one data comes"
+                  // We disable dead reckoning (fallbackTarget) because projecting from stale v.lat causes huge backward glides when the queue empties.
+                  t.fallbackTarget = null;
               }
 
               if (mDiv) {
@@ -1435,17 +1466,24 @@ export default function App() {
 
               // Start gliding to the predicted location
               activeAnimationsRef.current[v.id] = {
-                startTimestamp: performance.now(),
-                duration: 10000,
-                startLng: v.lng,
-                startLat: v.lat,
-                targetLng: targetLng,
-                targetLat: targetLat,
-                currentRot: rotation,
-                rotDiff: 0,
-                marker,
-                mDiv: markerDiv,
-                tSpan: textSpan
+                  marker,
+                  mDiv: markerDiv,
+                  tSpan: textSpan,
+                  currentLat: v.lat,
+                  currentLng: v.lng,
+                  currentDirection: rotation,
+                  animationPoints: [],
+                  currentFrame: 0,
+                  currentDirectionFrame: 0,
+                  deltaLat: 0,
+                  deltaLng: 0,
+                  deltaDirection: 0,
+                  anim_key: v.anim_key,
+                  lastAddedPoint: null,
+                  fallbackTarget: {
+                      lat: targetLat,
+                      lng: targetLng
+                  }
               };
 
               startGlobalAnimation();

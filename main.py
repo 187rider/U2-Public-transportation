@@ -1,9 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Depends
 import time
 from fastapi.middleware.cors import CORSMiddleware
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import httpx
 import uvicorn
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -16,14 +14,10 @@ import hashlib
 load_dotenv()
 
 # Persistent HTTP Connection Pool for sub-millisecond connection reuse
-session = requests.Session()
-adapter = HTTPAdapter(
-    pool_connections=50,
-    pool_maxsize=50,
-    max_retries=Retry(total=2, backoff_factor=0.1)
+async_client = httpx.AsyncClient(
+    limits=httpx.Limits(max_keepalive_connections=50, max_connections=50),
+    timeout=httpx.Timeout(10.0, read=30.0)
 )
-session.mount("http://", adapter)
-session.mount("https://", adapter)
 
 CACHE = {}
 CACHE_TTL_VEHICLES = 1.0
@@ -109,13 +103,13 @@ async def verify_signature(request: Request):
         raise HTTPException(status_code=403, detail="Invalid signature")
 
 @app.get("/api/stations", dependencies=[Depends(verify_signature)])
-def get_stations():
+async def get_stations():
     cached = get_from_cache("stations", CACHE_TTL_STATIC)
     if cached:
         return cached
 
     try:
-        r = session.get(
+        r = await async_client.get(
             STATIONS_API_URL, 
             params={"city": BUS62_CITY}, 
             headers=get_headers(), 
@@ -168,13 +162,13 @@ def get_stations():
     return result
 
 @app.get("/api/routes", dependencies=[Depends(verify_signature)])
-def get_routes():
+async def get_routes():
     cached = get_from_cache("routes", CACHE_TTL_STATIC)
     if cached:
         return cached
 
     try:
-        r = session.get(
+        r = await async_client.get(
             ROUTES_API_URL, 
             params={"city": BUS62_CITY}, 
             headers=get_headers(), 
@@ -236,7 +230,7 @@ def get_routes():
     return result
 
 @app.get("/api/vehicles", dependencies=[Depends(verify_signature)])
-def get_vehicles(rids: str = "", curk: str = "0"):
+async def get_vehicles(rids: str = "", curk: str = "0"):
     if not rids:
         return {"vehicles": []}
         
@@ -269,7 +263,7 @@ def get_vehicles(rids: str = "", curk: str = "0"):
             headers = get_headers()
             api_url = VEHICLES_API_URL
 
-        r = session.get(
+        r = await async_client.get(
             api_url, 
             params=params, 
             headers=headers, 
@@ -282,7 +276,7 @@ def get_vehicles(rids: str = "", curk: str = "0"):
         if not r.text.strip() and api_url == VEHICLES_API9_URL:
             headers = get_headers()
             api_url = VEHICLES_API_URL
-            r = session.get(api_url, params=params, headers=headers, timeout=10)
+            r = await async_client.get(api_url, params=params, headers=headers, timeout=10)
             r.raise_for_status()
 
         if not r.text.strip():
@@ -358,7 +352,7 @@ def get_vehicles(rids: str = "", curk: str = "0"):
     return result
 
 @app.get("/api/route_nodes", dependencies=[Depends(verify_signature)])
-def get_route_nodes(id: str = ""):
+async def get_route_nodes(id: str = ""):
     if not id:
         return {"nodes": []}
         
@@ -370,7 +364,7 @@ def get_route_nodes(id: str = ""):
     url = f"{BUS62_URL}/getRouteNodes.php"
     params = {"id": id, "city": BUS62_CITY}
     try:
-        r = session.get(url, params=params, headers=get_headers(), timeout=10)
+        r = await async_client.get(url, params=params, headers=get_headers(), timeout=10)
         r.raise_for_status()
         if not r.text.strip():
             return {"nodes": []}
@@ -390,7 +384,7 @@ def get_route_nodes(id: str = ""):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/route_stations", dependencies=[Depends(verify_signature)])
-def get_route_stations(id: str = ""):
+async def get_route_stations(id: str = ""):
     if not id:
         return {"stations": []}
         
@@ -402,7 +396,7 @@ def get_route_stations(id: str = ""):
     url = f"{BUS62_URL}/getRouteStations.php"
     params = {"id": id, "city": BUS62_CITY}
     try:
-        r = session.get(url, params=params, headers=get_headers(), timeout=10)
+        r = await async_client.get(url, params=params, headers=get_headers(), timeout=10)
         r.raise_for_status()
         if not r.text.strip():
             return {"stations": []}
@@ -423,7 +417,7 @@ def get_route_stations(id: str = ""):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/vehicle_forecasts", dependencies=[Depends(verify_signature)])
-def get_vehicle_forecasts(vehid: str = ""):
+async def get_vehicle_forecasts(vehid: str = ""):
     if not vehid:
         return {"forecasts": []}
         
@@ -435,7 +429,7 @@ def get_vehicle_forecasts(vehid: str = ""):
     url = f"{BUS62_URL}/getVehicleForecasts.php"
     params = {"vehid": vehid, "city": BUS62_CITY}
     try:
-        r = session.get(url, params=params, headers=get_headers(), timeout=10)
+        r = await async_client.get(url, params=params, headers=get_headers(), timeout=10)
         r.raise_for_status()
         if not r.text.strip():
             return {"forecasts": []}
@@ -458,7 +452,7 @@ def get_vehicle_forecasts(vehid: str = ""):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/station_forecasts", dependencies=[Depends(verify_signature)])
-def get_station_forecasts(sid: str = ""):
+async def get_station_forecasts(sid: str = ""):
     if not sid:
         return {"forecasts": []}
         
@@ -470,7 +464,7 @@ def get_station_forecasts(sid: str = ""):
     url = f"{BUS62_URL}/getStationForecasts.php"
     params = {"sid": sid, "city": BUS62_CITY}
     try:
-        r = session.get(url, params=params, headers=get_headers(), timeout=10)
+        r = await async_client.get(url, params=params, headers=get_headers(), timeout=10)
         r.raise_for_status()
         if not r.text.strip():
             return {"forecasts": []}
