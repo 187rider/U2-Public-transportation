@@ -754,41 +754,32 @@ export default function App() {
         const t = anims[id];
         hasActive = true;
 
-        if (t.timeRemaining > 0) {
-            const step = Math.min(dt, t.timeRemaining);
-            t.currentLat += t.velocityLat * step;
-            t.currentLng += t.velocityLng * step;
-            t.timeRemaining -= step;
+        if (t.currentFrame > 0) {
+            t.currentFrame -= 1;
+            t.currentLat += t.deltaLat;
+            t.currentLng += t.deltaLng;
             
-            if (t.directionTimeRemaining > 0) {
-                const dirStep = Math.min(dt, t.directionTimeRemaining);
-                t.currentDirection += t.velocityDirection * dirStep;
-                t.directionTimeRemaining -= dirStep;
+            if (t.currentDirectionFrame > 0) {
+                t.currentDirectionFrame -= 1;
+                t.currentDirection += t.deltaDirection;
             }
         } else if (t.animationPoints && t.animationPoints.length > 0) {
             const a = t.animationPoints.shift();
             
-            // Convert the legacy 500-frame * 30ms budget directly into a pure 15000ms real-time window
-            const rMs = Math.max((15000 * a.percent) / 100, 1);
-            const oMs = Math.max((15000 * a.percent) / 1e3, 1);
+            // 900 frames at 60 FPS = exactly 15 seconds (matching the polling window)
+            const r = Math.trunc(900 * a.percent / 100) || 1;
+            const o = Math.trunc(900 * a.percent / 1e3) || 1;
             
-            t.velocityLat = (a.lat - t.currentLat) / rMs;
-            t.velocityLng = (a.lng - t.currentLng) / rMs;
-            t.velocityDirection = shortestAngleDiff(a.dir, t.currentDirection) / oMs;
+            t.deltaLat = (a.lat - t.currentLat) / r;
+            t.deltaLng = (a.lng - t.currentLng) / r;
+            t.deltaDirection = shortestAngleDiff(a.dir, t.currentDirection) / o;
             
-            t.timeRemaining = rMs;
-            t.directionTimeRemaining = oMs;
-            
-            // Apply initial sub-step immediately to avoid a 1-frame micro-stutter during segment transition
-            const step = Math.min(dt, t.timeRemaining);
-            t.currentLat += t.velocityLat * step;
-            t.currentLng += t.velocityLng * step;
-            t.timeRemaining -= step;
+            t.currentFrame = r;
+            t.currentDirectionFrame = o;
         } else if (t.fallbackTarget) {
             // Disabled per user request (t.fallbackTarget = null in the fetch logic)
-            // But kept here as a fail-safe empty block if it ever gets set.
-            t.timeRemaining = 0;
-            t.directionTimeRemaining = 0;
+            t.currentFrame = 0;
+            t.currentDirectionFrame = 0;
             t.fallbackTarget = null;
         }
 
