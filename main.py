@@ -272,8 +272,8 @@ class ServerVehiclePoller:
             self.curk = str(max_curk)
             self.version += 1
 
-            # Evict vehicles that have not been reported for > 3 minutes (180s)
-            stale_keys = [k for k, ts in self.veh_last_seen.items() if now - ts > 180.0]
+            # Evict vehicles that have not been reported for > 60 seconds (6 consecutive polls)
+            stale_keys = [k for k, ts in self.veh_last_seen.items() if now - ts > 60.0]
             for k in stale_keys:
                 self.vehicles.pop(k, None)
                 self.veh_last_seen.pop(k, None)

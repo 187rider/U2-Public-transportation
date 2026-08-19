@@ -1468,21 +1468,40 @@ export default function App() {
 
         if (data && data.vehicles) {
           const nowTime = Date.now();
-          if (curk === "0") {
-            knownVehiclesRef.current = {};
-          }
-
+          const incomingIds = new Set();
           const updatesMap = {};
+
           data.vehicles.forEach(v => {
+            incomingIds.add(v.id);
             knownVehiclesRef.current[v.id] = { ...v, _lastSeen: nowTime };
             updatesMap[v.id] = v;
           });
 
-          // Run time-based pruning to remove vehicles unreported for > 3 minutes
-          pruneStaleVehicles();
+          // Immediately remove any markers that the backend dropped from active tracking
+          Object.keys(vehicleMarkersRef.current).forEach(id => {
+            if (!incomingIds.has(id)) {
+              try {
+                vehicleMarkersRef.current[id].remove();
+              } catch {}
+              delete vehicleMarkersRef.current[id];
+              delete activeAnimationsRef.current[id];
+              delete knownVehiclesRef.current[id];
+              if (selectedVehicleRef.current?.id === id) {
+                setSelectedVehicle(null);
+              }
+            }
+          });
+
+          // Clean any orphan knownVehicles
+          Object.keys(knownVehiclesRef.current).forEach(id => {
+            if (!incomingIds.has(id)) {
+              delete knownVehiclesRef.current[id];
+            }
+          });
+
           if (!isActive) return;
 
-          let allVeh = Object.values(knownVehiclesRef.current);
+          let allVeh = data.vehicles;
 
           if (data.next_curk && data.next_curk !== "0") {
             curk = data.next_curk;
