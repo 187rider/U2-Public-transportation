@@ -759,6 +759,17 @@ body {
   border: 2px solid rgba(0, 0, 0, 0.2);
   transform-origin: center center;
   z-index: 2000 !important;
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+.vehicle-text {
+  position: relative;
+  z-index: 2;
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 /* Inner border effect like in the screenshot */
@@ -774,18 +785,20 @@ body {
   pointer-events: none;
 }
 
-/* The teardrop pointer */
+/* The teardrop pointer - enlarged to match navigation reference design */
 .vehicle-pointer {
   position: absolute;
-  top: -10px;
+  top: -12px;
   left: 50%;
   transform: translateX(-50%);
   width: 0;
   height: 0;
-  border-left: 8px solid transparent;
-  border-right: 8px solid transparent;
-  border-bottom: 14px solid currentColor;
-  z-index: -1;
+  border-left: 9px solid transparent;
+  border-right: 9px solid transparent;
+  border-bottom: 16px solid currentColor;
+  z-index: 1;
+  pointer-events: none;
+  filter: drop-shadow(0 -1.5px 1px rgba(0, 0, 0, 0.25));
 }
 
 /* Glowing effect for selected vehicle */

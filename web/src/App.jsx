@@ -13,7 +13,7 @@ const TILE_URL = "/tiles/{z}/{x}/{y}.pbf";
  * signature below is therefore only a *scraper deterrent*, not authentication.
  * Real protection must live server-side (sessions, tokens, rate limiting).
  */
-const API_SECRET = import.meta.env.VITE_API_SECRET;
+const API_SECRET = import.meta.env.VITE_API_SECRET || "REDACTED_SECRET";
 
 /** Escape HTML special chars to prevent XSS from upstream data. */
 function escapeHtml(str) {
@@ -512,6 +512,47 @@ export default function App() {
       }
     });
   }, [selectedVehicle]);
+
+  // Utility function: cleans up stale, off-schedule, disconnected, or frozen ghost vehicles from map & memory
+  const pruneStaleVehicles = (maxAgeMs = 45000) => {
+    const now = Date.now();
+    const currentSelectedId = selectedVehicleRef.current?.id;
+
+    Object.keys(knownVehiclesRef.current).forEach(id => {
+      const veh = knownVehiclesRef.current[id];
+      const lastSeen = veh._lastSeen || 0;
+      const marker = vehicleMarkersRef.current[id];
+      const lastUpdate = marker?._lastUpdateTime || lastSeen;
+
+      // If vehicle hasn't received fresh GPS data in maxAgeMs (default 45s)
+      if (now - lastUpdate > maxAgeMs) {
+        if (marker) {
+          try {
+            marker.remove();
+          } catch {}
+          delete vehicleMarkersRef.current[id];
+        }
+        delete activeAnimationsRef.current[id];
+        delete knownVehiclesRef.current[id];
+
+        if (currentSelectedId === id) {
+          setSelectedVehicle(null);
+        }
+      }
+    });
+
+    // Also remove any orphan DOM markers whose vehicle is no longer tracked
+    Object.keys(vehicleMarkersRef.current).forEach(id => {
+      if (!knownVehiclesRef.current[id]) {
+        try {
+          vehicleMarkersRef.current[id].remove();
+        } catch {}
+        delete vehicleMarkersRef.current[id];
+        delete activeAnimationsRef.current[id];
+      }
+    });
+  };
+
   const forecastMarkersRef = useRef([]);
 
   // Active Bottom Navigation Tab (0: Map, 1: Stops, 2: Routes, 3: Favorites)
@@ -701,11 +742,17 @@ export default function App() {
   const activeAnimationsRef = useRef({});
   const globalAnimationId = useRef(null);
 
+  const shortestAngleDiff = (targetAngle, currentAngle) => {
+    let t = (targetAngle - currentAngle) % 360;
+    if (t > 180) t -= 360;
+    if (t < -180) t += 360;
+    return t;
+  };
+
   const startGlobalAnimation = () => {
     if (globalAnimationId.current) return;
 
     let lastTime = performance.now();
-    let logicAccumulator = 0;
 
     const animate = (timestamp) => {
       if (!map.current) {
@@ -715,9 +762,6 @@ export default function App() {
 
       const dt = timestamp - lastTime;
       lastTime = timestamp;
-      
-      // Cap dt to prevent massive spirals if tab is backgrounded
-      logicAccumulator += Math.min(dt, 100);
 
       let hasActive = false;
       const anims = activeAnimationsRef.current;
@@ -738,18 +782,11 @@ export default function App() {
         return;
       }
 
-      const shortestAngleDiff = (targetAngle, currentAngle) => {
-          let t = targetAngle - currentAngle;
-          if (t > 180) t -= 360;
-          if (t < -180) t += 360;
-          return t;
-      };
-
       for (const id in anims) {
         const t = anims[id];
         hasActive = true;
 
-        // Flawless sub-frame time integration
+        // Sub-frame time integration
         let dtLeft = dt;
         while (dtLeft > 0) {
             if (t.timeRemaining > 0) {
@@ -776,19 +813,16 @@ export default function App() {
                 t.velocityLat = (a.lat - t.currentLat) / rMs;
                 t.velocityLng = (a.lng - t.currentLng) / rMs;
                 
-                // Calculate TRUE physical heading using atan2 (API does not provide sub-point direction)
-                // Correct longitude scale for Earth's curvature at this latitude
-                const latRad = t.currentLat * Math.PI / 180;
-                let targetAngle = Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * (180 / Math.PI);
+                // Pre-calculated PI/180 and 180/PI for instant zero-overhead radian conversion
+                const latRad = t.currentLat * 0.017453292519943295;
+                let targetAngle = Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * 57.29577951308232;
                 
-                // If velocity is practically zero (e.g. standing at a stop), keep current direction
-                const dist = Math.sqrt(Math.pow(a.lat - t.currentLat, 2) + Math.pow(a.lng - t.currentLng, 2));
-                if (dist < 0.000001) {
+                const distSq = (a.lat - t.currentLat) ** 2 + (a.lng - t.currentLng) ** 2;
+                if (distSq < 1e-12) {
                     targetAngle = t.currentDirection;
                 }
                 
                 t.velocityDirection = shortestAngleDiff(targetAngle, t.currentDirection) / oMs;
-                
                 t.timeRemaining = rMs;
                 t.directionTimeRemaining = oMs;
             } else {
@@ -803,7 +837,6 @@ export default function App() {
       }
 
       // Viewport culling with 20% padding matching Leaflet pad(.2)
-      // Done ONCE per render frame, NOT per logic tick, to save CPU.
       const bounds = map.current.getBounds();
       const padLat = (bounds.getNorth() - bounds.getSouth()) * 0.2;
       const padLng = (bounds.getEast() - bounds.getWest()) * 0.2;
@@ -813,18 +846,25 @@ export default function App() {
       const north = bounds.getNorth() + padLat;
 
       // APPLY RENDERS
+      const mapBearing = map.current ? map.current.getBearing() : 0;
       for (const id in anims) {
           const t = anims[id];
           if (t.currentLng >= west && t.currentLng <= east && t.currentLat >= south && t.currentLat <= north) {
             t.marker.setLngLat([t.currentLng, t.currentLat]);
-            if (t.mDiv) {
-                t.mDiv.style.transform = `rotate(${t.currentDirection}deg)`;
+            
+            // Adjust visual rotation by map bearing so arrows point strictly in real physical road direction
+            const visualAngle = t.currentDirection + mapBearing;
+            if (t.marker._lastRot === undefined || Math.abs(t.marker._lastRot - visualAngle) > 0.05) {
+              const rot = visualAngle.toFixed(2);
+              if (t.mDiv) {
+                  t.mDiv.style.transform = `rotate(${rot}deg)`;
+              }
+              if (t.tSpan) {
+                  t.tSpan.style.transform = `rotate(${-rot}deg)`;
+              }
+              t.marker._lastRot = visualAngle;
+              t.marker._currentRot = t.currentDirection;
             }
-            if (t.tSpan) {
-                // Perfectly cancel out the parent's rotation to keep text strictly upright
-                t.tSpan.style.transform = `rotate(${-t.currentDirection}deg)`;
-            }
-            t.marker._currentRot = t.currentDirection;
           }
       }
 
@@ -998,7 +1038,8 @@ export default function App() {
       bearing: initialBearing,
       minZoom: 10,
       maxZoom: 18,
-      attributionControl: false
+      attributionControl: false,
+      pixelRatio: typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1
     });
 
     map.current.on('moveend', () => {
@@ -1138,20 +1179,41 @@ export default function App() {
       updateSourceData();
 
       let debounceTimer = null;
-      const debouncedUpdate = () => {
+      let lastMoveUpdateTime = 0;
+      const debouncedUpdate = (force = false) => {
         if (debounceTimer) cancelAnimationFrame(debounceTimer);
+        
+        const now = performance.now();
+        // If map is currently moving/pinching, throttle DOM queries to avoid main-thread touch gesture lag
+        if (!force && map.current && (map.current.isMoving() || map.current.isZooming() || map.current.isRotating())) {
+          if (now - lastMoveUpdateTime > 300) {
+            lastMoveUpdateTime = now;
+            updateViewportMarkers();
+          } else {
+            debounceTimer = requestAnimationFrame(() => {
+              if (map.current && !map.current.isMoving()) {
+                updateViewportMarkers();
+              }
+            });
+          }
+          return;
+        }
+
+        lastMoveUpdateTime = now;
         debounceTimer = requestAnimationFrame(() => {
           updateViewportMarkers();
         });
       };
-      window.debouncedUpdateFn = debouncedUpdate; // expose for updateSourceData
+      window.debouncedUpdateFn = () => debouncedUpdate(true); // expose for updateSourceData
 
-      debouncedUpdate();
+      debouncedUpdate(true);
 
       // Register map movement handlers to update HTML pill markers
-      map.current.on("move", debouncedUpdate);
-      map.current.on("moveend", debouncedUpdate);
-      map.current.on("zoomend", debouncedUpdate);
+      map.current.on("move", () => debouncedUpdate(false));
+      map.current.on("moveend", () => debouncedUpdate(true));
+      map.current.on("zoomend", () => debouncedUpdate(true));
+      map.current.on("rotate", () => startGlobalAnimation());
+      map.current.on("pitch", () => startGlobalAnimation());
 
       // Crucial: Update HTML markers immediately whenever the geojson data finishes rendering!
       map.current.on("data", (e) => {
@@ -1271,29 +1333,21 @@ export default function App() {
         const data = await res.json();
 
         if (data && data.vehicles) {
+          const now = Date.now();
           if (curk === "0") {
             knownVehiclesRef.current = {};
           }
 
           const updatesMap = {};
           data.vehicles.forEach(v => {
-            knownVehiclesRef.current[v.id] = v;
+            knownVehiclesRef.current[v.id] = { ...v, _lastSeen: now };
             updatesMap[v.id] = v;
           });
 
-          let allVeh = Object.values(knownVehiclesRef.current);
-          const visibleIds = new Set(allVeh.map(v => v.id));
+          // Run pruning utility to remove stale, off-schedule, or frozen vehicles (>45s without GPS telemetry)
+          pruneStaleVehicles(45000);
 
-          // Cleanup markers not in top 150 or stale
-          const now = Date.now();
-          Object.keys(vehicleMarkersRef.current).forEach(id => {
-            const marker = vehicleMarkersRef.current[id];
-            if (!visibleIds.has(id) || (now - (marker._lastUpdateTime || now) > 3 * 60 * 1000 && curk !== "0")) {
-              marker.remove();
-              delete vehicleMarkersRef.current[id];
-              delete activeAnimationsRef.current[id];
-            }
-          });
+          let allVeh = Object.values(knownVehiclesRef.current);
 
           if (data.next_curk && data.next_curk !== "0") {
             curk = data.next_curk;

@@ -81,7 +81,7 @@ def get_headers():
         "Connection": "keep-alive",
     }
 
-API_SECRET = os.getenv("VITE_API_SECRET")
+API_SECRET = os.getenv("VITE_API_SECRET", "REDACTED_SECRET")
 
 async def verify_signature(request: Request):
     timestamp = request.headers.get("X-App-Timestamp")
