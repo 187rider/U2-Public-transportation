@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { sha256 } from "js-sha256";
 import { Map as MapLibreMap, NavigationControl, GeolocateControl, Popup, Marker } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -590,16 +590,29 @@ export default function App() {
     const map = new Map();
 
     (routes || []).forEach(r => {
-      const termNames = new Set();
-      if (r.from_station) termNames.add(norm(r.from_station));
-      if (r.to_station) termNames.add(norm(r.to_station));
+      // Map specific subroute endpoints to subroute IDs
       if (Array.isArray(r.subroutes)) {
         r.subroutes.forEach(sr => {
-          if (sr.from_station) termNames.add(norm(sr.from_station));
-          if (sr.to_station) termNames.add(norm(sr.to_station));
+          if (sr.id) {
+            const srTermNames = [];
+            if (sr.from_station) srTermNames.push(norm(sr.from_station));
+            if (sr.to_station) srTermNames.push(norm(sr.to_station));
+            const srCoords = [];
+            srTermNames.forEach(tName => {
+              const found = stationCoordsByName.get(tName);
+              if (found) srCoords.push(...found);
+            });
+            if (srCoords.length > 0) {
+              map.set(String(sr.id).trim(), srCoords);
+            }
+          }
         });
       }
 
+      // Map main route endpoints to route IDs and route number fallback
+      const termNames = [];
+      if (r.from_station) termNames.push(norm(r.from_station));
+      if (r.to_station) termNames.push(norm(r.to_station));
       const coordsList = [];
       termNames.forEach(tName => {
         const found = stationCoordsByName.get(tName);
@@ -608,16 +621,13 @@ export default function App() {
 
       if (coordsList.length > 0) {
         if (r.id) {
-          String(r.id).split(',').forEach(id => map.set(String(id).trim(), coordsList));
+          String(r.id).split(',').forEach(id => {
+            const key = String(id).trim();
+            if (!map.has(key)) map.set(key, coordsList);
+          });
         }
-        // Note: r.number is secondary fallback when veh.rid is missing; primary lookup uses precise rid
         if (r.number && !map.has(norm(r.number))) {
           map.set(norm(r.number), coordsList);
-        }
-        if (Array.isArray(r.subroutes)) {
-          r.subroutes.forEach(sr => {
-            if (sr.id) map.set(String(sr.id).trim(), coordsList);
-          });
         }
       }
     });
@@ -635,7 +645,7 @@ export default function App() {
   const METERS_PER_DEG_LAT = 111320;
   const METERS_PER_DEG_LNG = 68840; // 111320 * cos(51.8°) for Ulan-Ude
 
-  const isNearTerminalStop = (veh) => {
+  const isNearTerminalStop = useCallback((veh) => {
     if (!veh || !veh.lat || !veh.lng) return false;
     const termMap = routeTerminalsMapRef.current;
     if (!termMap) return false;
@@ -656,7 +666,7 @@ export default function App() {
       if (distSqMeters <= TERMINAL_MAX_DIST_SQ_M) return true;
     }
     return false;
-  };
+  }, []);
 
   // Pure time-based pruning without serial network traffic
   const pruneStaleVehicles = (maxAgeMs = 180000) => {
@@ -860,7 +870,8 @@ export default function App() {
         return;
       }
 
-      const dt = timestamp - lastTime;
+      const rawDt = timestamp - lastTime;
+      const dt = Math.min(Math.max(rawDt, 0), 200);
       lastTime = timestamp;
 
       let hasActive = false;
@@ -912,7 +923,11 @@ export default function App() {
           } else if (t.animationPoints && t.animationPoints.length > 0) {
             const a = t.animationPoints.shift();
 
-            const rMs = Math.max((15000 * a.percent) / 100, 1);
+            // 10s baseline aligned with server polling interval; dynamic catch-up when queue accumulates
+            const queueLen = t.animationPoints.length;
+            const catchUpFactor = queueLen > 1 ? Math.min(2.5, 1.0 + (queueLen - 1) * 0.35) : 1.0;
+            const baseMs = Math.max((10000 * a.percent) / 100, 1);
+            const rMs = Math.max(baseMs / catchUpFactor, 1);
             const oMs = Math.max(rMs / 10, 1); // Turn completes 10x faster than movement
 
             t.velocityLat = (a.lat - t.currentLat) / rMs;
@@ -1559,6 +1574,9 @@ export default function App() {
                     const newPoints = v.animPoints.slice(matchIdx + 1);
                     if (newPoints.length > 0) {
                       t.animationPoints = t.animationPoints.concat(newPoints);
+                      if (t.animationPoints.length > 4) {
+                        t.animationPoints = t.animationPoints.slice(-3);
+                      }
                       t.lastAddedPoint = newPoints[newPoints.length - 1];
                     }
                   } else {
@@ -1575,6 +1593,9 @@ export default function App() {
                     }
 
                     t.animationPoints = v.animPoints.slice(closestToCurrent + 1);
+                    if (t.animationPoints.length > 4) {
+                      t.animationPoints = t.animationPoints.slice(-3);
+                    }
                     if (t.animationPoints.length > 0) {
                       t.lastAddedPoint = t.animationPoints[t.animationPoints.length - 1];
                     } else {
@@ -1885,9 +1906,9 @@ export default function App() {
             }
           });
         } else {
-          // No active forward arrival forecasts: vehicle is waiting at the terminal turnaround loop
+          // If no forward forecasts, check if vehicle is actually at terminal stop (within 100m)
           const currentVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
-          if (currentVeh && currentVeh.lat && currentVeh.lng) {
+          if (currentVeh && currentVeh.lat && currentVeh.lng && isNearTerminalStop(currentVeh)) {
             const el = document.createElement("div");
             el.className = "forecast-marker terminal-waiting-badge";
             el.innerHTML = `
@@ -1922,7 +1943,7 @@ export default function App() {
       abortController.abort();
       if (forecastTimeout) clearTimeout(forecastTimeout);
     };
-  }, [selectedVehicle, stationsById]);
+  }, [selectedVehicle, stationsById, isNearTerminalStop]);
 
   // Optimized Search Filter using pre-indexed search tokens
   const searchResults = useMemo(() => {
