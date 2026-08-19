@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { sha256 } from "js-sha256";
-import { Map, NavigationControl, GeolocateControl, Popup, Marker } from "maplibre-gl";
+import { Map as MapLibreMap, NavigationControl, GeolocateControl, Popup, Marker } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./App.css";
 
@@ -13,12 +13,20 @@ const TILE_URL = "/tiles/{z}/{x}/{y}.pbf";
  * signature below is therefore only a *scraper deterrent*, not authentication.
  * Real protection must live server-side (sessions, tokens, rate limiting).
  */
-const API_SECRET = import.meta.env.VITE_API_SECRET || "REDACTED_SECRET";
+const API_SECRET = import.meta.env.VITE_API_SECRET || "";
+if (!API_SECRET && import.meta.env.DEV) {
+  console.warn("Missing VITE_API_SECRET environment variable.");
+}
 
 /** Escape HTML special chars to prevent XSS from upstream data. */
 function escapeHtml(str) {
   if (typeof str !== "string") return String(str ?? "");
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function apiFetch(url, options = {}) {
@@ -240,25 +248,29 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
   document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
   document.querySelectorAll('.forecast-marker').forEach(p => p.remove());
 
+  const safeName = escapeHtml(props.name || "Остановка");
+  const safeId = escapeHtml(props.id);
+  const safeDesc = props.description ? `<div style="font-size: 11px; padding: 4px 14px 0; color: #64748b;">${escapeHtml(props.description)}</div>` : '';
+
   const popupHtml = `
     <div class="stop-popup">
       <div class="stop-popup-header ${typeClass}">
         <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;">
           <span class="material-symbols-outlined" style="font-size: 20px; flex-shrink: 0;">${icon}</span>
-          <span style="font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${props.name}</span>
+          <span style="font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeName}</span>
         </div>
-        <span id="popup-fav-btn-${props.id}" class="popup-fav-btn ${isFavorite ? 'active' : ''}" role="button" tabindex="0" title="${isFavorite ? 'Удалить из избранного' : 'Добавить в избранное'}">
+        <span id="popup-fav-btn-${safeId}" class="popup-fav-btn ${isFavorite ? 'active' : ''}" role="button" tabindex="0" title="${isFavorite ? 'Удалить из избранного' : 'Добавить в избранное'}">
           <span class="material-symbols-outlined">star</span>
         </span>
       </div>
-      ${props.description ? `<div style="font-size: 11px; padding: 4px 14px 0; color: #64748b;">${props.description}</div>` : ''}
+      ${safeDesc}
       <div class="stop-popup-body">
         <div class="stop-detail-row">
           <span>Тип:</span>
           <span class="badge ${isBus ? 'badge-bus' : 'badge-tram'}">${typeText}</span>
         </div>
       </div>
-      <div id="station-forecast-${props.id}" class="station-forecast-container" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #1e293b;">
+      <div id="station-forecast-${safeId}" class="station-forecast-container" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #1e293b;">
         <div style="color: #64748b; text-align: center;">Загрузка расписания...</div>
       </div>
     </div>
@@ -277,14 +289,19 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
   activeStationPopup = popup;
 
   let isActive = true;
+  let forecastTimer = null;
+  const abortCtrl = new AbortController();
+
   popup.on('close', () => {
     isActive = false;
+    abortCtrl.abort();
+    if (forecastTimer) clearTimeout(forecastTimer);
     if (activeStationPopup === popup) {
       activeStationPopup = null;
     }
   });
 
-  const favBtn = document.getElementById(`popup-fav-btn-${props.id}`);
+  const favBtn = document.getElementById(`popup-fav-btn-${safeId}`);
   if (favBtn) {
     favBtn.onclick = (e) => {
       e.stopPropagation();
@@ -303,13 +320,26 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
     };
   }
 
+  // Precompute rid -> route lookup map for O(1) matching
+  const routeMap = new Map();
+  (routes || []).forEach(r => {
+    if (r.id) {
+      String(r.id).split(',').forEach(id => routeMap.set(String(id).trim(), r));
+    }
+    if (Array.isArray(r.subroutes)) {
+      r.subroutes.forEach(sr => {
+        if (sr.id) routeMap.set(String(sr.id).trim(), r);
+      });
+    }
+  });
+
   const loadForecast = () => {
     if (!isActive) return;
-    apiFetch(`/api/station_forecasts?sid=${props.id}`)
+    apiFetch(`/api/station_forecasts?sid=${encodeURIComponent(props.id)}`, { signal: abortCtrl.signal })
       .then(r => r.json())
       .then(data => {
         if (!isActive) return;
-        const container = document.getElementById(`station-forecast-${props.id}`);
+        const container = document.getElementById(`station-forecast-${safeId}`);
         if (!container) return;
         if (data.forecasts && data.forecasts.length > 0) {
           let html = `
@@ -321,18 +351,11 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
             <ul class="station-forecast-list">
           `;
           data.forecasts.forEach(f => {
-            const r = routes.find(rt => {
-              if (rt.id && String(rt.id).split(',').includes(String(f.rid))) return true;
-              if (rt.subroutes && Array.isArray(rt.subroutes)) {
-                return rt.subroutes.some(sub => String(sub.id) === String(f.rid));
-              }
-              return false;
-            });
-
+            const r = routeMap.get(String(f.rid));
             let rnum = r ? (r.number || r.rnum || r.routeNumber || r.route || f.rid) : f.rid;
 
             if (typeof rnum === 'string') {
-              rnum = rnum.replace(/\\(.*?\\)/g, '').replace('Тм-', '').replace('Т-', '');
+              rnum = rnum.replace(/\(.*?\)/g, '').replace('Тм-', '').replace('Т-', '');
             }
 
             let bgColor = "#fbbf24";
@@ -362,15 +385,12 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
           html += '</ul>';
           container.innerHTML = html;
 
-          // Apply scroll animation to overflowing text
           setTimeout(() => {
             container.querySelectorAll('.dest-wrapper').forEach(wrapper => {
               const textEl = wrapper.querySelector('.dest-text');
               if (textEl && textEl.scrollWidth > wrapper.clientWidth) {
                 const dist = textEl.scrollWidth - wrapper.clientWidth;
-                // Add a little padding to the distance so it scrolls completely out of view of the edge
                 textEl.style.setProperty('--scroll-dist', `-${dist + 10}px`);
-                // Base speed on distance (e.g. 30px per second) plus a minimum 2s delay
                 const duration = Math.max((dist / 20) + 2, 4);
                 textEl.style.animation = `scroll-text-dist ${duration}s linear infinite alternate`;
               }
@@ -380,78 +400,129 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
           container.innerHTML = '<div style="color: #64748b; text-align: center; padding: 12px 0;">Нет ожидаемых маршрутов</div>';
         }
 
-        setTimeout(loadForecast, 10000); // Poll every 10s
+        if (isActive) {
+          forecastTimer = setTimeout(loadForecast, 10000);
+        }
       })
-      .catch(() => {
-        if (!isActive) return;
-        const container = document.getElementById(`station-forecast-${props.id}`);
+      .catch((err) => {
+        if (!isActive || err.name === 'AbortError') return;
+        const container = document.getElementById(`station-forecast-${safeId}`);
         if (container) container.innerHTML = '<div style="color: #ef4444; text-align: center; padding: 12px 0;">Ошибка загрузки</div>';
 
-        setTimeout(loadForecast, 10000); // Retry every 10s
+        if (isActive) {
+          forecastTimer = setTimeout(loadForecast, 10000);
+        }
       });
   };
 
   loadForecast();
 }
 
-const BUS_SVG_DATA = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgdmlld0JveD0iMCAwIDY0IDY0Ij48Y2lyY2xlIGN4PSIzMiIgY3k9IjMyIiByPSIyOCIgZmlsbD0iIzI1NjNlYiIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjQiLz48cGF0aCBkPSJNMjAgNDBjMCAxLjUgMSAyLjUgMi41IDIuNVYzYzAgMSAuOCAxLjUgMS41IDEuNWgyYy44IDAgMS41LS41 IDEuNS0xLjV2LTNoOXYzYzAgMSAuNyAxLjUgMS41IDEuNWgyYy43IDAgMS41LS41 IDEuNS0xLjV2LTNjMS41IDAgMi41LTEgMi41LTIuNVYyMmMwLTUuNS01LjUtNi0xMy02cy0xMyAuNS0xMyA2djE4em01LjUgMS41Yy0xLjMgMC0yLjMtMS0yLjMtMi4zczEtMi4zIDIuMy0yLjMgMi4z IDEgMi4zIDIuMy0xIDIuMy0yLjMgMi4zem0xNSAwYy0xLjMgMC0yLjMtMS0yLjMtMi4zczEtMi4zIDIuMy0yLjMgMi4z IDEgMi4zIDIuMy0xIDIuMy0yLjMgMi4zeE00MiAzMUgyMlYyMmgyMHY5eiIgZmlsbD0iI2ZmZmZmZiIvPjwvc3ZnPg==";
-const TRAM_SVG_DATA = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgdmlld0JveD0iMCAwIDY0IDY0Ij48Y2lyY2xlIGN4PSIzMiIgY3k9IjMyIiByPSIyOCIgZmlsbD0iI2UxMWQ0OCIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjQiLz48cGF0aCBkPSJNMzIgMTRsMy41IDMuNWg3djMuNWgtNy41bC0yLjMgMy41SDQzYzIgMCAzLjUgMS41IDMuNSAzLjV2MTRjMCAyLTEuNSAzLjUtMy41IDMuNWgtMS44djEuOGMwIDEtLjggMS44LTEuOCAxLjhoLTEuOGMtMSAwLTEuOC0uOC0xLjgtMS44di0xLjhoLTExLjV2MS44YzAgMS0uOCAxLjgtMS44 IDEuOGgtMS44Yy0xIDAtMS44LS44LTEuOC0xLjh2LTEuOGgtMS44Yy0yIDAtMy41LTEuNS0zLjUtMy41di0xNGMwLTIgMS41LTMuNSAzLjUtMy41aDEwbC0yLjMtMy41SDIwLjVWMTcuNWg3TDMyIDE4em0xMC41 IDE4aC0yMXY3aDIxdj03em0tMTYgMTRjMS41IDAgMi42LTEuMiAyLjYtMi42cy0xLjItMi42LTIuNi0yLjYtMi42 IDEuMi0yLjYgMi42 IDEuMiAyLjYgMi42IDIuNnptMTUuOCAwYzEuNSAwIDIuNi0xLjIgMi42LTIuNnMtMS4yLTIuNi0yLjYtMi42LTIuNiAxLjItMi42IDIuNiAxLjIgMi42IDIuNiAyLjZ6IiBmaWxsPSIjZmZmZmZmIi8+PC9zdmc+";
-
-function registerMapImages(mapInstance, callback) {
-  const images = [
-    { id: "bus-icon", data: BUS_SVG_DATA },
-    { id: "tram-icon", data: TRAM_SVG_DATA }
-  ];
-
-  let loaded = 0;
-  images.forEach(({ id, data }) => {
-    if (mapInstance.hasImage(id)) {
-      loaded++;
-      if (loaded === images.length && callback) callback();
-      return;
-    }
-
-    const img = new Image();
-    img.width = 64;
-    img.height = 64;
-
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = 64;
-      canvas.height = 64;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0, 64, 64);
-      const imageData = ctx.getImageData(0, 0, 64, 64);
-
-      if (!mapInstance.hasImage(id)) {
-        mapInstance.addImage(id, imageData);
-      }
-      loaded++;
-      if (loaded === images.length && callback) callback();
-    };
-    img.onerror = (err) => {
-      console.error("Failed to load map icon:", id, err);
-      loaded++;
-      if (loaded === images.length && callback) callback();
-    };
-    img.src = data;
-  });
-}
-
 export default function App() {
   const mapContainer = useRef(null);
   const map = useRef(null);
 
+  // Core Data States & Refs
   const [stations, setStations] = useState([]);
   const [routes, setRoutes] = useState([]);
   const routesRef = useRef([]);
-  useEffect(() => {
-    routesRef.current = routes;
-  }, [routes]);
+  const stationsRef = useRef([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Navigation & Search State
+  const [activeTab, setActiveTab] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [stopLimit, setStopLimit] = useState(60);
+
+  // Favorites
+  const [favorites, setFavorites] = useState(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem("fav_stations") || "[]"));
+    } catch {
+      return new Set();
+    }
+  });
+  const favoritesRef = useRef(favorites);
+
+  // Filters
+  const [showBus, setShowBus] = useState(() => {
+    return localStorage.getItem("pref_showBus") !== "false";
+  });
+  const [showTram, setShowTram] = useState(() => {
+    return localStorage.getItem("pref_showTram") !== "false";
+  });
+  const filtersRef = useRef({ bus: true, tram: true });
+
+  // Route Selections
+  const [expandedGroups, setExpandedGroups] = useState({ bus: true, tram: true, minibus: true });
+  const [selectedRoutes, setSelectedRoutes] = useState(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem("pref_selectedRoutes") || "[]"));
+    } catch {
+      return new Set();
+    }
+  });
+
+  // Vehicle Tracking & Route Overlay States
+  const [selectedVehicle, setSelectedVehicle] = useState(null);
+  const [selectedRouteStations, setSelectedRouteStations] = useState(null);
+  const selectedVehicleRef = useRef(null);
+  const selectedRouteStationsRef = useRef(null);
+  const knownVehiclesRef = useRef({});
+
+  // MapLibre & Marker / Animation Refs
+  const markersRef = useRef({});
+  const vehicleMarkersRef = useRef({});
+  const activeAnimationsRef = useRef({});
+  const globalAnimationId = useRef(null);
+  const debouncedUpdateRef = useRef(null);
+  const forecastMarkersRef = useRef([]);
+  const fetchVehiclesTimeoutRef = useRef(null);
 
   // Drawer Touch Gestures
   const drawerRef = useRef(null);
   const touchStartY = useRef(0);
+
+  useEffect(() => {
+    routesRef.current = routes;
+  }, [routes]);
+
+  useEffect(() => {
+    stationsRef.current = stations;
+  }, [stations]);
+
+  useEffect(() => {
+    favoritesRef.current = favorites;
+  }, [favorites]);
+
+  useEffect(() => {
+    filtersRef.current = { bus: showBus, tram: showTram };
+    localStorage.setItem("pref_showBus", showBus);
+    localStorage.setItem("pref_showTram", showTram);
+    setStopLimit(60);
+  }, [showBus, showTram]);
+
+  useEffect(() => {
+    localStorage.setItem("pref_selectedRoutes", JSON.stringify(Array.from(selectedRoutes)));
+  }, [selectedRoutes]);
+
+  useEffect(() => {
+    selectedVehicleRef.current = selectedVehicle;
+    selectedRouteStationsRef.current = selectedRouteStations;
+    // Update existing markers to show/hide the glowing effect
+    Object.keys(vehicleMarkersRef.current).forEach(id => {
+      const marker = vehicleMarkersRef.current[id];
+      const markerDiv = marker?.getElement()?.querySelector(".vehicle-marker");
+      if (markerDiv) {
+        if (selectedVehicle && selectedVehicle.id === id) {
+          markerDiv.classList.add("vehicle-selected");
+        } else {
+          markerDiv.classList.remove("vehicle-selected");
+        }
+      }
+    });
+  }, [selectedVehicle, selectedRouteStations]);
 
   const handleDrawerTouchStart = (e) => {
     touchStartY.current = e.touches[0].clientY;
@@ -490,122 +561,113 @@ export default function App() {
     }
   };
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [selectedVehicle, setSelectedVehicle] = useState(null);
-  const [selectedRouteStations, setSelectedRouteStations] = useState(null);
-  const selectedVehicleRef = useRef(null);
-  const knownVehiclesRef = useRef({});
+  // Precompute normalized stations and route terminal coordinates for instant O(1) matching
+  const stationsById = useMemo(() => {
+    const map = new Map();
+    (stations || []).forEach(st => {
+      if (st.properties?.id) map.set(st.properties.id, st);
+    });
+    return map;
+  }, [stations]);
 
-  useEffect(() => {
-    selectedVehicleRef.current = selectedVehicle;
-    // Update existing markers to show/hide the glowing effect
-    Object.keys(vehicleMarkersRef.current).forEach(id => {
-      const marker = vehicleMarkersRef.current[id];
-      const markerDiv = marker.getElement().querySelector(".vehicle-marker");
-      if (markerDiv) {
-        if (selectedVehicle && selectedVehicle.id === id) {
-          markerDiv.classList.add("vehicle-selected");
-        } else {
-          markerDiv.classList.remove("vehicle-selected");
+  const routeTerminalsMap = useMemo(() => {
+    const norm = (s) => String(s || "")
+      .toLowerCase()
+      .replace(/[kamtoerpyxc]/g, c => ({ k:'к', a:'а', m:'м', t:'т', o:'о', e:'е', r:'р', p:'р', y:'у', x:'х', c:'с' }[c] || c))
+      .replace(/[^a-zа-я0-9]/g, '');
+
+    // Pre-map normalized station names to coordinates
+    const stationCoordsByName = new Map();
+    (stations || []).forEach(st => {
+      const name = norm(st.properties?.name);
+      const coords = st.geometry?.coordinates;
+      if (name && coords) {
+        if (!stationCoordsByName.has(name)) stationCoordsByName.set(name, []);
+        stationCoordsByName.get(name).push({ lat: coords[1], lng: coords[0] });
+      }
+    });
+
+    const map = new Map();
+
+    (routes || []).forEach(r => {
+      const termNames = new Set();
+      if (r.from_station) termNames.add(norm(r.from_station));
+      if (r.to_station) termNames.add(norm(r.to_station));
+      if (Array.isArray(r.subroutes)) {
+        r.subroutes.forEach(sr => {
+          if (sr.from_station) termNames.add(norm(sr.from_station));
+          if (sr.to_station) termNames.add(norm(sr.to_station));
+        });
+      }
+
+      const coordsList = [];
+      termNames.forEach(tName => {
+        const found = stationCoordsByName.get(tName);
+        if (found) coordsList.push(...found);
+      });
+
+      if (coordsList.length > 0) {
+        if (r.id) {
+          String(r.id).split(',').forEach(id => map.set(String(id).trim(), coordsList));
+        }
+        // Note: r.number is secondary fallback when veh.rid is missing; primary lookup uses precise rid
+        if (r.number && !map.has(norm(r.number))) {
+          map.set(norm(r.number), coordsList);
+        }
+        if (Array.isArray(r.subroutes)) {
+          r.subroutes.forEach(sr => {
+            if (sr.id) map.set(String(sr.id).trim(), coordsList);
+          });
         }
       }
     });
-  }, [selectedVehicle]);
 
-  const vehicleScheduleStatusRef = useRef({});
+    return map;
+  }, [routes, stations]);
 
-  // Helper: check if a vehicle is resting/waiting near a route terminal turnaround stop
+  const routeTerminalsMapRef = useRef(routeTerminalsMap);
+  useEffect(() => {
+    routeTerminalsMapRef.current = routeTerminalsMap;
+  }, [routeTerminalsMap]);
+
+  // Pure geometry check: ~300m threshold (distSq < 0.000010 deg^2)
+  const TERMINAL_DISTANCE_SQ = 0.000010; // ~300m at 51.8°N
+
   const isNearTerminalStop = (veh) => {
     if (!veh || !veh.lat || !veh.lng) return false;
-    const routesList = routesRef.current || [];
-    const stationsList = stationsRef.current || [];
+    const termMap = routeTerminalsMapRef.current;
+    if (!termMap) return false;
 
-    const norm = (s) => String(s || "").toLowerCase().replace(/k/g, 'к').replace(/a/g, 'а').replace(/m/g, 'м').replace(/t/g, 'т').replace(/[^a-zа-я0-9]/g, '');
-    const vehRouteNorm = norm(veh.route || veh.rnum);
+    const norm = (s) => String(s || "")
+      .toLowerCase()
+      .replace(/[kamtoerpyxc]/g, c => ({ k:'к', a:'а', m:'м', t:'т', o:'о', e:'е', r:'р', p:'р', y:'у', x:'х', c:'с' }[c] || c))
+      .replace(/[^a-zа-я0-9]/g, '');
 
-    const matchingRoutes = routesList.filter(r => {
-      if (veh.rid && (String(r.id) === String(veh.rid) || (Array.isArray(r.subroutes) && r.subroutes.some(sr => String(sr.id) === String(veh.rid))))) return true;
-      if (vehRouteNorm && (norm(r.number) === vehRouteNorm || norm(r.name).includes(vehRouteNorm))) return true;
-      return false;
-    });
+    const coordsList = termMap.get(String(veh.rid)) || termMap.get(norm(veh.route || veh.rnum));
+    if (!coordsList || coordsList.length === 0) return false;
 
-    const terminalNames = new Set();
-    matchingRoutes.forEach(route => {
-      if (route.from_station) terminalNames.add(norm(route.from_station));
-      if (route.to_station) terminalNames.add(norm(route.to_station));
-      if (Array.isArray(route.subroutes)) {
-        route.subroutes.forEach(sr => {
-          if (sr.from_station) terminalNames.add(norm(sr.from_station));
-          if (sr.to_station) terminalNames.add(norm(sr.to_station));
-        });
-      }
-    });
-
-    for (const st of stationsList) {
-      const stNameNorm = norm(st.properties?.name);
-      if (terminalNames.size > 0 && !terminalNames.has(stNameNorm)) continue;
-      const coords = st.geometry?.coordinates;
-      if (!coords) continue;
-      const distSq = (veh.lat - coords[1]) ** 2 + (veh.lng - coords[0]) ** 2;
-      // ~400m radius (0.0036 deg^2 ≈ 0.000018) for terminal turnaround loops
-      if (distSq < 0.000025) {
-        return true;
-      }
+    for (let i = 0; i < coordsList.length; i++) {
+      const pt = coordsList[i];
+      const distSq = (veh.lat - pt.lat) ** 2 + (veh.lng - pt.lng) ** 2;
+      if (distSq < TERMINAL_DISTANCE_SQ) return true;
     }
     return false;
   };
 
-  // Utility function: cleans up ONLY vehicles that don't have a bus arrival schedule and are NOT at a terminal stop
-  const pruneStaleVehicles = async () => {
+  // Pure time-based pruning without serial network traffic
+  const pruneStaleVehicles = (maxAgeMs = 180000) => {
     const now = Date.now();
     const currentSelectedId = selectedVehicleRef.current?.id;
-    const scheduleStatus = vehicleScheduleStatusRef.current;
 
-    // Check all tracked vehicles
     const ids = Object.keys(knownVehiclesRef.current);
     for (const id of ids) {
       const veh = knownVehiclesRef.current[id];
       if (!veh) continue;
       const marker = vehicleMarkersRef.current[id];
+      const lastAlive = Math.max(veh._lastSeen || 0, marker?._lastUpdateTime || 0);
 
-      // If vehicle has active animation points or speed > 0, it is actively in motion on route
-      const hasMovement = (veh.animPoints && veh.animPoints.length > 0) || (veh.speed && veh.speed > 0);
-
-      if (hasMovement) {
-        scheduleStatus[id] = { hasSchedule: true, checkedAt: now };
-        continue;
-      }
-
-      // Check if vehicle is resting / waiting at a route terminal / dead-end turnaround stop
-      const atTerminal = isNearTerminalStop(veh);
-      if (atTerminal) {
-        // Vehicle is waiting for departure at a terminal stop - keep it visible!
-        scheduleStatus[id] = { hasSchedule: true, isAtTerminal: true, checkedAt: now };
-        continue;
-      }
-
-      // If stationary away from terminal stops, check if it has arrival forecasts (or check cache)
-      const cached = scheduleStatus[id];
-      let hasSchedule = true;
-
-      if (cached && now - cached.checkedAt < 60000) {
-        hasSchedule = cached.hasSchedule;
-      } else {
-        try {
-          const res = await apiFetch(`/api/vehicle_forecasts?vehid=${id}`);
-          if (res.ok) {
-            const data = await res.json();
-            hasSchedule = Array.isArray(data.forecasts) && data.forecasts.length > 0;
-            scheduleStatus[id] = { hasSchedule, checkedAt: now };
-          }
-        } catch {
-          hasSchedule = cached ? cached.hasSchedule : true;
-        }
-      }
-
-      // If the vehicle has NO arrival schedule and is not at a terminal stop, remove it!
-      if (!hasSchedule) {
+      // Only prune if the server has completely stopped reporting it for > 3 minutes
+      if (now - lastAlive > maxAgeMs) {
         if (marker) {
           try {
             marker.remove();
@@ -633,63 +695,14 @@ export default function App() {
     });
   };
 
-  const forecastMarkersRef = useRef([]);
-
-  // Active Bottom Navigation Tab (0: Map, 1: Stops, 2: Routes, 3: Favorites)
-  const [activeTab, setActiveTab] = useState(0);
-
-  // Favorites
-  const [favorites, setFavorites] = useState(() => {
-    try {
-      return new Set(JSON.parse(localStorage.getItem("fav_stations") || "[]"));
-    } catch {
-      return new Set();
-    }
-  });
-  const favoritesRef = useRef(favorites);
-  useEffect(() => {
-    favoritesRef.current = favorites;
-  }, [favorites]);
-
-  // Filter toggles
-  const [showBus, setShowBus] = useState(() => {
-    return localStorage.getItem("pref_showBus") !== "false";
-  });
-  const [showTram, setShowTram] = useState(() => {
-    return localStorage.getItem("pref_showTram") !== "false";
-  });
-  const [pitch3D, setPitch3D] = useState(() => {
-    try {
-      const savedState = JSON.parse(localStorage.getItem('map_view_state'));
-      return savedState ? savedState.pitch > 10 : false;
-    } catch {
-      return false;
-    }
-  });
-  const filtersRef = useRef({ bus: true, tram: true });
-  useEffect(() => {
-    filtersRef.current = { bus: showBus, tram: showTram };
-    localStorage.setItem("pref_showBus", showBus);
-    localStorage.setItem("pref_showTram", showTram);
-  }, [showBus, showTram]);
-
-  // Search
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-
-  // Grouped Routes UI State
-  const [expandedGroups, setExpandedGroups] = useState({ bus: true, tram: true, minibus: true });
-  const [selectedRoutes, setSelectedRoutes] = useState(() => {
-    try {
-      return new Set(JSON.parse(localStorage.getItem("pref_selectedRoutes") || "[]"));
-    } catch {
-      return new Set();
-    }
-  });
-
-  useEffect(() => {
-    localStorage.setItem("pref_selectedRoutes", JSON.stringify(Array.from(selectedRoutes)));
-  }, [selectedRoutes]);
+  const filteredStations = useMemo(() => {
+    return (stations || []).filter(st => {
+      const p = st.properties;
+      if (p.type === "bus" && !showBus) return false;
+      if (p.type === "tram" && !showTram) return false;
+      return true;
+    });
+  }, [stations, showBus, showTram]);
 
   const toggleRouteGroup = (type) => {
     setExpandedGroups(prev => ({ ...prev, [type]: !prev[type] }));
@@ -745,23 +758,36 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      let stRes, rtRes;
-      try {
-        stRes = await apiFetch("/api/stations");
-        rtRes = await apiFetch("/api/routes");
-        if (!stRes.ok) throw new Error(`HTTP ${stRes.status}`);
-      } catch (e) {
-        throw e; // Let the outer catch handle it
-      }
+      const [stRes, rtRes] = await Promise.all([
+        apiFetch("/api/stations"),
+        apiFetch("/api/routes")
+      ]);
+      if (!stRes.ok) throw new Error(`Stations API error: HTTP ${stRes.status}`);
+      if (!rtRes.ok) throw new Error(`Routes API error: HTTP ${rtRes.status}`);
+
       const stData = await stRes.json();
       const rtData = await rtRes.json();
 
       const features = (stData.features || []).map(f => {
-        f._searchName = (f.properties.name || "").toLowerCase().trim();
+        f._searchName = (f.properties?.name || "").toLowerCase().trim();
         return f;
       });
+      const fetchedRoutes = rtData.routes || [];
       setStations(features);
-      setRoutes(rtData.routes || []);
+      setRoutes(fetchedRoutes);
+
+      setSelectedRoutes(prev => {
+        if (prev && prev.size > 0) return prev;
+        const saved = localStorage.getItem("pref_selectedRoutes");
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) return new Set(parsed);
+          } catch {}
+        }
+        return new Set(fetchedRoutes.map(r => r.id));
+      });
+
       setLoading(false);
     } catch (err) {
       console.error("Failed to load transit data:", err);
@@ -773,11 +799,6 @@ export default function App() {
   useEffect(() => {
     fetchData();
   }, []);
-
-  const stationsRef = useRef(stations);
-  stationsRef.current = stations;
-  const selectedRouteStationsRef = useRef(selectedRouteStations);
-  selectedRouteStationsRef.current = selectedRouteStations;
 
   const updateSourceData = () => {
     if (!map.current) return;
@@ -796,7 +817,7 @@ export default function App() {
         features: filtered
       });
       // Force an update to clear old markers since visibility change doesn't fire data event for stations-source
-      if (window.debouncedUpdateFn) window.debouncedUpdateFn();
+      if (debouncedUpdateRef.current) debouncedUpdateRef.current();
     } else {
       if (map.current.getLayer("stations-clusters-hidden")) map.current.setLayoutProperty("stations-clusters-hidden", "visibility", "visible");
       if (map.current.getLayer("stations-unclustered-hidden")) map.current.setLayoutProperty("stations-unclustered-hidden", "visibility", "visible");
@@ -813,14 +834,9 @@ export default function App() {
         type: "FeatureCollection",
         features: filtered
       });
-      if (window.debouncedUpdateFn) window.debouncedUpdateFn();
+      if (debouncedUpdateRef.current) debouncedUpdateRef.current();
     }
   };
-
-  const markersRef = useRef({});
-  const vehicleMarkersRef = useRef({});
-  const activeAnimationsRef = useRef({});
-  const globalAnimationId = useRef(null);
 
   const shortestAngleDiff = (targetAngle, currentAngle) => {
     let t = (targetAngle - currentAngle) % 360;
@@ -864,55 +880,55 @@ export default function App() {
 
       for (const id in anims) {
         const t = anims[id];
-        hasActive = true;
+        const busy = t.timeRemaining > 0 || (t.animationPoints && t.animationPoints.length > 0);
+        if (busy) {
+          hasActive = true;
+          t.idle = false;
+        } else {
+          t.idle = true;
+          continue; // Skip integration for idle vehicles
+        }
 
         // Sub-frame time integration
         let dtLeft = dt;
         while (dtLeft > 0) {
-            if (t.timeRemaining > 0) {
-                const step = Math.min(dtLeft, t.timeRemaining);
-                t.currentLat += t.velocityLat * step;
-                t.currentLng += t.velocityLng * step;
-                t.timeRemaining -= step;
-                
-                if (t.directionTimeRemaining > 0) {
-                    const dirStep = Math.min(dtLeft, t.directionTimeRemaining);
-                    t.currentDirection += t.velocityDirection * dirStep;
-                    t.directionTimeRemaining -= dirStep;
-                }
-                
-                dtLeft -= step;
-            } else if (t.animationPoints && t.animationPoints.length > 0) {
-                const a = t.animationPoints.shift();
-                
-                // API sends percent as RELATIVE segment duration, not cumulative.
-                // 15000ms distributed across the segment's relative percentage
-                const rMs = Math.max((15000 * a.percent) / 100, 1);
-                const oMs = Math.max(rMs / 10, 1); // Turn completes 10x faster than movement
-                
-                t.velocityLat = (a.lat - t.currentLat) / rMs;
-                t.velocityLng = (a.lng - t.currentLng) / rMs;
-                
-                // Pre-calculated PI/180 and 180/PI for instant zero-overhead radian conversion
-                const latRad = t.currentLat * 0.017453292519943295;
-                let targetAngle = Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * 57.29577951308232;
-                
-                const distSq = (a.lat - t.currentLat) ** 2 + (a.lng - t.currentLng) ** 2;
-                if (distSq < 1e-12) {
-                    targetAngle = t.currentDirection;
-                }
-                
-                t.velocityDirection = shortestAngleDiff(targetAngle, t.currentDirection) / oMs;
-                t.timeRemaining = rMs;
-                t.directionTimeRemaining = oMs;
-            } else {
-                if (t.fallbackTarget) {
-                    t.timeRemaining = 0;
-                    t.directionTimeRemaining = 0;
-                    t.fallbackTarget = null;
-                }
-                break;
+          if (t.timeRemaining > 0) {
+            const step = Math.min(dtLeft, t.timeRemaining);
+            t.currentLat += t.velocityLat * step;
+            t.currentLng += t.velocityLng * step;
+            t.timeRemaining -= step;
+
+            if (t.directionTimeRemaining > 0) {
+              const dirStep = Math.min(dtLeft, t.directionTimeRemaining);
+              t.currentDirection += t.velocityDirection * dirStep;
+              t.directionTimeRemaining -= dirStep;
             }
+
+            dtLeft -= step;
+          } else if (t.animationPoints && t.animationPoints.length > 0) {
+            const a = t.animationPoints.shift();
+
+            const rMs = Math.max((15000 * a.percent) / 100, 1);
+            const oMs = Math.max(rMs / 10, 1); // Turn completes 10x faster than movement
+
+            t.velocityLat = (a.lat - t.currentLat) / rMs;
+            t.velocityLng = (a.lng - t.currentLng) / rMs;
+
+            // Pre-calculated PI/180 and 180/PI for instant zero-overhead radian conversion
+            const latRad = t.currentLat * 0.017453292519943295;
+            let targetAngle = Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * 57.29577951308232;
+
+            const distSq = (a.lat - t.currentLat) ** 2 + (a.lng - t.currentLng) ** 2;
+            if (distSq < 1e-12) {
+              targetAngle = t.currentDirection;
+            }
+
+            t.velocityDirection = shortestAngleDiff(targetAngle, t.currentDirection) / oMs;
+            t.timeRemaining = rMs;
+            t.directionTimeRemaining = oMs;
+          } else {
+            break;
+          }
         }
       }
 
@@ -928,24 +944,27 @@ export default function App() {
       // APPLY RENDERS
       const mapBearing = map.current ? map.current.getBearing() : 0;
       for (const id in anims) {
-          const t = anims[id];
-          if (t.currentLng >= west && t.currentLng <= east && t.currentLat >= south && t.currentLat <= north) {
-            t.marker.setLngLat([t.currentLng, t.currentLat]);
-            
-            // Adjust visual rotation by map bearing so arrows point strictly in real physical road direction
-            const visualAngle = t.currentDirection + mapBearing;
-            if (t.marker._lastRot === undefined || Math.abs(t.marker._lastRot - visualAngle) > 0.05) {
-              const rot = visualAngle.toFixed(2);
-              if (t.mDiv) {
-                  t.mDiv.style.transform = `rotate(${rot}deg)`;
-              }
-              if (t.tSpan) {
-                  t.tSpan.style.transform = `rotate(${-rot}deg)`;
-              }
-              t.marker._lastRot = visualAngle;
-              t.marker._currentRot = t.currentDirection;
+        const t = anims[id];
+        if (t.idle && !t._forceRender) continue;
+        t._forceRender = false;
+
+        if (t.currentLng >= west && t.currentLng <= east && t.currentLat >= south && t.currentLat <= north) {
+          t.marker.setLngLat([t.currentLng, t.currentLat]);
+
+          // Adjust visual rotation by subtracting map bearing so arrows point strictly in real physical road direction
+          const visualAngle = t.currentDirection - mapBearing;
+          if (t.marker._lastRot === undefined || Math.abs(t.marker._lastRot - visualAngle) > 0.05) {
+            const rot = visualAngle.toFixed(2);
+            if (t.mDiv) {
+              t.mDiv.style.transform = `rotate(${rot}deg)`;
             }
+            if (t.tSpan) {
+              t.tSpan.style.transform = `rotate(${-rot}deg)`;
+            }
+            t.marker._lastRot = visualAngle;
+            t.marker._currentRot = t.currentDirection;
           }
+        }
       }
 
       if (hasActive) {
@@ -1091,6 +1110,7 @@ export default function App() {
   // Initialize MapLibre
   useEffect(() => {
     if (map.current) return;
+    if (!mapContainer.current) return;
 
     let initialCenter = [107.605, 51.808];
     let initialZoom = 13;
@@ -1099,38 +1119,50 @@ export default function App() {
 
     try {
       const savedState = JSON.parse(localStorage.getItem('map_view_state'));
-      if (savedState) {
+      if (savedState && typeof savedState.lng === 'number' && typeof savedState.lat === 'number' && Number.isFinite(savedState.lng) && Number.isFinite(savedState.lat)) {
         initialCenter = [savedState.lng, savedState.lat];
-        initialZoom = Math.max(savedState.zoom, 10);
-        initialPitch = savedState.pitch;
-        initialBearing = savedState.bearing;
+        initialZoom = typeof savedState.zoom === 'number' && Number.isFinite(savedState.zoom) ? Math.max(savedState.zoom, 10) : 13;
+        initialPitch = typeof savedState.pitch === 'number' && Number.isFinite(savedState.pitch) ? savedState.pitch : 0;
+        initialBearing = typeof savedState.bearing === 'number' && Number.isFinite(savedState.bearing) ? savedState.bearing : 0;
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
 
-    map.current = new Map({
-      container: mapContainer.current,
-      style,
-      center: initialCenter,
-      zoom: initialZoom,
-      pitch: initialPitch,
-      bearing: initialBearing,
-      minZoom: 10,
-      maxZoom: 18,
-      attributionControl: false,
-      pixelRatio: typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1
-    });
+    try {
+      map.current = new MapLibreMap({
+        container: mapContainer.current,
+        style,
+        center: initialCenter,
+        zoom: initialZoom,
+        pitch: initialPitch,
+        bearing: initialBearing,
+        minZoom: 10,
+        maxZoom: 18,
+        attributionControl: false,
+        pixelRatio: typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1
+      });
+    } catch (err) {
+      console.error("Map initialization failed:", err);
+      return;
+    }
 
+    let saveViewTimer = null;
     map.current.on('moveend', () => {
-      const center = map.current.getCenter();
-      localStorage.setItem('map_view_state', JSON.stringify({
-        lng: center.lng,
-        lat: center.lat,
-        zoom: map.current.getZoom(),
-        pitch: map.current.getPitch(),
-        bearing: map.current.getBearing()
-      }));
+      if (saveViewTimer) clearTimeout(saveViewTimer);
+      saveViewTimer = setTimeout(() => {
+        if (!map.current) return;
+        try {
+          const center = map.current.getCenter();
+          localStorage.setItem('map_view_state', JSON.stringify({
+            lng: center.lng,
+            lat: center.lat,
+            zoom: map.current.getZoom(),
+            pitch: map.current.getPitch(),
+            bearing: map.current.getBearing()
+          }));
+        } catch {}
+      }, 500);
     });
 
     map.current.addControl(new NavigationControl(), "top-right");
@@ -1140,7 +1172,6 @@ export default function App() {
     map.current.addControl(new ThreeDControl(() => {
       const is3D = map.current.getPitch() > 10;
       const next3D = !is3D;
-      setPitch3D(next3D);
       map.current.easeTo({ pitch: next3D ? 60 : 0, bearing: next3D ? -20 : 0, duration: 1000 });
     }), "top-right");
 
@@ -1284,7 +1315,7 @@ export default function App() {
           updateViewportMarkers();
         });
       };
-      window.debouncedUpdateFn = () => debouncedUpdate(true); // expose for updateSourceData
+      debouncedUpdateRef.current = () => debouncedUpdate(true);
 
       debouncedUpdate(true);
 
@@ -1292,8 +1323,18 @@ export default function App() {
       map.current.on("move", () => debouncedUpdate(false));
       map.current.on("moveend", () => debouncedUpdate(true));
       map.current.on("zoomend", () => debouncedUpdate(true));
-      map.current.on("rotate", () => startGlobalAnimation());
-      map.current.on("pitch", () => startGlobalAnimation());
+      map.current.on("rotate", () => {
+        for (const id in activeAnimationsRef.current) {
+          activeAnimationsRef.current[id]._forceRender = true;
+        }
+        startGlobalAnimation();
+      });
+      map.current.on("pitch", () => {
+        for (const id in activeAnimationsRef.current) {
+          activeAnimationsRef.current[id]._forceRender = true;
+        }
+        startGlobalAnimation();
+      });
 
       // Crucial: Update HTML markers immediately whenever the geojson data finishes rendering!
       map.current.on("data", (e) => {
@@ -1335,14 +1376,6 @@ export default function App() {
     }
   }, [activeTab]);
 
-  // Toggle 3D pitch
-  const handleToggle3D = () => {
-    if (!map.current) return;
-    const next3D = !pitch3D;
-    setPitch3D(next3D);
-    map.current.easeTo({ pitch: next3D ? 60 : 0, bearing: next3D ? -20 : 0, duration: 1000 });
-  };
-
   // Toggle Favorite
   const toggleFavorite = (stId, e) => {
     if (e) e.stopPropagation();
@@ -1377,13 +1410,14 @@ export default function App() {
     let isActive = true;
     let curk = "0";
     let lastFetchTime = Date.now();
+    const abortCtrl = new AbortController();
 
     const fetchVehicles = async () => {
       if (!isActive) return;
 
       // Pause fetching if tab is in the background or phone is locked
       if (document.hidden) {
-        setTimeout(fetchVehicles, 5000);
+        fetchVehiclesTimeoutRef.current = setTimeout(fetchVehicles, 5000);
         return;
       }
 
@@ -1403,29 +1437,31 @@ export default function App() {
           globalAnimationId.current = null;
         }
         curk = "0";
-        setTimeout(fetchVehicles, 10000);
+        fetchVehiclesTimeoutRef.current = setTimeout(fetchVehicles, 10000);
         return;
       }
 
-      const rids = Array.from(selectedRoutes).join(",");
+      const rids = Array.from(selectedRoutes).map(encodeURIComponent).join(",");
       try {
-        const res = await apiFetch(`/api/vehicles?rids=${rids}&curk=${curk}`);
+        const res = await apiFetch(`/api/vehicles?rids=${rids}&curk=${encodeURIComponent(curk)}`, { signal: abortCtrl.signal });
         const data = await res.json();
+        if (!isActive) return;
 
         if (data && data.vehicles) {
-          const now = Date.now();
+          const nowTime = Date.now();
           if (curk === "0") {
             knownVehiclesRef.current = {};
           }
 
           const updatesMap = {};
           data.vehicles.forEach(v => {
-            knownVehiclesRef.current[v.id] = { ...v, _lastSeen: now };
+            knownVehiclesRef.current[v.id] = { ...v, _lastSeen: nowTime };
             updatesMap[v.id] = v;
           });
 
-          // Run pruning utility to remove frozen vehicles without bus arrival schedule
-          await pruneStaleVehicles();
+          // Run time-based pruning to remove vehicles unreported for > 3 minutes
+          pruneStaleVehicles();
+          if (!isActive) return;
 
           let allVeh = Object.values(knownVehiclesRef.current);
 
@@ -1435,7 +1471,7 @@ export default function App() {
 
           // Add or update markers
           allVeh.forEach(v => {
-            const vType = v.type === "М" ? "minibus" : (v.type === "Т" || v.type === "Тм" || v.route.startsWith("Т-") ? "tram" : "bus");
+            const vType = v.type === "М" ? "minibus" : (v.type === "Т" || v.type === "Тм" || (v.route || "").startsWith("Т-") ? "tram" : "bus");
             const rotation = v.dir || 0;
 
             if (vehicleMarkersRef.current[v.id]) {
@@ -1460,101 +1496,97 @@ export default function App() {
               let t = anims[v.id];
 
               if (!t) {
+                const mPos = marker.getLngLat();
                 t = {
                   marker,
                   mDiv,
                   tSpan,
-                  currentLat: v.lat,
-                  currentLng: v.lng,
+                  currentLat: mPos ? mPos.lat : v.lat,
+                  currentLng: mPos ? mPos.lng : v.lng,
                   currentDirection: marker._currentRot !== undefined ? marker._currentRot : rotation,
                   animationPoints: [],
-                  segment: null
+                  timeRemaining: 0,
+                  directionTimeRemaining: 0,
+                  velocityLat: 0,
+                  velocityLng: 0,
+                  velocityDirection: 0,
+                  anim_key: v.anim_key,
+                  lastAddedPoint: null,
+                  idle: false
                 };
                 anims[v.id] = t;
               }
 
-              // Handle Teleportation / Bad GPS fix (if jump is too big, reset)
-              // If difference > 0.01 degrees (~1km) it's a big jump
+              // Handle Teleportation / Bad GPS fix (if jump is too big > 1km, reset)
               if (Math.abs(v.lat - t.currentLat) > 0.01 || Math.abs(v.lng - t.currentLng) > 0.01) {
-                  t.animationPoints = [];
-                  t.timeRemaining = 0;
-                  t.directionTimeRemaining = 0;
-                  t.currentLat = v.lat;
-                  t.currentLng = v.lng;
-                  t.currentDirection = rotation;
-                  t.lastAddedPoint = null;
+                t.animationPoints = [];
+                t.timeRemaining = 0;
+                t.directionTimeRemaining = 0;
+                t.currentLat = v.lat;
+                t.currentLng = v.lng;
+                t.currentDirection = rotation;
+                t.lastAddedPoint = null;
               }
 
               if (v.animPoints && v.animPoints.length > 0) {
-                  const newKey = parseInt(v.anim_key, 10) || 0;
-                  const oldKey = parseInt(t.anim_key, 10) || 0;
-                  
-                  // Strictly ensure we only accept newer animation sequences to prevent old data from causing rollbacks
-                  if (newKey > oldKey) {
-                      let matchIdx = -1;
-                      
-                      // Find the robust overlap point from our last appended trajectory
-                      if (t.lastAddedPoint) {
-                          let closestIdx = -1;
-                          let minDist = Infinity;
-                          for (let i = 0; i < v.animPoints.length; i++) {
-                              const pt = v.animPoints[i];
-                              const dist = Math.pow(pt.lat - t.lastAddedPoint.lat, 2) + Math.pow(pt.lng - t.lastAddedPoint.lng, 2);
-                              if (dist < minDist) {
-                                  minDist = dist;
-                                  closestIdx = i;
-                              }
-                          }
-                          // If the closest point is within ~400 meters (~0.000015 deg^2), treat it as the exact seam
-                          if (minDist < 0.000015) {
-                              matchIdx = closestIdx;
-                          }
-                      }
-                      
-                      if (matchIdx !== -1) {
-                          // Seam found! Append smoothly.
-                          const newPoints = v.animPoints.slice(matchIdx + 1);
-                          if (newPoints.length > 0) {
-                              t.animationPoints = t.animationPoints.concat(newPoints);
-                              t.lastAddedPoint = newPoints[newPoints.length - 1]; // Store the absolute last point added
-                          }
-                      } else {
-                          // Seam NOT found! The path diverged, jumped, or ran out.
-                          // Fallback: compare with the CURRENT visual position to prevent rollback
-                          let closestToCurrent = -1;
-                          let minCurrentDist = Infinity;
-                          for (let i = 0; i < v.animPoints.length; i++) {
-                              const pt = v.animPoints[i];
-                              const dist = Math.pow(pt.lat - t.currentLat, 2) + Math.pow(pt.lng - t.currentLng, 2);
-                              if (dist < minCurrentDist) {
-                                  minCurrentDist = dist;
-                                  closestToCurrent = i;
-                              }
-                          }
-                          
-                          // Wipe the stale queue and stitch from exactly where the bus physically is!
-                          t.animationPoints = v.animPoints.slice(closestToCurrent + 1);
-                          if (t.animationPoints.length > 0) {
-                              t.lastAddedPoint = t.animationPoints[t.animationPoints.length - 1];
-                          } else {
-                              t.lastAddedPoint = null;
-                          }
-                          // Force immediate pivot
-                          t.timeRemaining = 0;
-                          t.directionTimeRemaining = 0;
-                      }
+                if (v.anim_key !== t.anim_key) {
+                  let matchIdx = -1;
 
-                      t.anim_key = v.anim_key;
-                      t.fallbackTarget = null;
-                      startGlobalAnimation();
+                  // Find the robust overlap point from our last appended trajectory
+                  if (t.lastAddedPoint) {
+                    let closestIdx = -1;
+                    let minDist = Infinity;
+                    for (let i = 0; i < v.animPoints.length; i++) {
+                      const pt = v.animPoints[i];
+                      const dist = Math.pow(pt.lat - t.lastAddedPoint.lat, 2) + Math.pow(pt.lng - t.lastAddedPoint.lng, 2);
+                      if (dist < minDist) {
+                        minDist = dist;
+                        closestIdx = i;
+                      }
+                    }
+                    // Tight ~40m seam threshold to avoid jumping across circular loops
+                    if (minDist < 0.0000005) {
+                      matchIdx = closestIdx;
+                    }
                   }
-              } else {
-                  // User specifically requested: "don't move vehicle only when new one data comes"
-                  // We disable dead reckoning (fallbackTarget) because projecting from stale v.lat causes huge backward glides when the queue empties.
-                  t.fallbackTarget = null;
+
+                  if (matchIdx !== -1) {
+                    // Seam found! Append smoothly.
+                    const newPoints = v.animPoints.slice(matchIdx + 1);
+                    if (newPoints.length > 0) {
+                      t.animationPoints = t.animationPoints.concat(newPoints);
+                      t.lastAddedPoint = newPoints[newPoints.length - 1];
+                    }
+                  } else {
+                    // Fallback: compare with CURRENT visual position
+                    let closestToCurrent = -1;
+                    let minCurrentDist = Infinity;
+                    for (let i = 0; i < v.animPoints.length; i++) {
+                      const pt = v.animPoints[i];
+                      const dist = Math.pow(pt.lat - t.currentLat, 2) + Math.pow(pt.lng - t.currentLng, 2);
+                      if (dist < minCurrentDist) {
+                        minCurrentDist = dist;
+                        closestToCurrent = i;
+                      }
+                    }
+
+                    t.animationPoints = v.animPoints.slice(closestToCurrent + 1);
+                    if (t.animationPoints.length > 0) {
+                      t.lastAddedPoint = t.animationPoints[t.animationPoints.length - 1];
+                    } else {
+                      t.lastAddedPoint = null;
+                    }
+                    t.timeRemaining = 0;
+                    t.directionTimeRemaining = 0;
+                  }
+
+                  t.anim_key = v.anim_key;
+                  t.idle = false;
+                  startGlobalAnimation();
+                }
               }
 
-              if (marker && marker.getPopup()) {
+              if (marker && marker.getPopup() && marker.getPopup().isOpen()) {
                 const isAtTerminal = isNearTerminalStop(v);
                 marker.getPopup().setHTML(`
                   <div style="padding: 6px 10px; font-family: sans-serif; text-align: center; line-height: 1.3;">
@@ -1582,12 +1614,15 @@ export default function App() {
               wrapper.style.setProperty("z-index", "2000", "important");
               wrapper.style.willChange = "transform";
 
+              const mapBearing = map.current ? map.current.getBearing() : 0;
+              const initialVisualRot = rotation - mapBearing;
+
               const markerDiv = document.createElement("div");
               markerDiv.className = `vehicle-marker vehicle-${vType}`;
               if (selectedVehicleRef.current && selectedVehicleRef.current.id === v.id) {
                 markerDiv.classList.add("vehicle-selected");
               }
-              markerDiv.style.transform = `rotate(${rotation}deg)`;
+              markerDiv.style.transform = `rotate(${initialVisualRot.toFixed(2)}deg)`;
               markerDiv.style.width = "100%";
               markerDiv.style.height = "100%";
 
@@ -1595,7 +1630,7 @@ export default function App() {
               textSpan.className = "vehicle-text";
               textSpan.textContent = v.rnum || v.route;
               textSpan.style.display = "inline-block";
-              textSpan.style.transform = `rotate(${-rotation}deg)`;
+              textSpan.style.transform = `rotate(${(-initialVisualRot).toFixed(2)}deg)`;
 
               const pointer = document.createElement("div");
               pointer.className = "vehicle-pointer";
@@ -1614,19 +1649,22 @@ export default function App() {
                 }
               };
 
-              const isAtTerminal = isNearTerminalStop(v);
-              const popupHtml = `
-                <div style="padding: 6px 10px; font-family: sans-serif; text-align: center; line-height: 1.3;">
-                  <div style="font-weight: 700; font-size: 13px; color: #0f172a;">${escapeHtml(v.gosNum || "Маршрут " + (v.route || ""))}</div>
-                  ${isAtTerminal ? `
-                    <div style="margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; background: #ecfdf5; border: 1px solid #86efac; color: #15803d; border-radius: 12px; padding: 2px 8px; font-size: 11px; font-weight: 600;">
-                      <span style="width: 6px; height: 6px; border-radius: 50%; background: #22c55e; display: inline-block;"></span>
-                      На конечной (ожидает)
-                    </div>
-                  ` : ''}
-                </div>
-              `;
-              const popup = new Popup({ offset: 25, closeButton: false }).setHTML(popupHtml);
+              const popup = new Popup({ offset: 25, closeButton: false });
+              popup.on('open', () => {
+                const liveVeh = knownVehiclesRef.current[v.id] || v;
+                const isAtTerminal = isNearTerminalStop(liveVeh);
+                popup.setHTML(`
+                  <div style="padding: 6px 10px; font-family: sans-serif; text-align: center; line-height: 1.3;">
+                    <div style="font-weight: 700; font-size: 13px; color: #0f172a;">${escapeHtml(liveVeh.gosNum || "Маршрут " + (liveVeh.route || ""))}</div>
+                    ${isAtTerminal ? `
+                      <div style="margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; background: #ecfdf5; border: 1px solid #86efac; color: #15803d; border-radius: 12px; padding: 2px 8px; font-size: 11px; font-weight: 600;">
+                        <span style="width: 6px; height: 6px; border-radius: 50%; background: #22c55e; display: inline-block;"></span>
+                        На конечной (ожидает)
+                      </div>
+                    ` : ''}
+                  </div>
+                `);
+              });
 
               const marker = new Marker({ element: wrapper, anchor: "center" })
                 .setLngLat([v.lng, v.lat])
@@ -1635,43 +1673,26 @@ export default function App() {
 
               marker._lastUpdateTime = Date.now();
               marker._currentRot = rotation;
+              marker._lastRot = initialVisualRot;
               marker._anim_key = v.anim_key;
               vehicleMarkersRef.current[v.id] = marker;
 
-              // Immediately start predicting future movement for new markers!
-              const speed = v.speed || 0;
-              let targetLng = v.lng;
-              let targetLat = v.lat;
-
-              if (speed > 0) {
-                const d = speed * (25 / 3600);
-                const dirRad = (v.dir || 0) * Math.PI / 180;
-                const deltaLat = (d / 111.32) * Math.cos(dirRad);
-                const deltaLng = (d / (111.32 * Math.cos(v.lat * Math.PI / 180))) * Math.sin(dirRad);
-                targetLng = v.lng + deltaLng;
-                targetLat = v.lat + deltaLat;
-              }
-
-              // Start gliding to the predicted location
               activeAnimationsRef.current[v.id] = {
-                  marker,
-                  mDiv: markerDiv,
-                  tSpan: textSpan,
-                  currentLat: v.lat,
-                  currentLng: v.lng,
-                  currentDirection: rotation,
-                  animationPoints: [],
-                  timeRemaining: 0,
-                  directionTimeRemaining: 0,
-                  velocityLat: 0,
-                  velocityLng: 0,
-                  velocityDirection: 0,
-                  anim_key: v.anim_key,
-                  lastAddedPoint: null,
-                  fallbackTarget: {
-                      lat: targetLat,
-                      lng: targetLng
-                  }
+                marker,
+                mDiv: markerDiv,
+                tSpan: textSpan,
+                currentLat: v.lat,
+                currentLng: v.lng,
+                currentDirection: rotation,
+                animationPoints: [],
+                timeRemaining: 0,
+                directionTimeRemaining: 0,
+                velocityLat: 0,
+                velocityLng: 0,
+                velocityDirection: 0,
+                anim_key: v.anim_key,
+                lastAddedPoint: null,
+                idle: false
               };
 
               startGlobalAnimation();
@@ -1679,25 +1700,31 @@ export default function App() {
           });
         }
       } catch (err) {
-        console.error("Failed to fetch live vehicles", err);
+        if (err.name !== 'AbortError') {
+          console.error("Failed to fetch live vehicles", err);
+        }
       }
 
       if (isActive) {
-        setTimeout(fetchVehicles, 10000); // Continuous loop delay
+        fetchVehiclesTimeoutRef.current = setTimeout(fetchVehicles, 10000);
       }
     };
 
-    fetchVehicles(); // Start loop
+    fetchVehicles();
 
     return () => {
       isActive = false;
+      abortCtrl.abort();
+      if (fetchVehiclesTimeoutRef.current) {
+        clearTimeout(fetchVehiclesTimeoutRef.current);
+      }
       activeAnimationsRef.current = {};
       if (globalAnimationId.current) {
         cancelAnimationFrame(globalAnimationId.current);
         globalAnimationId.current = null;
       }
     };
-  }, [selectedRoutes, stations]);
+  }, [selectedRoutes]);
 
   // Route Nodes and Forecasts fetching
   useEffect(() => {
@@ -1730,7 +1757,7 @@ export default function App() {
     const fetchNodes = async () => {
       try {
         // Fetch and draw route nodes
-        const resNodes = await apiFetch(`/api/route_nodes?id=${selectedVehicle.rid}`, { signal });
+        const resNodes = await apiFetch(`/api/route_nodes?id=${encodeURIComponent(selectedVehicle.rid)}`, { signal });
         const dataNodes = await resNodes.json();
         if (!isActive) return;
 
@@ -1753,13 +1780,15 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.error("Failed to fetch nodes:", err);
+        if (err.name !== 'AbortError') {
+          console.error("Failed to fetch nodes:", err);
+        }
       }
     };
 
     const fetchRouteStations = async () => {
       try {
-        const res = await apiFetch(`/api/route_stations?id=${selectedVehicle.rid}`, { signal });
+        const res = await apiFetch(`/api/route_stations?id=${encodeURIComponent(selectedVehicle.rid)}`, { signal });
         const data = await res.json();
         if (!isActive) return;
         if (data.stations) {
@@ -1768,7 +1797,9 @@ export default function App() {
           setSelectedRouteStations(new Set());
         }
       } catch (err) {
-        console.error("Failed to fetch route stations:", err);
+        if (err.name !== 'AbortError') {
+          console.error("Failed to fetch route stations:", err);
+        }
       }
     };
 
@@ -1776,7 +1807,7 @@ export default function App() {
       if (!isActive) return;
       try {
         // Fetch and draw station forecasts
-        const resForecasts = await apiFetch(`/api/vehicle_forecasts?vehid=${selectedVehicle.id}`, { signal });
+        const resForecasts = await apiFetch(`/api/vehicle_forecasts?vehid=${encodeURIComponent(selectedVehicle.id)}`, { signal });
         const dataForecasts = await resForecasts.json();
         if (!isActive) return;
 
@@ -1796,7 +1827,7 @@ export default function App() {
           });
 
           uniqueForecasts.forEach(f => {
-            const st = stations.find(s => s.properties.id === f.stid);
+            const st = stationsById.get(f.stid);
             if (st) {
               const coords = st.geometry.coordinates;
               const el = document.createElement("div");
@@ -1824,7 +1855,7 @@ export default function App() {
               const nameText = st.properties.name || "Unknown Station";
               el.innerHTML = `
                 <div style="display: flex; align-items: center; gap: 4px;">
-                  <span>${f.time} мин.</span>
+                  <span>${escapeHtml(f.time)} мин.</span>
                   <div style="background-color: #ef4444; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; color: white;">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 12 10s-6.7.6-8.5 1.1C2.7 11.3 2 12.1 2 13v3c0 .6.4 1 1 1h2"/><path d="m2 13 4-8h12l4 8"/><path d="M4 17v4c0 .6.4 1 1 1h2c.6 0 1-.4 1-1v-4"/><path d="M16 17v4c0 .6.4 1 1 1h2c.6 0 1-.4 1-1v-4"/><circle cx="7.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="17.5" r="2.5"/></svg>
                   </div>
@@ -1887,7 +1918,7 @@ export default function App() {
       abortController.abort();
       if (forecastTimeout) clearTimeout(forecastTimeout);
     };
-  }, [selectedVehicle, stations]);
+  }, [selectedVehicle, stationsById]);
 
   // Optimized Search Filter using pre-indexed search tokens
   const searchResults = useMemo(() => {
@@ -1907,7 +1938,6 @@ export default function App() {
 
   const handleSelectStation = (feat) => {
     setSearchQuery(feat.properties.name);
-    setIsSearchOpen(false);
 
     if (map.current) {
       const coords = feat.geometry.coordinates;
@@ -1928,6 +1958,23 @@ export default function App() {
   return (
     <>
       <div className="app-root">
+
+        {/* Loading Spinner */}
+        {loading && (
+          <div style={{ position: "fixed", top: "16px", left: "50%", transform: "translateX(-50%)", background: "rgba(15, 23, 42, 0.88)", color: "#ffffff", padding: "8px 16px", borderRadius: "24px", fontSize: "13px", fontWeight: 600, display: "flex", alignItems: "center", gap: "8px", zIndex: 10000, boxShadow: "0 4px 14px rgba(0,0,0,0.2)" }}>
+            <span className="material-symbols-outlined" style={{ animation: "spin 1s linear infinite", fontSize: "18px" }}>refresh</span>
+            Загрузка маршрутов...
+          </div>
+        )}
+
+        {/* Error Banner */}
+        {error && (
+          <div style={{ position: "fixed", top: "16px", left: "50%", transform: "translateX(-50%)", background: "#ef4444", color: "#ffffff", padding: "10px 18px", borderRadius: "12px", fontSize: "13px", fontWeight: 600, zIndex: 10000, boxShadow: "0 4px 14px rgba(0,0,0,0.25)", display: "flex", alignItems: "center", gap: "10px", maxWidth: "90%" }}>
+            <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>error</span>
+            <span>{error}</span>
+            <button onClick={fetchData} style={{ background: "#ffffff", color: "#ef4444", border: "none", borderRadius: "6px", padding: "4px 10px", fontWeight: 700, cursor: "pointer", marginLeft: "8px" }}>Повторить</button>
+          </div>
+        )}
 
         {/* Map Element */}
         <div className="map-container">
@@ -1967,14 +2014,11 @@ export default function App() {
                       className="mui-search-input"
                       placeholder="Поиск в Улан-Удэ (остановки)..."
                       value={searchQuery}
-                      onChange={(e) => {
-                        setSearchQuery(e.target.value);
-                        setIsSearchOpen(true);
-                      }}
+                      onChange={(e) => setSearchQuery(e.target.value)}
                     />
                     {searchQuery && (
                       <button
-                        onClick={() => { setSearchQuery(""); setIsSearchOpen(false); }}
+                        onClick={() => setSearchQuery("")}
                         style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: "16px" }}
                       >
                         ✕
@@ -2041,7 +2085,7 @@ export default function App() {
                       Трамваи
                     </div>
                   </div>
-                  {stations.slice(0, 100).map((st) => (
+                  {filteredStations.slice(0, stopLimit).map((st) => (
                     <div
                       key={st.properties.id}
                       className="stop-card"
@@ -2067,6 +2111,26 @@ export default function App() {
                       <span className="badge badge-bus" style={{ fontSize: "10px" }}>Показать</span>
                     </div>
                   ))}
+                  {filteredStations.length > stopLimit && (
+                    <div style={{ textAlign: "center", padding: "12px 16px" }}>
+                      <button
+                        onClick={() => setStopLimit(prev => prev + 60)}
+                        style={{
+                          background: "#f1f5f9",
+                          color: "#1e293b",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: "8px",
+                          padding: "8px 20px",
+                          fontWeight: 600,
+                          fontSize: "13px",
+                          cursor: "pointer",
+                          width: "100%"
+                        }}
+                      >
+                        Показать ещё ({filteredStations.length - stopLimit} ост.)
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
