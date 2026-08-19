@@ -630,8 +630,10 @@ export default function App() {
     routeTerminalsMapRef.current = routeTerminalsMap;
   }, [routeTerminalsMap]);
 
-  // Pure geometry check: ~300m threshold (distSq < 0.000010 deg^2)
-  const TERMINAL_DISTANCE_SQ = 0.000010; // ~300m at 51.8°N
+  // Metric geometry check: 100m threshold
+  const TERMINAL_MAX_DIST_SQ_M = 100 * 100; // 10,000 m^2 (100 meters)
+  const METERS_PER_DEG_LAT = 111320;
+  const METERS_PER_DEG_LNG = 68840; // 111320 * cos(51.8°) for Ulan-Ude
 
   const isNearTerminalStop = (veh) => {
     if (!veh || !veh.lat || !veh.lng) return false;
@@ -648,8 +650,10 @@ export default function App() {
 
     for (let i = 0; i < coordsList.length; i++) {
       const pt = coordsList[i];
-      const distSq = (veh.lat - pt.lat) ** 2 + (veh.lng - pt.lng) ** 2;
-      if (distSq < TERMINAL_DISTANCE_SQ) return true;
+      const dy = (veh.lat - pt.lat) * METERS_PER_DEG_LAT;
+      const dx = (veh.lng - pt.lng) * METERS_PER_DEG_LNG;
+      const distSqMeters = dy * dy + dx * dx;
+      if (distSqMeters <= TERMINAL_MAX_DIST_SQ_M) return true;
     }
     return false;
   };
