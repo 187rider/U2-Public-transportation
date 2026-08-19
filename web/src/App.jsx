@@ -1417,7 +1417,7 @@ export default function App() {
 
       // Pause fetching if tab is in the background or phone is locked
       if (document.hidden) {
-        fetchVehiclesTimeoutRef.current = setTimeout(fetchVehicles, 5000);
+        fetchVehiclesTimeoutRef.current = setTimeout(fetchVehicles, 15000);
         return;
       }
 
