@@ -518,7 +518,7 @@ body {
 
 /* MapLibre Popup */
 .maplibregl-popup {
-  z-index: 3000 !important;
+  z-index: 9999 !important;
 }
 
 .maplibregl-popup-content {

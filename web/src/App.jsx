@@ -231,7 +231,6 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
   const icon = isBus ? "directions_bus" : "tram";
   const typeClass = isBus ? "bus" : "tram";
 
-  // Always close any previous popup so only 1 popup is open at any time
   if (activeStationPopup) {
     try {
       activeStationPopup.remove();
@@ -239,6 +238,7 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
     activeStationPopup = null;
   }
   document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
+  document.querySelectorAll('.forecast-marker').forEach(p => p.remove());
 
   const popupHtml = `
     <div class="stop-popup">
@@ -513,19 +513,99 @@ export default function App() {
     });
   }, [selectedVehicle]);
 
-  // Utility function: cleans up stale, off-schedule, disconnected, or frozen ghost vehicles from map & memory
-  const pruneStaleVehicles = (maxAgeMs = 45000) => {
+  const vehicleScheduleStatusRef = useRef({});
+
+  // Helper: check if a vehicle is resting/waiting near a route terminal turnaround stop
+  const isNearTerminalStop = (veh) => {
+    if (!veh || !veh.lat || !veh.lng) return false;
+    const routesList = routesRef.current || [];
+    const stationsList = stationsRef.current || [];
+
+    const norm = (s) => String(s || "").toLowerCase().replace(/k/g, 'к').replace(/a/g, 'а').replace(/m/g, 'м').replace(/t/g, 'т').replace(/[^a-zа-я0-9]/g, '');
+    const vehRouteNorm = norm(veh.route || veh.rnum);
+
+    const matchingRoutes = routesList.filter(r => {
+      if (veh.rid && (String(r.id) === String(veh.rid) || (Array.isArray(r.subroutes) && r.subroutes.some(sr => String(sr.id) === String(veh.rid))))) return true;
+      if (vehRouteNorm && (norm(r.number) === vehRouteNorm || norm(r.name).includes(vehRouteNorm))) return true;
+      return false;
+    });
+
+    const terminalNames = new Set();
+    matchingRoutes.forEach(route => {
+      if (route.from_station) terminalNames.add(norm(route.from_station));
+      if (route.to_station) terminalNames.add(norm(route.to_station));
+      if (Array.isArray(route.subroutes)) {
+        route.subroutes.forEach(sr => {
+          if (sr.from_station) terminalNames.add(norm(sr.from_station));
+          if (sr.to_station) terminalNames.add(norm(sr.to_station));
+        });
+      }
+    });
+
+    for (const st of stationsList) {
+      const stNameNorm = norm(st.properties?.name);
+      if (terminalNames.size > 0 && !terminalNames.has(stNameNorm)) continue;
+      const coords = st.geometry?.coordinates;
+      if (!coords) continue;
+      const distSq = (veh.lat - coords[1]) ** 2 + (veh.lng - coords[0]) ** 2;
+      // ~400m radius (0.0036 deg^2 ≈ 0.000018) for terminal turnaround loops
+      if (distSq < 0.000025) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Utility function: cleans up ONLY vehicles that don't have a bus arrival schedule and are NOT at a terminal stop
+  const pruneStaleVehicles = async () => {
     const now = Date.now();
     const currentSelectedId = selectedVehicleRef.current?.id;
+    const scheduleStatus = vehicleScheduleStatusRef.current;
 
-    Object.keys(knownVehiclesRef.current).forEach(id => {
+    // Check all tracked vehicles
+    const ids = Object.keys(knownVehiclesRef.current);
+    for (const id of ids) {
       const veh = knownVehiclesRef.current[id];
-      const lastSeen = veh._lastSeen || 0;
+      if (!veh) continue;
       const marker = vehicleMarkersRef.current[id];
-      const lastUpdate = marker?._lastUpdateTime || lastSeen;
 
-      // If vehicle hasn't received fresh GPS data in maxAgeMs (default 45s)
-      if (now - lastUpdate > maxAgeMs) {
+      // If vehicle has active animation points or speed > 0, it is actively in motion on route
+      const hasMovement = (veh.animPoints && veh.animPoints.length > 0) || (veh.speed && veh.speed > 0);
+
+      if (hasMovement) {
+        scheduleStatus[id] = { hasSchedule: true, checkedAt: now };
+        continue;
+      }
+
+      // Check if vehicle is resting / waiting at a route terminal / dead-end turnaround stop
+      const atTerminal = isNearTerminalStop(veh);
+      if (atTerminal) {
+        // Vehicle is waiting for departure at a terminal stop - keep it visible!
+        scheduleStatus[id] = { hasSchedule: true, isAtTerminal: true, checkedAt: now };
+        continue;
+      }
+
+      // If stationary away from terminal stops, check if it has arrival forecasts (or check cache)
+      const cached = scheduleStatus[id];
+      let hasSchedule = true;
+
+      if (cached && now - cached.checkedAt < 60000) {
+        hasSchedule = cached.hasSchedule;
+      } else {
+        try {
+          const res = await apiFetch(`/api/vehicle_forecasts?vehid=${id}`);
+          if (res.ok) {
+            const data = await res.json();
+            hasSchedule = Array.isArray(data.forecasts) && data.forecasts.length > 0;
+            scheduleStatus[id] = { hasSchedule, checkedAt: now };
+          }
+        } catch {
+          hasSchedule = cached ? cached.hasSchedule : true;
+        }
+      }
+
+      // If the vehicle has NO arrival schedule and is not at a terminal stop, remove it!
+      if (!hasSchedule) {
         if (marker) {
           try {
             marker.remove();
@@ -539,7 +619,7 @@ export default function App() {
           setSelectedVehicle(null);
         }
       }
-    });
+    }
 
     // Also remove any orphan DOM markers whose vehicle is no longer tracked
     Object.keys(vehicleMarkersRef.current).forEach(id => {
@@ -1344,8 +1424,8 @@ export default function App() {
             updatesMap[v.id] = v;
           });
 
-          // Run pruning utility to remove stale, off-schedule, or frozen vehicles (>45s without GPS telemetry)
-          pruneStaleVehicles(45000);
+          // Run pruning utility to remove frozen vehicles without bus arrival schedule
+          await pruneStaleVehicles();
 
           let allVeh = Object.values(knownVehiclesRef.current);
 
@@ -1474,6 +1554,21 @@ export default function App() {
                   t.fallbackTarget = null;
               }
 
+              if (marker && marker.getPopup()) {
+                const isAtTerminal = isNearTerminalStop(v);
+                marker.getPopup().setHTML(`
+                  <div style="padding: 6px 10px; font-family: sans-serif; text-align: center; line-height: 1.3;">
+                    <div style="font-weight: 700; font-size: 13px; color: #0f172a;">${escapeHtml(v.gosNum || "Маршрут " + (v.route || ""))}</div>
+                    ${isAtTerminal ? `
+                      <div style="margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; background: #ecfdf5; border: 1px solid #86efac; color: #15803d; border-radius: 12px; padding: 2px 8px; font-size: 11px; font-weight: 600;">
+                        <span style="width: 6px; height: 6px; border-radius: 50%; background: #22c55e; display: inline-block;"></span>
+                        На конечной (ожидает)
+                      </div>
+                    ` : ''}
+                  </div>
+                `);
+              }
+
               if (mDiv) {
                 const isSelected = selectedVehicleRef.current && selectedVehicleRef.current.id === v.id;
                 if (isSelected) mDiv.classList.add("vehicle-selected");
@@ -1514,12 +1609,24 @@ export default function App() {
                 if (v.rid && v.id) {
                   setSelectedVehicle(prev => {
                     if (prev && prev.id === v.id) return null;
-                    return { rid: v.rid, id: v.id, gosNum: v.gosNum };
+                    return { rid: v.rid, id: v.id, gosNum: v.gosNum, route: v.rnum || v.route, lat: v.lat, lng: v.lng };
                   });
                 }
               };
 
-              const popup = new Popup({ offset: 25, closeButton: false }).setText(v.gosNum || "Unknown Plate");
+              const isAtTerminal = isNearTerminalStop(v);
+              const popupHtml = `
+                <div style="padding: 6px 10px; font-family: sans-serif; text-align: center; line-height: 1.3;">
+                  <div style="font-weight: 700; font-size: 13px; color: #0f172a;">${escapeHtml(v.gosNum || "Маршрут " + (v.route || ""))}</div>
+                  ${isAtTerminal ? `
+                    <div style="margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; background: #ecfdf5; border: 1px solid #86efac; color: #15803d; border-radius: 12px; padding: 2px 8px; font-size: 11px; font-weight: 600;">
+                      <span style="width: 6px; height: 6px; border-radius: 50%; background: #22c55e; display: inline-block;"></span>
+                      На конечной (ожидает)
+                    </div>
+                  ` : ''}
+                </div>
+              `;
+              const popup = new Popup({ offset: 25, closeButton: false }).setHTML(popupHtml);
 
               const marker = new Marker({ element: wrapper, anchor: "center" })
                 .setLngLat([v.lng, v.lat])
@@ -1742,6 +1849,24 @@ export default function App() {
               forecastMarkersRef.current.push(marker);
             }
           });
+        } else {
+          // No active forward arrival forecasts: vehicle is waiting at the terminal turnaround loop
+          const currentVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
+          if (currentVeh && currentVeh.lat && currentVeh.lng) {
+            const el = document.createElement("div");
+            el.className = "forecast-marker terminal-waiting-badge";
+            el.innerHTML = `
+              <div style="background: #ffffff; color: #0f172a; border: 2px solid #22c55e; border-radius: 20px; padding: 4px 10px; display: flex; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-size: 11px; font-weight: 700; white-space: nowrap; pointer-events: none;">
+                <span style="width: 8px; height: 8px; border-radius: 50%; background-color: #22c55e; box-shadow: 0 0 6px #22c55e; display: inline-block;"></span>
+                На конечной (ожидает)
+              </div>
+            `;
+            const marker = new Marker({ element: el, anchor: "bottom", offset: [0, -22] })
+              .setLngLat([currentVeh.lng, currentVeh.lat])
+              .addTo(map.current);
+
+            forecastMarkersRef.current.push(marker);
+          }
         }
       } catch (err) {
         if (err.name === 'AbortError') return;
