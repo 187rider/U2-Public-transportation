@@ -482,6 +482,7 @@ export default function App() {
   const selectedRouteStationsRef = useRef(null);
   const knownVehiclesRef = useRef({});
   const lastResumeTimeRef = useRef(Date.now());
+  const isZoomingOrPinchingRef = useRef(false);
 
   // MapLibre & Marker / Animation Refs
   const markersRef = useRef({});
@@ -1003,19 +1004,23 @@ export default function App() {
 
       // Smooth Camera Tracking for Selected Vehicle
       if (selectedVehicleRef.current && isFollowingVehicleRef.current && !isInitialFlyingRef.current && map.current) {
-        const selId = selectedVehicleRef.current.id;
-        const selMarker = vehicleMarkersRef.current[selId];
-        const selAnim = anims[selId];
-        const live = knownVehiclesRef.current[selId];
+        // Do not interrupt while user is actively pinch-zooming, scroll-zooming, or rotating
+        const isInteracting = isZoomingOrPinchingRef.current || map.current.isZooming() || map.current.isRotating();
+        if (!isInteracting) {
+          const selId = selectedVehicleRef.current.id;
+          const selMarker = vehicleMarkersRef.current[selId];
+          const selAnim = anims[selId];
+          const live = knownVehiclesRef.current[selId];
 
-        const mPos = selMarker ? selMarker.getLngLat() : null;
-        const cLng = mPos ? mPos.lng : (selAnim ? selAnim.currentLng : (live?.lng || selectedVehicleRef.current.lng));
-        const cLat = mPos ? mPos.lat : (selAnim ? selAnim.currentLat : (live?.lat || selectedVehicleRef.current.lat));
+          const mPos = selMarker ? selMarker.getLngLat() : null;
+          const cLng = mPos ? mPos.lng : (selAnim ? selAnim.currentLng : (live?.lng || selectedVehicleRef.current.lng));
+          const cLat = mPos ? mPos.lat : (selAnim ? selAnim.currentLat : (live?.lat || selectedVehicleRef.current.lat));
 
-        if (cLng != null && cLat != null) {
-          map.current.jumpTo({
-            center: [cLng, cLat]
-          });
+          if (cLng != null && cLat != null) {
+            map.current.jumpTo({
+              center: [cLng, cLat]
+            });
+          }
         }
       }
 
@@ -1380,7 +1385,25 @@ export default function App() {
       // Register map movement handlers to update HTML pill markers
       map.current.on("move", () => debouncedUpdate(false));
       map.current.on("moveend", () => debouncedUpdate(true));
-      map.current.on("zoomend", () => debouncedUpdate(true));
+      map.current.on("zoomstart", () => {
+        isZoomingOrPinchingRef.current = true;
+      });
+      map.current.on("zoomend", () => {
+        isZoomingOrPinchingRef.current = false;
+        debouncedUpdate(true);
+      });
+      map.current.on("rotatestart", () => {
+        isZoomingOrPinchingRef.current = true;
+      });
+      map.current.on("rotateend", () => {
+        isZoomingOrPinchingRef.current = false;
+      });
+      map.current.on("pitchstart", () => {
+        isZoomingOrPinchingRef.current = true;
+      });
+      map.current.on("pitchend", () => {
+        isZoomingOrPinchingRef.current = false;
+      });
       map.current.on("dragstart", () => {
         if (isFollowingVehicleRef.current) {
           isFollowingVehicleRef.current = false;
@@ -1399,6 +1422,22 @@ export default function App() {
         }
         startGlobalAnimation();
       });
+
+      const onTouchStart = (e) => {
+        if (e.touches && e.touches.length >= 2) {
+          isZoomingOrPinchingRef.current = true;
+        }
+      };
+      const onTouchEnd = () => {
+        setTimeout(() => {
+          if (map.current && !map.current.isZooming() && !map.current.isRotating()) {
+            isZoomingOrPinchingRef.current = false;
+          }
+        }, 120);
+      };
+      const containerEl = mapContainer.current;
+      containerEl?.addEventListener("touchstart", onTouchStart, { passive: true });
+      containerEl?.addEventListener("touchend", onTouchEnd, { passive: true });
 
       // Crucial: Update HTML markers immediately whenever the geojson data finishes rendering!
       map.current.on("data", (e) => {
