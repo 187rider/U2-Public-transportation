@@ -29,6 +29,30 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
+/** Normalize raw vehicle types ("Т", "Тм", "М", "bus", "tram", "minibus") into canonical types */
+function normalizeVehicleType(type, route) {
+  if (!type && !route) return "bus";
+  const t = String(type || "").toLowerCase().trim();
+  const r = String(route || "").toLowerCase().trim();
+  if (t === "tram" || t === "т" || t === "тм" || r.startsWith("т-") || r.startsWith("тм-") || t.includes("трамвай")) {
+    return "tram";
+  }
+  if (t === "minibus" || t === "м" || t === "мк" || t.includes("маршрут") || t.includes("микро")) {
+    return "minibus";
+  }
+  return "bus";
+}
+
+/** Format vehicle license plate (e.g. "260(P923MP03)" -> "P923MP03") */
+function formatGosNum(gosNum) {
+  if (!gosNum) return "";
+  const match = String(gosNum).match(/\((.*?)\)/);
+  if (match && match[1]) {
+    return match[1].trim();
+  }
+  return String(gosNum).trim();
+}
+
 async function apiFetch(url, options = {}) {
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const signature = sha256(timestamp + API_SECRET);
@@ -470,11 +494,13 @@ export default function App() {
       const saved = localStorage.getItem("pref_selectedVehicle");
       if (!saved) return null;
       const parsed = JSON.parse(saved);
+      if (!parsed || typeof parsed !== "object") return null;
       // Discard restore session if older than 30 minutes
       if (parsed.savedAt && Date.now() - parsed.savedAt > 1800000) {
         localStorage.removeItem("pref_selectedVehicle");
         return null;
       }
+      parsed.type = normalizeVehicleType(parsed.type, parsed.route || parsed.rnum);
       return parsed;
     } catch {
       return null;
@@ -482,6 +508,16 @@ export default function App() {
   });
   const [selectedRouteStations, setSelectedRouteStations] = useState(null);
   const [nextStationInfo, setNextStationInfo] = useState(null);
+  const [vehicleHistory, setVehicleHistory] = useState(() => {
+    try {
+      const saved = localStorage.getItem("pref_vehicleHistory");
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed.filter(item => item && item.id) : [];
+    } catch {
+      return [];
+    }
+  });
   const initialIsFollowing = (() => {
     try {
       const saved = localStorage.getItem("pref_isFollowingVehicle");
@@ -551,17 +587,52 @@ export default function App() {
     } catch {}
   }, [isFollowingVehicle]);
 
+  const addToVehicleHistory = useCallback((veh, nextSt = null) => {
+    if (!veh || !veh.id) return;
+    setVehicleHistory(prev => {
+      const list = Array.isArray(prev) ? prev : [];
+      const existing = list.find(item => item && item.id === veh.id);
+      const filtered = list.filter(item => item && item.id !== veh.id);
+      const normalizedType = normalizeVehicleType(veh.type, veh.route || veh.rnum);
+      const newEntry = {
+        id: veh.id,
+        rid: veh.rid,
+        route: veh.route || veh.rnum || "Маршрут",
+        gosNum: veh.gosNum || "",
+        type: normalizedType,
+        lat: veh.lat,
+        lng: veh.lng,
+        nextStation: nextSt || veh.nextStation || existing?.nextStation || null,
+        timestamp: Date.now()
+      };
+      const updated = [newEntry, ...filtered].slice(0, 9);
+      try {
+        localStorage.setItem("pref_vehicleHistory", JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  }, []);
+
+  const clearVehicleHistory = () => {
+    setVehicleHistory([]);
+    try {
+      localStorage.removeItem("pref_vehicleHistory");
+    } catch {}
+  };
+
   useEffect(() => {
     try {
       if (selectedVehicle) {
         const toSave = { ...selectedVehicle, savedAt: selectedVehicle.savedAt || Date.now() };
         localStorage.setItem("pref_selectedVehicle", JSON.stringify(toSave));
+        addToVehicleHistory(selectedVehicle);
       } else {
         localStorage.removeItem("pref_selectedVehicle");
       }
     } catch {}
     selectedVehicleRef.current = selectedVehicle;
     selectedRouteStationsRef.current = selectedRouteStations;
+
     // Update existing markers to show/hide the glowing effect
     Object.keys(vehicleMarkersRef.current).forEach(id => {
       const marker = vehicleMarkersRef.current[id];
@@ -2041,6 +2112,7 @@ export default function App() {
     // Clear existing forecast markers
     forecastMarkersRef.current.forEach(m => m.remove());
     forecastMarkersRef.current = [];
+    setNextStationInfo(null);
 
     if (!selectedVehicle) {
       setNextStationInfo(null);
@@ -2146,10 +2218,29 @@ export default function App() {
             const nextF = uniqueForecasts[0];
             const nextSt = stationsByIdRef.current.get(nextF.stid);
             if (nextSt) {
+              const stName = nextSt.properties?.name || "Остановка";
               setNextStationInfo({
-                name: nextSt.properties?.name || "Остановка",
+                name: stName,
                 time: nextF.time,
                 isTerminal: false
+              });
+              setVehicleHistory(prev => {
+                const list = Array.isArray(prev) ? prev : [];
+                let hasChange = false;
+                const updated = list.map(item => {
+                  if (item && item.id === selectedVehicle.id && item.nextStation !== stName) {
+                    hasChange = true;
+                    return { ...item, nextStation: stName };
+                  }
+                  return item;
+                });
+                if (hasChange) {
+                  try {
+                    localStorage.setItem("pref_vehicleHistory", JSON.stringify(updated));
+                  } catch {}
+                  return updated;
+                }
+                return prev;
               });
             }
           }
@@ -2216,6 +2307,24 @@ export default function App() {
               name: "Конечная (ожидает)",
               time: null,
               isTerminal: true
+            });
+            setVehicleHistory(prev => {
+              const list = Array.isArray(prev) ? prev : [];
+              let hasChange = false;
+              const updated = list.map(item => {
+                if (item && item.id === selectedVehicle.id && item.nextStation !== "Конечная (ожидает)") {
+                  hasChange = true;
+                  return { ...item, nextStation: "Конечная (ожидает)" };
+                }
+                return item;
+              });
+              if (hasChange) {
+                try {
+                  localStorage.setItem("pref_vehicleHistory", JSON.stringify(updated));
+                } catch {}
+                return updated;
+              }
+              return prev;
             });
             const el = document.createElement("div");
             el.className = "forecast-marker terminal-waiting-badge";
@@ -2361,20 +2470,24 @@ export default function App() {
         )}
 
         {/* Selected Vehicle Tracking HUD */}
-        {selectedVehicle && (
-          <div className="selected-vehicle-hud">
-            <div className="hud-top-row">
-              <div className="hud-vehicle-info">
-                <div className={`hud-badge hud-badge-${selectedVehicle.type || 'bus'}`}>
-                  <span className="material-symbols-outlined" style={{ fontSize: "15px" }}>
-                    {selectedVehicle.type === 'tram' ? 'tram' : 'directions_bus'}
-                  </span>
-                  <span className="hud-route-num">{selectedVehicle.route || 'Маршрут'}</span>
+        {selectedVehicle && (() => {
+          const currentVehType = normalizeVehicleType(selectedVehicle.type, selectedVehicle.route);
+          const currentVehIcon = currentVehType === 'tram' ? 'tram' : (currentVehType === 'minibus' ? 'airport_shuttle' : 'directions_bus');
+
+          return (
+            <div className="selected-vehicle-hud">
+              <div className="hud-top-row">
+                <div className="hud-vehicle-info">
+                  <div className={`hud-badge hud-badge-${currentVehType}`}>
+                    <span className="material-symbols-outlined" style={{ fontSize: "15px" }}>
+                      {currentVehIcon}
+                    </span>
+                    <span className="hud-route-num">{selectedVehicle.route || 'Маршрут'}</span>
+                  </div>
+                  {selectedVehicle.gosNum && (
+                    <span className="hud-gos-num">{formatGosNum(selectedVehicle.gosNum)}</span>
+                  )}
                 </div>
-                {selectedVehicle.gosNum && (
-                  <span className="hud-gos-num">{selectedVehicle.gosNum}</span>
-                )}
-              </div>
 
               <div className="hud-actions">
                 <button
@@ -2417,8 +2530,9 @@ export default function App() {
                 )}
               </div>
             )}
-          </div>
-        )}
+            </div>
+          );
+        })()}
 
         {/* Map Element */}
         <div className="map-container">
@@ -2669,6 +2783,117 @@ export default function App() {
                   )}
                 </div>
               )}
+
+              {/* Tab 5: History Tab */}
+              {activeTab === 5 && (
+                <div className="history-tab-content">
+                  <div className="history-tab-header">
+                    <span className="history-tab-title">Недавний транспорт ({vehicleHistory.length}/9)</span>
+                    {vehicleHistory.length > 0 && (
+                      <button className="history-clear-btn" onClick={clearVehicleHistory} title="Очистить историю">
+                        <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>delete</span>
+                        <span>Очистить</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {vehicleHistory.length === 0 ? (
+                    <div className="history-empty-state">
+                      <span className="material-symbols-outlined history-empty-icon">history</span>
+                      <div className="history-empty-text">
+                        История пуста.<br />
+                        Выберите любой транспорт на карте, чтобы быстро возвращаться к нему здесь.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="history-list">
+                      {vehicleHistory.map((item) => {
+                        const live = knownVehiclesRef.current[item.id];
+                        const isLiveOnMap = !!live;
+                        const isSelected = selectedVehicle?.id === item.id;
+
+                        const vehType = normalizeVehicleType(item.type, item.route);
+                        const iconName = vehType === "tram" ? "tram" : (vehType === "minibus" ? "airport_shuttle" : "directions_bus");
+                        const itemNextStation = (isSelected && nextStationInfo?.name) || item.nextStation;
+                        const isRouteLong = (item.route || "").length > 4;
+                        const isNextStLong = (itemNextStation || "").length > 13;
+
+                        return (
+                          <div
+                            key={item.id}
+                            className={`history-card ${isSelected ? 'selected' : ''} ${!isLiveOnMap ? 'inactive' : ''}`}
+                            onClick={() => {
+                              if (!isLiveOnMap) return;
+                              const targetVeh = live || item;
+                              const targetType = normalizeVehicleType(targetVeh.type || item.type, targetVeh.route || targetVeh.rnum || item.route);
+                              setSelectedVehicle({
+                                rid: targetVeh.rid,
+                                id: targetVeh.id,
+                                gosNum: targetVeh.gosNum,
+                                route: targetVeh.route || targetVeh.rnum || item.route,
+                                type: targetType,
+                                lat: targetVeh.lat,
+                                lng: targetVeh.lng
+                              });
+                              setActiveTab(0);
+                            }}
+                          >
+                            <div className="history-card-left">
+                              <div className={`hud-badge hud-badge-${vehType}`}>
+                                <span className="material-symbols-outlined" style={{ fontSize: "15px" }}>
+                                  {iconName}
+                                </span>
+                                <span className={`hud-route-num ${isRouteLong ? 'running-text' : ''}`}>{item.route || '—'}</span>
+                              </div>
+
+                              <div className="history-card-details">
+                                <div className="history-card-title-row">
+                                  {item.gosNum && (
+                                    <span className="hud-gos-num">{formatGosNum(item.gosNum)}</span>
+                                  )}
+                                  <span
+                                    className={`status-dot ${isLiveOnMap ? 'live' : 'offline'}`}
+                                    title={isLiveOnMap ? "На линии" : "Не на линии"}
+                                  />
+                                </div>
+
+                                {itemNextStation && (
+                                  <div className="history-next-station-row">
+                                    <span className="material-symbols-outlined history-next-icon">
+                                      {itemNextStation.includes('Конечная') ? 'flag' : 'arrow_forward'}
+                                    </span>
+                                    <div className="running-text-wrapper">
+                                      <span className={isNextStLong ? "running-text" : ""}>{itemNextStation}</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="history-card-right">
+                              {isLiveOnMap ? (
+                                <button
+                                  className={`history-select-btn ${isSelected ? 'active' : ''}`}
+                                  title={isSelected ? "Слежение активно" : "Показать и следить"}
+                                  aria-label={isSelected ? "Слежение активно" : "Показать и следить"}
+                                >
+                                  <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
+                                    {isSelected ? 'my_location' : 'near_me'}
+                                  </span>
+                                </button>
+                              ) : (
+                                <span className="history-offline-badge">
+                                  Не на линии
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -2689,6 +2914,10 @@ export default function App() {
 
           <button className={activeTab === 3 ? "mui-nav-item active" : "mui-nav-item"} onClick={() => setActiveTab(activeTab === 3 ? 0 : 3)} title={`Избранное (${favorites.size})`} aria-label="Избранное">
             <span className="material-symbols-outlined mui-nav-icon">bookmark_star</span>
+          </button>
+
+          <button className={activeTab === 5 ? "mui-nav-item active" : "mui-nav-item"} onClick={() => setActiveTab(activeTab === 5 ? 0 : 5)} title={`История (${vehicleHistory.length})`} aria-label="История">
+            <span className="material-symbols-outlined mui-nav-icon">history</span>
           </button>
         </div>
       </div>

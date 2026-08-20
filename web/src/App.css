@@ -971,6 +971,17 @@ body {
     width: 348px;
     margin: 0;
   }
+
+  .history-card-details {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+  }
+
+  .history-next-station-row {
+    margin-top: 1px;
+    max-width: 170px;
+  }
 }
 
 /* Center MapLibre Controls Vertically */
@@ -1201,6 +1212,270 @@ body {
   background: #ecfdf5;
   color: #059669;
   border-color: #a7f3d0;
+}
+
+/* History Drawer Tab Styles */
+.history-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0 16px 0;
+}
+
+.history-tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+}
+
+.history-tab-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.history-clear-btn {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: all 0.15s ease;
+}
+
+.history-clear-btn:hover {
+  background: #fee2e2;
+  color: #ef4444;
+}
+
+.history-empty-state {
+  text-align: center;
+  padding: 40px 16px;
+  color: #94a3b8;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.history-empty-icon {
+  font-size: 44px;
+  color: #cbd5e1;
+}
+
+.history-empty-text {
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 10px 14px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.history-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
+}
+
+.history-card.selected {
+  background: #f0f9ff;
+  border-color: #38bdf8;
+  box-shadow: 0 4px 12px rgba(56, 189, 248, 0.15);
+}
+
+.history-card.inactive {
+  opacity: 0.52;
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  cursor: default !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.history-card.inactive:hover {
+  border-color: #e2e8f0;
+  transform: none;
+  box-shadow: none;
+}
+
+.history-card.inactive .hud-badge {
+  filter: grayscale(40%);
+  opacity: 0.85;
+}
+
+.history-offline-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  padding: 4px 10px;
+  border-radius: 12px;
+  white-space: nowrap;
+}
+
+.history-card-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.history-card-details {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  line-height: 1;
+}
+
+.history-card-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.history-next-station-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #334155;
+  font-weight: 600;
+  max-width: 145px;
+  overflow: hidden;
+  margin-top: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  line-height: 1;
+}
+
+.history-next-icon {
+  font-size: 13px !important;
+  color: #2563eb;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.history-next-label {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.status-dot.live {
+  background-color: #22c55e;
+  box-shadow: 0 0 6px #22c55e;
+}
+
+.status-dot.offline {
+  background-color: #94a3b8;
+}
+
+.history-card-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.history-select-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.history-card:hover .history-select-btn,
+.history-select-btn.active {
+  background: #1E75EC;
+  border-color: #1E75EC;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(30, 117, 236, 0.25);
+}
+
+/* Running Marquee Animation for long bus names / stop names */
+.running-text-wrapper {
+  display: inline-flex;
+  overflow: hidden;
+  white-space: nowrap;
+  position: relative;
+  max-width: 130px;
+  vertical-align: middle;
+  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 10px), transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 10px), transparent 100%);
+}
+
+.running-text {
+  display: inline-block;
+  white-space: nowrap;
+  animation: marquee-scroll 5.5s linear infinite alternate;
+  will-change: transform;
+}
+
+@keyframes marquee-scroll {
+  0%, 20% {
+    transform: translateX(0);
+  }
+  80%, 100% {
+    transform: translateX(-40%);
+  }
+}
+
+.hud-route-num.running-text {
+  max-width: 65px;
+  overflow: hidden;
+  animation: marquee-scroll 4.5s linear infinite alternate;
 }
 
 
