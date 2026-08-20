@@ -442,35 +442,49 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
   loadForecast();
 }
 
-function RouteProgressRing({ percent }) {
+function normalizeStationCompareName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/№\s*/g, " ")
+    .replace(/[«»"'()\.\-–—,]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function RouteProgressRing({ percent, size = 38 }) {
   const clamped = Math.min(100, Math.max(0, Math.round(percent || 0)));
-  const radius = 12;
-  const circumference = 2 * Math.PI * radius; // ~75.4
+  const strokeWidth = size >= 38 ? 3.2 : 2.8;
+  const radius = (size / 2) - strokeWidth - 1;
+  const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (clamped / 100) * circumference;
+  const fontSize = size >= 38 ? "11px" : "9px";
 
   return (
     <div
       className="hud-progress-ring"
+      style={{ width: `${size}px`, height: `${size}px` }}
       title={`Прогресс маршрута: ${clamped}%`}
       aria-label={`Прогресс маршрута: ${clamped}%`}
     >
-      <svg className="hud-progress-svg" viewBox="0 0 30 30">
+      <svg className="hud-progress-svg" style={{ width: `${size}px`, height: `${size}px` }} viewBox={`0 0 ${size} ${size}`}>
         <circle
           className="hud-progress-track"
-          cx="15"
-          cy="15"
+          cx={size / 2}
+          cy={size / 2}
           r={radius}
+          strokeWidth={strokeWidth}
         />
         <circle
           className="hud-progress-fill"
-          cx="15"
-          cy="15"
+          cx={size / 2}
+          cy={size / 2}
           r={radius}
+          strokeWidth={strokeWidth}
           strokeDasharray={circumference}
           strokeDashoffset={strokeDashoffset}
         />
       </svg>
-      <span className="hud-progress-text">{clamped}%</span>
+      <span className="hud-progress-text" style={{ fontSize }}>{clamped}%</span>
     </div>
   );
 }
@@ -484,10 +498,13 @@ export default function App() {
   const [routes, setRoutes] = useState([]);
   const routesRef = useRef([]);
   const stationsRef = useRef([]);
+  const routeStationsCacheRef = useRef({});
+  const pendingRouteStationsRef = useRef(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [routeNodesCoordinates, setRouteNodesCoordinates] = useState([]);
-  const [telemetryTick, setTelemetryTick] = useState(0);
+  const [routeStationsOrder, setRouteStationsOrder] = useState([]);
+  const [telemetryTick, setTelemetryTick] = useState(0); // eslint-disable-line no-unused-vars -- State setter forces re-render on telemetry updates
+  const [historyProgressTick, setHistoryProgressTick] = useState(0); // eslint-disable-line no-unused-vars -- Forces re-render when history route stations are cached
 
   // Navigation & Search State
   const [activeTab, setActiveTab] = useState(0);
@@ -576,50 +593,36 @@ export default function App() {
   const hasInitialCenteredRef = useRef(!selectedVehicle);
   const debouncedForecastRefreshRef = useRef(null);
 
-  // Calculate percentage of vehicle progress along the route (0 - 100%)
+  // Calculate percentage of vehicle progress along route strictly by bus stops passed vs remaining (excluding coords)
   const routeProgressPercent = useMemo(() => {
     if (!selectedVehicle) return 0;
-    const liveVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
-    if (!liveVeh || liveVeh.lat == null || liveVeh.lng == null) return 0;
 
-    // 1. Direct progress from animPoints if available
-    if (Array.isArray(liveVeh.animPoints) && liveVeh.animPoints.length > 0) {
-      const p = liveVeh.animPoints[0]?.percent;
-      if (typeof p === "number" && !isNaN(p) && p >= 0) {
-        const normalized = p <= 1.0 ? p * 100 : p;
-        return Math.min(100, Math.max(0, Math.round(normalized)));
-      }
-    }
-
-    // 2. Geometric polyline projection along route nodes
-    const nodes = routeNodesCoordinates;
-    if (Array.isArray(nodes) && nodes.length >= 2) {
-      let closestIdx = 0;
-      let minDistSq = Infinity;
-      const vLat = liveVeh.lat;
-      const vLng = liveVeh.lng;
-
-      for (let i = 0; i < nodes.length; i++) {
-        const [nLng, nLat] = nodes[i];
-        const dLat = (vLat - nLat) * 111320;
-        const dLng = (vLng - nLng) * 111320 * Math.cos((vLat * Math.PI) / 180);
-        const dSq = dLat * dLat + dLng * dLng;
-        if (dSq < minDistSq) {
-          minDistSq = dSq;
-          closestIdx = i;
-        }
-      }
-      const percent = Math.round((closestIdx / (nodes.length - 1)) * 100);
-      return Math.min(100, Math.max(0, percent));
-    }
-
-    // 3. Fallback: if at terminal stop
+    // Terminal / Waiting at end of route -> 100%
     if (nextStationInfo?.isTerminal) {
       return 100;
     }
 
+    const totalStops = routeStationsOrder.length;
+    if (totalStops <= 1) {
+      return 0;
+    }
+
+    // 1. Calculate from index of next station along the ordered route stops list
+    if (nextStationInfo?.stid) {
+      const nextIdx = routeStationsOrder.indexOf(String(nextStationInfo.stid));
+      if (nextIdx !== -1) {
+        return Math.min(100, Math.max(0, Math.round((nextIdx / (totalStops - 1)) * 100)));
+      }
+    }
+
+    // 2. Fallback: calculate from remaining stops count in live forecast
+    if (typeof nextStationInfo?.remainingCount === "number" && nextStationInfo.remainingCount > 0) {
+      const passedStops = Math.max(0, totalStops - nextStationInfo.remainingCount);
+      return Math.min(100, Math.max(0, Math.round((passedStops / (totalStops - 1)) * 100)));
+    }
+
     return 0;
-  }, [selectedVehicle, routeNodesCoordinates, nextStationInfo, telemetryTick]);
+  }, [selectedVehicle, routeStationsOrder, nextStationInfo]);
 
   // MapLibre & Marker / Animation Refs
   const markersRef = useRef({});
@@ -688,6 +691,7 @@ export default function App() {
         lat: veh.lat,
         lng: veh.lng,
         nextStation: nextSt || veh.nextStation || existing?.nextStation || null,
+        progress: typeof veh.progress === "number" ? veh.progress : (existing?.progress ?? null),
         timestamp: Date.now()
       };
       const updated = [newEntry, ...filtered].slice(0, 9);
@@ -704,6 +708,208 @@ export default function App() {
       localStorage.removeItem("pref_vehicleHistory");
     } catch { }
   };
+
+  useEffect(() => {
+    if (selectedVehicle?.id && typeof routeProgressPercent === "number") {
+      setVehicleHistory(prev => {
+        const list = Array.isArray(prev) ? prev : [];
+        let changed = false;
+        const updated = list.map(item => {
+          if (item && item.id === selectedVehicle.id && item.progress !== routeProgressPercent) {
+            changed = true;
+            return { ...item, progress: routeProgressPercent };
+          }
+          return item;
+        });
+        if (changed) {
+          try {
+            localStorage.setItem("pref_vehicleHistory", JSON.stringify(updated));
+          } catch { }
+          return updated;
+        }
+        return prev;
+      });
+    }
+  }, [selectedVehicle?.id, routeProgressPercent]);
+
+  // Helper to extract all possible subroute IDs for a vehicle/history item
+  const resolveRidsForItem = useCallback((item, liveVeh) => {
+    if (!item) return [];
+    const rids = new Set();
+    if (item.rid) String(item.rid).split(",").forEach(id => { if (id.trim()) rids.add(id.trim()); });
+    if (liveVeh?.rid) String(liveVeh.rid).split(",").forEach(id => { if (id.trim()) rids.add(id.trim()); });
+    
+    if (routesRef.current && routesRef.current.length > 0) {
+      const vNum = String(item.route || item.rnum || "").trim().toLowerCase();
+      const vType = normalizeVehicleType(item.type, item.route);
+      const rMatch = routesRef.current.find(r => 
+        String(r.number).trim().toLowerCase() === vNum &&
+        normalizeVehicleType(r.type, r.number) === vType
+      );
+      if (rMatch) {
+        if (rMatch.id) String(rMatch.id).split(",").forEach(id => { if (id.trim()) rids.add(id.trim()); });
+        if (Array.isArray(rMatch.subroutes)) {
+          rMatch.subroutes.forEach(sr => {
+            if (sr.id) String(sr.id).split(",").forEach(id => { if (id.trim()) rids.add(id.trim()); });
+          });
+        }
+      }
+    }
+    return Array.from(rids);
+  }, []);
+
+  // Fetch and cache route stations for history items to compute stops passed vs remaining
+  useEffect(() => {
+    if (activeTab === 5 && Array.isArray(vehicleHistory) && vehicleHistory.length > 0) {
+      vehicleHistory.forEach(item => {
+        if (!item) return;
+        const liveVeh = knownVehiclesRef.current[item.id] || item;
+        const rids = resolveRidsForItem(item, liveVeh);
+        rids.forEach(rid => {
+          if (rid && !routeStationsCacheRef.current[rid] && !pendingRouteStationsRef.current.has(rid)) {
+            pendingRouteStationsRef.current.add(rid);
+            apiFetch(`/api/route_stations?id=${encodeURIComponent(rid)}`)
+              .then(res => res.json())
+              .then(data => {
+                const stations = (data && Array.isArray(data.stations)) ? data.stations.map(String) : [];
+                routeStationsCacheRef.current[rid] = stations;
+                pendingRouteStationsRef.current.delete(rid);
+                if (stations.length > 0) {
+                  setHistoryProgressTick(t => t + 1);
+                }
+              })
+              .catch(() => {
+                routeStationsCacheRef.current[rid] = [];
+                pendingRouteStationsRef.current.delete(rid);
+              });
+          }
+        });
+      });
+    }
+  }, [activeTab, vehicleHistory, resolveRidsForItem]);
+
+  // Real-time live forecast polling for history vehicles when History tab is open
+  useEffect(() => {
+    if (activeTab !== 5) return;
+
+    let isPollingActive = true;
+    let pollTimer = null;
+
+    const pollHistoryForecasts = async () => {
+      if (!isPollingActive) return;
+
+      if (document.hidden) {
+        if (isPollingActive) pollTimer = setTimeout(pollHistoryForecasts, 15000);
+        return;
+      }
+
+      const nowTime = Date.now();
+      const liveItems = (vehicleHistoryRef.current || []).filter(item => {
+        if (!item || !item.id) return false;
+        // Dedup: skip actively selected vehicle because it has its own dedicated forecast loop
+        if (item.id === selectedVehicleRef.current?.id) return false;
+        const live = knownVehiclesRef.current[item.id];
+        return !!live && (nowTime - (live._lastSeen || 0) < 60000);
+      });
+
+      if (liveItems.length === 0) {
+        if (isPollingActive) pollTimer = setTimeout(pollHistoryForecasts, 10000);
+        return;
+      }
+
+      const updates = {};
+      await Promise.all(
+        liveItems.map(async (item) => {
+          try {
+            const res = await apiFetch(`/api/vehicle_forecasts?vehid=${encodeURIComponent(item.id)}`);
+            const data = await res.json();
+            if (!isPollingActive) return;
+
+            if (data.forecasts && data.forecasts.length > 0) {
+              const unique = [];
+              const seen = new Set();
+              data.forecasts.forEach(f => {
+                if (!seen.has(f.stid)) {
+                  seen.add(f.stid);
+                  unique.push(f);
+                }
+              });
+              unique.sort((a, b) => (parseInt(a.time, 10) || 0) - (parseInt(b.time, 10) || 0));
+
+              if (unique.length > 0) {
+                const nextF = unique[0];
+                const st = stationsByIdRef.current.get(nextF.stid);
+                if (st?.properties?.name) {
+                  const u = {
+                    nextStation: st.properties.name,
+                    stid: String(nextF.stid),
+                    isTerminal: false
+                  };
+                  const rids = resolveRidsForItem(item, knownVehiclesRef.current[item.id]);
+                  for (const rid of rids) {
+                    const sIds = routeStationsCacheRef.current[rid];
+                    if (Array.isArray(sIds) && sIds.length > 1) {
+                      const idx = sIds.indexOf(String(nextF.stid));
+                      if (idx !== -1) {
+                        u.progress = Math.min(100, Math.max(0, Math.round((idx / (sIds.length - 1)) * 100)));
+                        break;
+                      }
+                    }
+                  }
+                  updates[item.id] = u;
+                }
+              }
+            } else {
+              // Empty forecasts: only mark terminal if vehicle is actually near terminal stop
+              const liveVeh = knownVehiclesRef.current[item.id];
+              if (liveVeh && isNearTerminalStopRef.current && isNearTerminalStopRef.current(liveVeh)) {
+                updates[item.id] = {
+                  nextStation: "Конечная (ожидает)",
+                  stid: null,
+                  isTerminal: true,
+                  progress: 100
+                };
+              }
+            }
+          } catch { }
+        })
+      );
+
+      if (isPollingActive && Object.keys(updates).length > 0) {
+        setVehicleHistory(prev => {
+          const list = Array.isArray(prev) ? prev : [];
+          let hasChanged = false;
+          const updated = list.map(it => {
+            if (it && updates[it.id]) {
+              const u = updates[it.id];
+              if (it.nextStation !== u.nextStation || (u.progress != null && it.progress !== u.progress)) {
+                hasChanged = true;
+                return { ...it, ...u };
+              }
+            }
+            return it;
+          });
+          if (hasChanged) {
+            try { localStorage.setItem("pref_vehicleHistory", JSON.stringify(updated)); } catch {}
+            return updated;
+          }
+          return prev;
+        });
+        setHistoryProgressTick(t => t + 1);
+      }
+
+      if (isPollingActive) {
+        pollTimer = setTimeout(pollHistoryForecasts, 10000);
+      }
+    };
+
+    pollHistoryForecasts();
+
+    return () => {
+      isPollingActive = false;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps -- Polling lifecycle bound to activeTab, reads vehicleHistoryRef.current inside
 
   const prevHistorySavedVehicleIdRef = useRef(null);
   useEffect(() => {
@@ -2262,14 +2468,13 @@ export default function App() {
   useEffect(() => {
     if (!map.current) return;
 
-    // Clear existing forecast markers
+    // Clear existing forecast markers and stale station info immediately on vehicle switch
     forecastMarkersRef.current.forEach(m => m.remove());
     forecastMarkersRef.current = [];
     setNextStationInfo(null);
 
     if (!selectedVehicle) {
-      setNextStationInfo(null);
-      setRouteNodesCoordinates([]);
+      setRouteStationsOrder([]);
       if (map.current.getLayer("route-nodes-layer")) {
         map.current.setLayoutProperty("route-nodes-layer", "visibility", "none");
       }
@@ -2283,6 +2488,7 @@ export default function App() {
 
     // Immediately clear old route stations to prevent stale data flashing
     setSelectedRouteStations(new Set());
+    setRouteStationsOrder([]);
 
     let isActive = true;
     let forecastTimeout = null;
@@ -2299,7 +2505,6 @@ export default function App() {
         const source = map.current.getSource("route-nodes");
         if (source) {
           if (dataNodes.nodes && dataNodes.nodes.length > 0) {
-            setRouteNodesCoordinates(dataNodes.nodes);
             source.setData({
               type: "Feature",
               properties: {},
@@ -2312,7 +2517,6 @@ export default function App() {
               map.current.setLayoutProperty("route-nodes-layer", "visibility", "visible");
             }
           } else {
-            setRouteNodesCoordinates([]);
             source.setData({ type: "FeatureCollection", features: [] });
           }
         }
@@ -2328,10 +2532,14 @@ export default function App() {
         const res = await apiFetch(`/api/route_stations?id=${encodeURIComponent(selectedVehicle.rid)}`, { signal });
         const data = await res.json();
         if (!isActive) return;
-        if (data.stations) {
-          setSelectedRouteStations(new Set(data.stations));
+        if (data.stations && Array.isArray(data.stations)) {
+          const sIds = data.stations.map(String);
+          setSelectedRouteStations(new Set(sIds));
+          setRouteStationsOrder(sIds);
+          routeStationsCacheRef.current[String(selectedVehicle.rid)] = sIds;
         } else {
           setSelectedRouteStations(new Set());
+          setRouteStationsOrder([]);
         }
       } catch (err) {
         if (err.name !== 'AbortError') {
@@ -2377,7 +2585,9 @@ export default function App() {
               const stName = nextSt.properties?.name || "Остановка";
               setNextStationInfo({
                 name: stName,
+                stid: String(nextF.stid),
                 time: nextF.time,
+                remainingCount: uniqueForecasts.length,
                 isTerminal: false
               });
               setVehicleHistory(prev => {
@@ -2643,7 +2853,7 @@ export default function App() {
                   {selectedVehicle.gosNum && (
                     <span className="hud-gos-num">{formatGosNum(selectedVehicle.gosNum)}</span>
                   )}
-                  <RouteProgressRing percent={routeProgressPercent} />
+                  <RouteProgressRing percent={routeProgressPercent} size={30} />
                 </div>
 
                 <div className="hud-actions">
@@ -2983,7 +3193,6 @@ export default function App() {
                         const vehType = normalizeVehicleType(item.type, item.route);
                         const iconName = vehType === "tram" ? "tram" : (vehType === "minibus" ? "airport_shuttle" : "directions_bus");
                         const itemNextStation = (isSelected && nextStationInfo?.name) || item.nextStation;
-                        const isRouteLong = (item.route || "").length > 4;
                         const isNextStLong = (itemNextStation || "").length > 13;
 
                         const itemProgress = (() => {
@@ -2992,24 +3201,50 @@ export default function App() {
                           }
                           const target = live || item;
                           if (!target) return null;
-                          if (Array.isArray(target.animPoints) && target.animPoints.length > 0) {
-                            const p = target.animPoints[0]?.percent;
-                            if (typeof p === "number" && !isNaN(p) && p >= 0) {
-                              const normalized = p <= 1.0 ? p * 100 : p;
-                              return Math.min(100, Math.max(0, Math.round(normalized)));
-                            }
+
+                          // 1. Terminal stop -> 100%
+                          if (itemNextStation?.includes("Конечная") || target.isTerminal) {
+                            return 100;
                           }
+
+                          // 2. Saved progress on item or target
                           if (typeof target.progress === "number" && !isNaN(target.progress)) {
                             return Math.min(100, Math.max(0, Math.round(target.progress)));
                           }
+                          if (typeof item.progress === "number" && !isNaN(item.progress)) {
+                            return Math.min(100, Math.max(0, Math.round(item.progress)));
+                          }
+
+                          // 3. Compute from route stations cache using stops passed vs remaining
+                          if (itemNextStation) {
+                            const cleanNext = normalizeStationCompareName(itemNextStation);
+                            const rids = resolveRidsForItem(item, live);
+                            for (const rid of rids) {
+                              const stationIds = routeStationsCacheRef.current[rid];
+                              if (Array.isArray(stationIds) && stationIds.length > 1) {
+                                const stopIdx = stationIds.findIndex(sid => {
+                                  const st = stationsByIdRef.current.get(sid);
+                                  if (!st || !st.properties?.name) return false;
+                                  const sName = normalizeStationCompareName(st.properties.name);
+                                  return sName.includes(cleanNext) || cleanNext.includes(sName);
+                                });
+                                if (stopIdx !== -1) {
+                                  return Math.min(100, Math.max(0, Math.round((stopIdx / (stationIds.length - 1)) * 100)));
+                                }
+                              }
+                            }
+                          }
+
                           return null;
                         })();
 
                         return (
                           <div
                             key={item.id}
-                            className={`history-card ${isSelected ? 'selected' : ''}`}
+                            className={`history-card ${isSelected ? 'selected' : ''} ${!isLiveOnMap ? 'inactive' : ''}`}
                             onClick={() => {
+                              if (!isLiveOnMap) return;
+
                               const targetVeh = live || item;
                               const targetType = normalizeVehicleType(targetVeh.type || item.type, targetVeh.route || targetVeh.rnum || item.route);
                               
@@ -3072,14 +3307,11 @@ export default function App() {
                                   )}
                                   <span
                                     className={`status-dot ${isLiveOnMap ? 'live' : 'offline'}`}
-                                    title={isLiveOnMap ? "На линии" : "Не на карте (нажмите для включения)"}
+                                    title={isLiveOnMap ? "На линии" : "Не на линии"}
                                   />
-                                  {itemProgress != null && (
-                                    <RouteProgressRing percent={itemProgress} />
-                                  )}
                                 </div>
 
-                                {itemNextStation && (
+                                {isLiveOnMap && itemNextStation && (
                                   <div className="history-next-station-row">
                                     <span className="material-symbols-outlined history-next-icon">
                                       {itemNextStation.includes('Конечная') ? 'flag' : 'arrow_forward'}
@@ -3093,15 +3325,24 @@ export default function App() {
                             </div>
 
                             <div className="history-card-right">
-                              <button
-                                className={`history-select-btn ${isSelected ? 'active' : ''}`}
-                                title={isSelected ? "Слежение активно" : "Показать и следить"}
-                                aria-label={isSelected ? "Слежение активно" : "Показать и следить"}
-                              >
-                                <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
-                                  {isSelected ? 'my_location' : 'near_me'}
-                                </span>
-                              </button>
+                              {isLiveOnMap ? (
+                                <>
+                                  {itemProgress != null && (
+                                    <RouteProgressRing percent={itemProgress} />
+                                  )}
+                                  <button
+                                    className={`history-select-btn ${isSelected ? 'active' : ''}`}
+                                    title={isSelected ? "Слежение активно" : "Показать и следить"}
+                                    aria-label={isSelected ? "Слежение активно" : "Показать и следить"}
+                                  >
+                                    <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
+                                      {isSelected ? 'my_location' : 'near_me'}
+                                    </span>
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="history-offline-badge">Не на линии</span>
+                              )}
                             </div>
                           </div>
                         );

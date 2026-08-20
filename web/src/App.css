@@ -1193,39 +1193,36 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  border-radius: 50%;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
   flex-shrink: 0;
   cursor: default;
   user-select: none;
+  box-sizing: border-box;
 }
 
 .hud-progress-svg {
-  width: 32px;
-  height: 32px;
   transform: rotate(-90deg);
 }
 
 .hud-progress-track {
   fill: none;
-  stroke: #e2e8f0;
-  stroke-width: 2.8;
+  stroke: rgba(226, 232, 240, 0.9);
 }
 
 .hud-progress-fill {
   fill: none;
   stroke: #22c55e;
-  stroke-width: 2.8;
   stroke-linecap: round;
   transition: stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .hud-progress-text {
   position: absolute;
-  font-size: 8.5px;
   font-weight: 800;
   color: #15803d;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.4px;
   text-align: center;
   line-height: 1;
 }
@@ -1509,6 +1506,7 @@ body {
 .history-card-right {
   display: flex;
   align-items: center;
+  gap: 10px;
   flex-shrink: 0;
 }
 
