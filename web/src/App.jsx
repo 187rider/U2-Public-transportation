@@ -1003,10 +1003,18 @@ export default function App() {
 
       // Smooth Camera Tracking for Selected Vehicle
       if (selectedVehicleRef.current && isFollowingVehicleRef.current && !isInitialFlyingRef.current && map.current) {
-        const selAnim = anims[selectedVehicleRef.current.id];
-        if (selAnim && !selAnim.idle) {
+        const selId = selectedVehicleRef.current.id;
+        const selMarker = vehicleMarkersRef.current[selId];
+        const selAnim = anims[selId];
+        const live = knownVehiclesRef.current[selId];
+
+        const mPos = selMarker ? selMarker.getLngLat() : null;
+        const cLng = mPos ? mPos.lng : (selAnim ? selAnim.currentLng : (live?.lng || selectedVehicleRef.current.lng));
+        const cLat = mPos ? mPos.lat : (selAnim ? selAnim.currentLat : (live?.lat || selectedVehicleRef.current.lat));
+
+        if (cLng != null && cLat != null) {
           map.current.jumpTo({
-            center: [selAnim.currentLng, selAnim.currentLat]
+            center: [cLng, cLat]
           });
         }
       }
@@ -1715,9 +1723,16 @@ export default function App() {
               wrapper.onclick = (e) => {
                 e.stopPropagation();
                 if (v.rid && v.id) {
+                  const curMarker = vehicleMarkersRef.current[v.id];
+                  const mPos = curMarker ? curMarker.getLngLat() : null;
+                  const anim = activeAnimationsRef.current[v.id];
+                  const live = knownVehiclesRef.current[v.id] || v;
+                  const curLat = mPos ? mPos.lat : (anim ? anim.currentLat : (live.lat || v.lat));
+                  const curLng = mPos ? mPos.lng : (anim ? anim.currentLng : (live.lng || v.lng));
+
                   setSelectedVehicle(prev => {
                     if (prev && prev.id === v.id) return null;
-                    return { rid: v.rid, id: v.id, gosNum: v.gosNum, route: v.rnum || v.route, type: vType, lat: v.lat, lng: v.lng };
+                    return { rid: v.rid, id: v.id, gosNum: live.gosNum || v.gosNum, route: live.rnum || live.route || v.rnum || v.route, type: vType, lat: curLat, lng: curLng };
                   });
                 }
               };
@@ -1858,10 +1873,12 @@ export default function App() {
     isFollowingVehicleRef.current = true;
     isInitialFlyingRef.current = true;
 
+    const marker = vehicleMarkersRef.current[selectedVehicle.id];
+    const mPos = marker ? marker.getLngLat() : null;
     const anim = activeAnimationsRef.current[selectedVehicle.id];
     const liveVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
-    const targetLng = anim ? anim.currentLng : (liveVeh.lng || selectedVehicle.lng);
-    const targetLat = anim ? anim.currentLat : (liveVeh.lat || selectedVehicle.lat);
+    const targetLng = mPos ? mPos.lng : (anim ? anim.currentLng : (liveVeh.lng || selectedVehicle.lng));
+    const targetLat = mPos ? mPos.lat : (anim ? anim.currentLat : (liveVeh.lat || selectedVehicle.lat));
 
     if (map.current && targetLng != null && targetLat != null) {
       map.current.flyTo({
@@ -2118,10 +2135,12 @@ export default function App() {
 
   const recenterSelectedVehicle = () => {
     if (!selectedVehicle || !map.current) return;
+    const marker = vehicleMarkersRef.current[selectedVehicle.id];
+    const mPos = marker ? marker.getLngLat() : null;
     const anim = activeAnimationsRef.current[selectedVehicle.id];
     const liveVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
-    const targetLng = anim ? anim.currentLng : (liveVeh.lng || selectedVehicle.lng);
-    const targetLat = anim ? anim.currentLat : (liveVeh.lat || selectedVehicle.lat);
+    const targetLng = mPos ? mPos.lng : (anim ? anim.currentLng : (liveVeh.lng || selectedVehicle.lng));
+    const targetLat = mPos ? mPos.lat : (anim ? anim.currentLat : (liveVeh.lat || selectedVehicle.lat));
 
     if (targetLng != null && targetLat != null) {
       isInitialFlyingRef.current = true;
