@@ -442,6 +442,39 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
   loadForecast();
 }
 
+function RouteProgressRing({ percent }) {
+  const clamped = Math.min(100, Math.max(0, Math.round(percent || 0)));
+  const radius = 12;
+  const circumference = 2 * Math.PI * radius; // ~75.4
+  const strokeDashoffset = circumference - (clamped / 100) * circumference;
+
+  return (
+    <div
+      className="hud-progress-ring"
+      title={`Прогресс маршрута: ${clamped}%`}
+      aria-label={`Прогресс маршрута: ${clamped}%`}
+    >
+      <svg className="hud-progress-svg" viewBox="0 0 30 30">
+        <circle
+          className="hud-progress-track"
+          cx="15"
+          cy="15"
+          r={radius}
+        />
+        <circle
+          className="hud-progress-fill"
+          cx="15"
+          cy="15"
+          r={radius}
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+        />
+      </svg>
+      <span className="hud-progress-text">{clamped}%</span>
+    </div>
+  );
+}
+
 export default function App() {
   const mapContainer = useRef(null);
   const map = useRef(null);
@@ -453,6 +486,8 @@ export default function App() {
   const stationsRef = useRef([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [routeNodesCoordinates, setRouteNodesCoordinates] = useState([]);
+  const [telemetryTick, setTelemetryTick] = useState(0);
 
   // Navigation & Search State
   const [activeTab, setActiveTab] = useState(0);
@@ -540,6 +575,51 @@ export default function App() {
   const missedPollsRef = useRef(0);
   const hasInitialCenteredRef = useRef(!selectedVehicle);
   const debouncedForecastRefreshRef = useRef(null);
+
+  // Calculate percentage of vehicle progress along the route (0 - 100%)
+  const routeProgressPercent = useMemo(() => {
+    if (!selectedVehicle) return 0;
+    const liveVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
+    if (!liveVeh || liveVeh.lat == null || liveVeh.lng == null) return 0;
+
+    // 1. Direct progress from animPoints if available
+    if (Array.isArray(liveVeh.animPoints) && liveVeh.animPoints.length > 0) {
+      const p = liveVeh.animPoints[0]?.percent;
+      if (typeof p === "number" && !isNaN(p) && p >= 0) {
+        const normalized = p <= 1.0 ? p * 100 : p;
+        return Math.min(100, Math.max(0, Math.round(normalized)));
+      }
+    }
+
+    // 2. Geometric polyline projection along route nodes
+    const nodes = routeNodesCoordinates;
+    if (Array.isArray(nodes) && nodes.length >= 2) {
+      let closestIdx = 0;
+      let minDistSq = Infinity;
+      const vLat = liveVeh.lat;
+      const vLng = liveVeh.lng;
+
+      for (let i = 0; i < nodes.length; i++) {
+        const [nLng, nLat] = nodes[i];
+        const dLat = (vLat - nLat) * 111320;
+        const dLng = (vLng - nLng) * 111320 * Math.cos((vLat * Math.PI) / 180);
+        const dSq = dLat * dLat + dLng * dLng;
+        if (dSq < minDistSq) {
+          minDistSq = dSq;
+          closestIdx = i;
+        }
+      }
+      const percent = Math.round((closestIdx / (nodes.length - 1)) * 100);
+      return Math.min(100, Math.max(0, percent));
+    }
+
+    // 3. Fallback: if at terminal stop
+    if (nextStationInfo?.isTerminal) {
+      return 100;
+    }
+
+    return 0;
+  }, [selectedVehicle, routeNodesCoordinates, nextStationInfo, telemetryTick]);
 
   // MapLibre & Marker / Animation Refs
   const markersRef = useRef({});
@@ -1701,6 +1781,7 @@ export default function App() {
             knownVehiclesRef.current[v.id] = { ...v, _lastSeen: nowTime };
             updatesMap[v.id] = v;
           });
+          setTelemetryTick(t => (t + 1) % 1000);
 
           // Filter map markers strictly by active selectedRoutes and category chips (Bus/Tram)
           const activeRids = new Set();
@@ -2188,6 +2269,7 @@ export default function App() {
 
     if (!selectedVehicle) {
       setNextStationInfo(null);
+      setRouteNodesCoordinates([]);
       if (map.current.getLayer("route-nodes-layer")) {
         map.current.setLayoutProperty("route-nodes-layer", "visibility", "none");
       }
@@ -2217,6 +2299,7 @@ export default function App() {
         const source = map.current.getSource("route-nodes");
         if (source) {
           if (dataNodes.nodes && dataNodes.nodes.length > 0) {
+            setRouteNodesCoordinates(dataNodes.nodes);
             source.setData({
               type: "Feature",
               properties: {},
@@ -2229,6 +2312,7 @@ export default function App() {
               map.current.setLayoutProperty("route-nodes-layer", "visibility", "visible");
             }
           } else {
+            setRouteNodesCoordinates([]);
             source.setData({ type: "FeatureCollection", features: [] });
           }
         }
@@ -2559,6 +2643,7 @@ export default function App() {
                   {selectedVehicle.gosNum && (
                     <span className="hud-gos-num">{formatGosNum(selectedVehicle.gosNum)}</span>
                   )}
+                  <RouteProgressRing percent={routeProgressPercent} />
                 </div>
 
                 <div className="hud-actions">
@@ -2592,9 +2677,15 @@ export default function App() {
                   <span className="hud-next-label">
                     {nextStationInfo.isTerminal ? 'Статус:' : 'След. ост:'}
                   </span>
-                  <span className="hud-next-name" title={nextStationInfo.name}>
-                    {nextStationInfo.name}
-                  </span>
+                  <div className="hud-next-name-wrapper" title={nextStationInfo.name}>
+                    <span
+                      className={`hud-next-name ${
+                        nextStationInfo.name && nextStationInfo.name.length > 14 ? 'running-text' : ''
+                      }`}
+                    >
+                      {nextStationInfo.name}
+                    </span>
+                  </div>
                   {nextStationInfo.time != null && nextStationInfo.time !== "" && (
                     <span className={`hud-next-time ${parseInt(nextStationInfo.time, 10) <= 0 ? 'arriving' : ''}`}>
                       {parseInt(nextStationInfo.time, 10) <= 0 ? 'прибывает' : `~${nextStationInfo.time} мин`}
@@ -2895,6 +2986,25 @@ export default function App() {
                         const isRouteLong = (item.route || "").length > 4;
                         const isNextStLong = (itemNextStation || "").length > 13;
 
+                        const itemProgress = (() => {
+                          if (isSelected && typeof routeProgressPercent === "number") {
+                            return routeProgressPercent;
+                          }
+                          const target = live || item;
+                          if (!target) return null;
+                          if (Array.isArray(target.animPoints) && target.animPoints.length > 0) {
+                            const p = target.animPoints[0]?.percent;
+                            if (typeof p === "number" && !isNaN(p) && p >= 0) {
+                              const normalized = p <= 1.0 ? p * 100 : p;
+                              return Math.min(100, Math.max(0, Math.round(normalized)));
+                            }
+                          }
+                          if (typeof target.progress === "number" && !isNaN(target.progress)) {
+                            return Math.min(100, Math.max(0, Math.round(target.progress)));
+                          }
+                          return null;
+                        })();
+
                         return (
                           <div
                             key={item.id}
@@ -2964,6 +3074,9 @@ export default function App() {
                                     className={`status-dot ${isLiveOnMap ? 'live' : 'offline'}`}
                                     title={isLiveOnMap ? "На линии" : "Не на карте (нажмите для включения)"}
                                   />
+                                  {itemProgress != null && (
+                                    <RouteProgressRing percent={itemProgress} />
+                                  )}
                                 </div>
 
                                 {itemNextStation && (
