@@ -257,12 +257,7 @@ const style = {
 
 let activeStationPopup = null;
 
-function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = false, onToggleFavorite = null) {
-  const isBus = props.type === "bus";
-  const typeText = isBus ? "Автобус / Маршрутка" : "Трамвай";
-  const icon = isBus ? "directions_bus" : "tram";
-  const typeClass = isBus ? "bus" : "tram";
-
+function closeAllStationPopups() {
   if (activeStationPopup) {
     try {
       activeStationPopup.remove();
@@ -270,6 +265,15 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
     activeStationPopup = null;
   }
   document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
+}
+
+function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = false, onToggleFavorite = null) {
+  const isBus = props.type === "bus";
+  const typeText = isBus ? "Автобус / Маршрутка" : "Трамвай";
+  const icon = isBus ? "directions_bus" : "tram";
+  const typeClass = isBus ? "bus" : "tram";
+
+  closeAllStationPopups();
   document.querySelectorAll('.forecast-marker').forEach(p => p.remove());
 
   const safeName = escapeHtml(props.name || "Остановка");
@@ -1536,9 +1540,9 @@ export default function App() {
             isFollowingVehicleRef.current = false;
             setIsFollowingVehicle(false);
           }
-          isInitialFlyingRef.current = true;
           setActiveTab(0);
           if (map.current) {
+            isInitialFlyingRef.current = true;
             const isDesktop = window.innerWidth >= 768;
             const padding = isDesktop
               ? { left: 80, right: 20, top: 180, bottom: 60 }
@@ -1750,13 +1754,7 @@ export default function App() {
         setActiveTab(0);
 
         // Close all MapLibre popups
-        if (activeStationPopup) {
-          try {
-            activeStationPopup.remove();
-          } catch { }
-          activeStationPopup = null;
-        }
-        document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
+        closeAllStationPopups();
       });
 
       updateSourceData();
@@ -1876,13 +1874,7 @@ export default function App() {
   // Update map padding based on activeTab (for desktop side panel and mobile drawer/pill)
   useEffect(() => {
     if (activeTab !== 0) {
-      if (activeStationPopup) {
-        try {
-          activeStationPopup.remove();
-        } catch { }
-        activeStationPopup = null;
-      }
-      document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
+      closeAllStationPopups();
     }
 
     if (!map.current) return;
@@ -2311,13 +2303,7 @@ export default function App() {
                   }
                 }
 
-                if (activeStationPopup) {
-                  try {
-                    activeStationPopup.remove();
-                  } catch { }
-                  activeStationPopup = null;
-                }
-                document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
+                closeAllStationPopups();
 
                 setSelectedVehicle(prev => {
                   if (prev && prev.id === v.id) return null;
@@ -2477,13 +2463,7 @@ export default function App() {
 
     // Only auto-fly and reset follow state if a NEW vehicle was selected during active interaction
     if (isNewSelection) {
-      if (activeStationPopup) {
-        try {
-          activeStationPopup.remove();
-        } catch { }
-        activeStationPopup = null;
-      }
-      document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
+      closeAllStationPopups();
 
       hasInitialCenteredRef.current = true;
       setIsFollowingVehicle(true);
@@ -2827,10 +2807,10 @@ export default function App() {
       setIsFollowingVehicle(false);
     }
 
-    isInitialFlyingRef.current = true;
     setActiveTab(0);
 
     if (map.current) {
+      isInitialFlyingRef.current = true;
       const coords = feat.geometry.coordinates;
       const isDesktop = window.innerWidth >= 768;
       const padding = isDesktop
@@ -3355,13 +3335,11 @@ export default function App() {
 
                               const firstRid = routeItem ? String(routeItem.id).split(",")[0].trim() : (targetVeh.rid || item.rid || null);
 
-                              if (activeStationPopup) {
-                                try {
-                                  activeStationPopup.remove();
-                                } catch { }
-                                activeStationPopup = null;
+                              closeAllStationPopups();
+
+                              if (map.current) {
+                                isInitialFlyingRef.current = true;
                               }
-                              document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
 
                               setSelectedVehicle({
                                 rid: targetVeh.rid || firstRid,
