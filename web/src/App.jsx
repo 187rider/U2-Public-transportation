@@ -590,7 +590,11 @@ export default function App() {
   const selectedRouteStationsRef = useRef(null);
   const knownVehiclesRef = useRef({});
   const lastResumeTimeRef = useRef(Date.now());
+  const lastWheelTimeRef = useRef(0);
+  const lastVehicleSelectionTimeRef = useRef(0);
+  const lastTabCloseTimeRef = useRef(0);
   const isZoomingOrPinchingRef = useRef(false);
+  const isDraggingRef = useRef(false);
   const isProgrammaticMoveRef = useRef(false);
   const lastFollowPillUpdateRef = useRef(0);
   const missedPollsRef = useRef(0);
@@ -1363,10 +1367,12 @@ export default function App() {
       const mapBearing = map.current ? map.current.getBearing() : 0;
       for (const id in anims) {
         const t = anims[id];
-        if (t.idle && !t._forceRender) continue;
+        const isSelected = selectedVehicleRef.current?.id === id;
+        if (t.idle && !t._forceRender && !isSelected) continue;
         t._forceRender = false;
 
-        if (t.currentLng >= west && t.currentLng <= east && t.currentLat >= south && t.currentLat <= north) {
+        const inView = (t.currentLng >= west && t.currentLng <= east && t.currentLat >= south && t.currentLat <= north);
+        if (inView || isSelected) {
           t.marker.setLngLat([t.currentLng, t.currentLat]);
 
           // Adjust visual rotation by subtracting map bearing so arrows point strictly in real physical road direction
@@ -1387,17 +1393,16 @@ export default function App() {
 
       // Smooth Camera Tracking for Selected Vehicle
       if (selectedVehicleRef.current && isFollowingVehicleRef.current && !isInitialFlyingRef.current && map.current) {
-        // Do not interrupt while user is actively pinch-zooming, scroll-zooming, or rotating
-        const isInteracting = isZoomingOrPinchingRef.current || map.current.isZooming() || map.current.isRotating();
+        // Do not interrupt while user is actively dragging, pinch-zooming, scroll-zooming, or rotating
+        const isInteracting = isZoomingOrPinchingRef.current || isDraggingRef.current || map.current.isZooming() || map.current.isRotating();
         if (!isInteracting) {
           const selId = selectedVehicleRef.current.id;
           const selMarker = vehicleMarkersRef.current[selId];
           const selAnim = anims[selId];
           const live = knownVehiclesRef.current[selId];
 
-          const mPos = selMarker ? selMarker.getLngLat() : null;
-          const cLng = mPos ? mPos.lng : (selAnim ? selAnim.currentLng : (live?.lng || selectedVehicleRef.current.lng));
-          const cLat = mPos ? mPos.lat : (selAnim ? selAnim.currentLat : (live?.lat || selectedVehicleRef.current.lat));
+          const cLng = selAnim ? selAnim.currentLng : (live?.lng || (selMarker ? selMarker.getLngLat().lng : selectedVehicleRef.current.lng));
+          const cLat = selAnim ? selAnim.currentLat : (live?.lat || (selMarker ? selMarker.getLngLat().lat : selectedVehicleRef.current.lat));
 
           if (cLng != null && cLat != null) {
             const curCenter = map.current.getCenter();
@@ -1423,7 +1428,7 @@ export default function App() {
         }
       }
 
-      if (hasActive) {
+      if (hasActive || (selectedVehicleRef.current && isFollowingVehicleRef.current)) {
         globalAnimationId.current = requestAnimationFrame(animate);
       } else {
         globalAnimationId.current = null;
@@ -1820,13 +1825,10 @@ export default function App() {
         isZoomingOrPinchingRef.current = false;
       });
       map.current.on("dragstart", () => {
-        if (document.hidden || Date.now() - lastResumeTimeRef.current < 1000 || isZoomingOrPinchingRef.current) {
-          return;
-        }
-        if (isFollowingVehicleRef.current) {
-          isFollowingVehicleRef.current = false;
-          setIsFollowingVehicle(false);
-        }
+        isDraggingRef.current = true;
+      });
+      map.current.on("dragend", () => {
+        isDraggingRef.current = false;
       });
       map.current.on("rotate", () => {
         for (const id in activeAnimationsRef.current) {
@@ -1841,6 +1843,9 @@ export default function App() {
         startGlobalAnimation();
       });
 
+      const onWheel = () => {
+        lastWheelTimeRef.current = Date.now();
+      };
       const onTouchStart = (e) => {
         if (e.touches && e.touches.length >= 2) {
           isZoomingOrPinchingRef.current = true;
@@ -1854,6 +1859,7 @@ export default function App() {
         }, 120);
       };
       const containerEl = mapContainer.current;
+      containerEl?.addEventListener("wheel", onWheel, { passive: true });
       containerEl?.addEventListener("touchstart", onTouchStart, { passive: true });
       containerEl?.addEventListener("touchend", onTouchEnd, { passive: true });
 
@@ -1866,6 +1872,10 @@ export default function App() {
     });
 
     return () => {
+      const containerEl = mapContainer.current;
+      containerEl?.removeEventListener("wheel", onWheel);
+      containerEl?.removeEventListener("touchstart", onTouchStart);
+      containerEl?.removeEventListener("touchend", onTouchEnd);
       map.current?.remove();
       map.current = null;
     };
@@ -2152,8 +2162,8 @@ export default function App() {
                 anims[v.id] = t;
               }
 
-              // Handle Teleportation / Bad GPS fix (if jump is too big > 1km, reset)
-              if (Math.abs(v.lat - t.currentLat) > 0.01 || Math.abs(v.lng - t.currentLng) > 0.01) {
+              // Handle Teleportation / Background Resume / Bad GPS fix (if jump is > 100m or full poll reset)
+              if (isFullPoll || Math.abs(v.lat - t.currentLat) > 0.001 || Math.abs(v.lng - t.currentLng) > 0.001) {
                 t.animationPoints = [];
                 t.timeRemaining = 0;
                 t.directionTimeRemaining = 0;
@@ -2161,6 +2171,7 @@ export default function App() {
                 t.currentLng = v.lng;
                 t.currentDirection = rotation;
                 t.lastAddedPoint = null;
+                marker.setLngLat([v.lng, v.lat]);
               }
 
               if (v.animPoints && v.animPoints.length > 0) {
@@ -2304,6 +2315,7 @@ export default function App() {
                 }
 
                 closeAllStationPopups();
+                lastVehicleSelectionTimeRef.current = Date.now();
 
                 setSelectedVehicle(prev => {
                   if (prev && prev.id === v.id) return null;
@@ -2369,17 +2381,22 @@ export default function App() {
             }
           });
 
-          // Instant camera centering on initial poll resolution for restored vehicle session
-          if (!hasInitialCenteredRef.current && selectedVehicleRef.current && isFollowingVehicleRef.current && map.current) {
+          // Camera centering on initial poll resolution or when resuming from background
+          if (selectedVehicleRef.current && isFollowingVehicleRef.current && map.current) {
             const selId = selectedVehicleRef.current.id;
-            const live = knownVehiclesRef.current[selId];
+            const live = updatesMap[selId] || knownVehiclesRef.current[selId];
             if (live && live.lat && live.lng) {
-              hasInitialCenteredRef.current = true;
-              map.current.easeTo({
-                center: [live.lng, live.lat],
-                zoom: Math.max(map.current.getZoom(), 15.5),
-                duration: 600
-              });
+              const curCenter = map.current.getCenter();
+              const dLng = Math.abs(curCenter.lng - live.lng);
+              const dLat = Math.abs(curCenter.lat - live.lat);
+              if (!hasInitialCenteredRef.current || dLng > 0.0001 || dLat > 0.0001) {
+                hasInitialCenteredRef.current = true;
+                map.current.easeTo({
+                  center: [live.lng, live.lat],
+                  zoom: Math.max(map.current.getZoom(), 15.5),
+                  duration: 500
+                });
+              }
             }
           }
         }
@@ -2401,7 +2418,7 @@ export default function App() {
     const handleVisibilityChange = () => {
       lastResumeTimeRef.current = Date.now();
       if (document.hidden || !isActive) return;
-      if (Date.now() - lastVehicleKickTime < 2000) return; // Dedupes visibilitychange + focus + pageshow burst
+      if (Date.now() - lastVehicleKickTime < 1000) return; // Dedupes visibilitychange + focus + pageshow burst
       lastVehicleKickTime = Date.now();
 
       if (fetchVehiclesTimeoutRef.current) {
@@ -2411,15 +2428,14 @@ export default function App() {
       fetchVehicles();
       startGlobalAnimation();
 
-      // Restore camera position if vehicle is selected and following is enabled
-      if (selectedVehicleRef.current && isFollowingVehicleRef.current) {
-        const id = selectedVehicleRef.current.id;
-        const live = knownVehiclesRef.current[id] || selectedVehicleRef.current;
-        if (map.current && live && live.lat && live.lng) {
-          map.current.easeTo({
-            center: [live.lng, live.lat],
-            duration: 400
-          });
+      if (selectedVehicleRef.current && isFollowingVehicleRef.current && map.current) {
+        const selId = selectedVehicleRef.current.id;
+        const live = knownVehiclesRef.current[selId] || selectedVehicleRef.current;
+        const anim = activeAnimationsRef.current[selId];
+        const tLng = anim ? anim.currentLng : live?.lng;
+        const tLat = anim ? anim.currentLat : live?.lat;
+        if (tLng != null && tLat != null) {
+          map.current.jumpTo({ center: [tLng, tLat] });
         }
       }
     };
@@ -2469,6 +2485,7 @@ export default function App() {
       setIsFollowingVehicle(true);
       isFollowingVehicleRef.current = true;
       isInitialFlyingRef.current = true;
+      lastVehicleSelectionTimeRef.current = Date.now();
 
       const marker = vehicleMarkersRef.current[selectedVehicle.id];
       const mPos = marker ? marker.getLngLat() : null;
@@ -3340,6 +3357,11 @@ export default function App() {
                               if (map.current) {
                                 isInitialFlyingRef.current = true;
                               }
+
+                              lastVehicleSelectionTimeRef.current = Date.now();
+                              lastTabCloseTimeRef.current = Date.now();
+                              setIsFollowingVehicle(true);
+                              isFollowingVehicleRef.current = true;
 
                               setSelectedVehicle({
                                 rid: targetVeh.rid || firstRid,
