@@ -1531,12 +1531,26 @@ export default function App() {
 
         inner.onclick = (e) => {
           e.stopPropagation();
+          setSelectedVehicle(null);
+          if (isFollowingVehicleRef.current) {
+            isFollowingVehicleRef.current = false;
+            setIsFollowingVehicle(false);
+          }
+          isInitialFlyingRef.current = true;
+          setActiveTab(0);
           if (map.current) {
+            const isDesktop = window.innerWidth >= 768;
+            const padding = isDesktop
+              ? { left: 80, right: 20, top: 180, bottom: 60 }
+              : { left: 20, right: 20, top: 200, bottom: 120 };
             map.current.easeTo({
               center: coords,
-              padding: { top: 220, bottom: 90, left: 20, right: 20 },
+              padding,
               duration: 500
             });
+            setTimeout(() => {
+              isInitialFlyingRef.current = false;
+            }, 550);
           }
           showStationPopup(map.current, coords, props, routesRef.current, favoritesRef.current.has(props.id), toggleFavorite);
         };
@@ -1861,7 +1875,18 @@ export default function App() {
 
   // Update map padding based on activeTab (for desktop side panel and mobile drawer/pill)
   useEffect(() => {
+    if (activeTab !== 0) {
+      if (activeStationPopup) {
+        try {
+          activeStationPopup.remove();
+        } catch { }
+        activeStationPopup = null;
+      }
+      document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
+    }
+
     if (!map.current) return;
+    if (isInitialFlyingRef.current) return;
 
     // Check if we are on desktop (width >= 768px)
     const isDesktop = window.innerWidth >= 768;
@@ -2286,6 +2311,14 @@ export default function App() {
                   }
                 }
 
+                if (activeStationPopup) {
+                  try {
+                    activeStationPopup.remove();
+                  } catch { }
+                  activeStationPopup = null;
+                }
+                document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
+
                 setSelectedVehicle(prev => {
                   if (prev && prev.id === v.id) return null;
                   return {
@@ -2444,6 +2477,14 @@ export default function App() {
 
     // Only auto-fly and reset follow state if a NEW vehicle was selected during active interaction
     if (isNewSelection) {
+      if (activeStationPopup) {
+        try {
+          activeStationPopup.remove();
+        } catch { }
+        activeStationPopup = null;
+      }
+      document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
+
       hasInitialCenteredRef.current = true;
       setIsFollowingVehicle(true);
       isFollowingVehicleRef.current = true;
@@ -2779,15 +2820,33 @@ export default function App() {
 
   const handleSelectStation = (feat) => {
     setSearchQuery(feat.properties.name);
+    setSelectedVehicle(null);
+
+    if (isFollowingVehicleRef.current) {
+      isFollowingVehicleRef.current = false;
+      setIsFollowingVehicle(false);
+    }
+
+    isInitialFlyingRef.current = true;
+    setActiveTab(0);
 
     if (map.current) {
       const coords = feat.geometry.coordinates;
+      const isDesktop = window.innerWidth >= 768;
+      const padding = isDesktop
+        ? { left: 80, right: 20, top: 180, bottom: 60 }
+        : { left: 20, right: 20, top: 200, bottom: 120 };
+
       map.current.flyTo({
         center: coords,
-        zoom: 16,
-        duration: 1000,
-        padding: { top: 220, bottom: 90, left: 20, right: 20 }
+        zoom: 16.5,
+        duration: 800,
+        padding,
+        essential: true
       });
+      setTimeout(() => {
+        isInitialFlyingRef.current = false;
+      }, 850);
       showStationPopup(map.current, coords, feat.properties, routesRef.current, favoritesRef.current.has(feat.properties.id), toggleFavorite);
     }
   };
@@ -3295,6 +3354,14 @@ export default function App() {
                               if (targetType === "minibus" && !showBus) setShowBus(true);
 
                               const firstRid = routeItem ? String(routeItem.id).split(",")[0].trim() : (targetVeh.rid || item.rid || null);
+
+                              if (activeStationPopup) {
+                                try {
+                                  activeStationPopup.remove();
+                                } catch { }
+                                activeStationPopup = null;
+                              }
+                              document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
 
                               setSelectedVehicle({
                                 rid: targetVeh.rid || firstRid,
