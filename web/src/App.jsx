@@ -1097,6 +1097,35 @@ export default function App() {
     });
   }, [stations, showBus, showTram]);
 
+  const sortedVehicleHistory = useMemo(() => {
+    if (!Array.isArray(vehicleHistory) || vehicleHistory.length === 0) return [];
+    const nowTime = Date.now();
+    return [...vehicleHistory].sort((a, b) => {
+      const aPlate = formatGosNum(a.gosNum).toLowerCase();
+      const liveA = knownVehiclesRef.current[a.id] ||
+        Object.values(knownVehiclesRef.current).find(v =>
+          (aPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === aPlate) ||
+          (v.id && a.id && String(v.id) === String(a.id))
+        );
+      const isLiveA = !!liveA && (nowTime - (liveA._lastSeen || 0) < 60000);
+
+      const bPlate = formatGosNum(b.gosNum).toLowerCase();
+      const liveB = knownVehiclesRef.current[b.id] ||
+        Object.values(knownVehiclesRef.current).find(v =>
+          (bPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === bPlate) ||
+          (v.id && b.id && String(v.id) === String(b.id))
+        );
+      const isLiveB = !!liveB && (nowTime - (liveB._lastSeen || 0) < 60000);
+
+      // 1. Online vehicles first, offline vehicles to the bottom
+      if (isLiveA && !isLiveB) return -1;
+      if (!isLiveA && isLiveB) return 1;
+
+      // 2. Tie-break: most recent first
+      return (b.timestamp || 0) - (a.timestamp || 0);
+    });
+  }, [vehicleHistory, telemetryTick, activeTab]);
+
   const toggleRouteGroup = (type) => {
     setExpandedGroups(prev => ({ ...prev, [type]: !prev[type] }));
   };
@@ -3180,7 +3209,7 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="history-list">
-                      {vehicleHistory.map((item) => {
+                      {sortedVehicleHistory.map((item) => {
                         const itemPlate = formatGosNum(item.gosNum).toLowerCase();
                         const live = knownVehiclesRef.current[item.id] ||
                           Object.values(knownVehiclesRef.current).find(v => 
