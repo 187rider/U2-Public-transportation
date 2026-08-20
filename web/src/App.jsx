@@ -468,28 +468,42 @@ export default function App() {
   const [selectedVehicle, setSelectedVehicle] = useState(() => {
     try {
       const saved = localStorage.getItem("pref_selectedVehicle");
-      return saved ? JSON.parse(saved) : null;
+      if (!saved) return null;
+      const parsed = JSON.parse(saved);
+      // Discard restore session if older than 30 minutes
+      if (parsed.savedAt && Date.now() - parsed.savedAt > 1800000) {
+        localStorage.removeItem("pref_selectedVehicle");
+        return null;
+      }
+      return parsed;
     } catch {
       return null;
     }
   });
   const [selectedRouteStations, setSelectedRouteStations] = useState(null);
   const [nextStationInfo, setNextStationInfo] = useState(null);
-  const [isFollowingVehicle, setIsFollowingVehicle] = useState(() => {
+  const initialIsFollowing = (() => {
     try {
       const saved = localStorage.getItem("pref_isFollowingVehicle");
       return saved !== null ? saved === "true" : true;
     } catch {
       return true;
     }
-  });
-  const isFollowingVehicleRef = useRef(true);
+  })();
+  const [isFollowingVehicle, setIsFollowingVehicle] = useState(initialIsFollowing);
+  const isFollowingVehicleRef = useRef(initialIsFollowing);
+  const prevSelectedVehicleIdRef = useRef(selectedVehicle ? selectedVehicle.id : null);
   const isInitialFlyingRef = useRef(false);
   const selectedVehicleRef = useRef(null);
   const selectedRouteStationsRef = useRef(null);
   const knownVehiclesRef = useRef({});
   const lastResumeTimeRef = useRef(Date.now());
   const isZoomingOrPinchingRef = useRef(false);
+  const isProgrammaticMoveRef = useRef(false);
+  const lastFollowPillUpdateRef = useRef(0);
+  const missedPollsRef = useRef(0);
+  const hasInitialCenteredRef = useRef(!selectedVehicle);
+  const debouncedForecastRefreshRef = useRef(null);
 
   // MapLibre & Marker / Animation Refs
   const markersRef = useRef({});
@@ -510,6 +524,9 @@ export default function App() {
 
   useEffect(() => {
     stationsRef.current = stations;
+    if (stations && stations.length > 0 && selectedVehicleRef.current && debouncedForecastRefreshRef.current) {
+      debouncedForecastRefreshRef.current();
+    }
   }, [stations]);
 
   useEffect(() => {
@@ -537,7 +554,8 @@ export default function App() {
   useEffect(() => {
     try {
       if (selectedVehicle) {
-        localStorage.setItem("pref_selectedVehicle", JSON.stringify(selectedVehicle));
+        const toSave = { ...selectedVehicle, savedAt: selectedVehicle.savedAt || Date.now() };
+        localStorage.setItem("pref_selectedVehicle", JSON.stringify(toSave));
       } else {
         localStorage.removeItem("pref_selectedVehicle");
       }
@@ -1031,9 +1049,25 @@ export default function App() {
           const cLat = mPos ? mPos.lat : (selAnim ? selAnim.currentLat : (live?.lat || selectedVehicleRef.current.lat));
 
           if (cLng != null && cLat != null) {
-            map.current.jumpTo({
-              center: [cLng, cLat]
-            });
+            const curCenter = map.current.getCenter();
+            const dLng = Math.abs(curCenter.lng - cLng);
+            const dLat = Math.abs(curCenter.lat - cLat);
+
+            // Skip jumpTo if delta is negligible (< ~0.000003 deg) to prevent redundant rendering when bus idles
+            if (dLng > 0.000003 || dLat > 0.000003) {
+              isProgrammaticMoveRef.current = true;
+              map.current.jumpTo({
+                center: [cLng, cLat]
+              });
+              isProgrammaticMoveRef.current = false;
+            }
+
+            // Coarse periodic refresh so pill markers still update as camera follows vehicle across city
+            const nowTime = performance.now();
+            if (nowTime - lastFollowPillUpdateRef.current > 700) {
+              lastFollowPillUpdateRef.current = nowTime;
+              debouncedUpdateRef.current?.();
+            }
           }
         }
       }
@@ -1397,8 +1431,16 @@ export default function App() {
       debouncedUpdate(true);
 
       // Register map movement handlers to update HTML pill markers
-      map.current.on("move", () => debouncedUpdate(false));
-      map.current.on("moveend", () => debouncedUpdate(true));
+      map.current.on("move", () => {
+        if (!isProgrammaticMoveRef.current) {
+          debouncedUpdate(false);
+        }
+      });
+      map.current.on("moveend", () => {
+        if (!isProgrammaticMoveRef.current) {
+          debouncedUpdate(true);
+        }
+      });
       map.current.on("zoomstart", () => {
         isZoomingOrPinchingRef.current = true;
       });
@@ -1530,16 +1572,20 @@ export default function App() {
     let isActive = true;
     let curk = "0";
     let lastFetchTime = Date.now();
+    let isFetchingVehicles = false;
+    let lastVehicleKickTime = 0;
     const abortCtrl = new AbortController();
 
     const fetchVehicles = async () => {
-      if (!isActive) return;
+      if (!isActive || isFetchingVehicles) return;
 
       // Pause fetching if tab is in the background or phone is locked
       if (document.hidden) {
         fetchVehiclesTimeoutRef.current = setTimeout(fetchVehicles, 15000);
         return;
       }
+
+      isFetchingVehicles = true;
 
       // If we just woke up from being locked for >30 seconds, force a full refresh
       const now = Date.now();
@@ -1557,6 +1603,7 @@ export default function App() {
           globalAnimationId.current = null;
         }
         curk = "0";
+        isFetchingVehicles = false;
         fetchVehiclesTimeoutRef.current = setTimeout(fetchVehicles, 10000);
         return;
       }
@@ -1571,6 +1618,7 @@ export default function App() {
           const nowTime = Date.now();
           const incomingIds = new Set();
           const updatesMap = {};
+          const isFullPoll = !data.next_curk || data.next_curk === "0" || curk === "0";
 
           data.vehicles.forEach(v => {
             incomingIds.add(v.id);
@@ -1578,8 +1626,22 @@ export default function App() {
             updatesMap[v.id] = v;
           });
 
+          // Validate selected vehicle - auto-deselect if off-shift after 3 missed polls
+          if (selectedVehicleRef.current) {
+            const selId = selectedVehicleRef.current.id;
+            const lastSeen = knownVehiclesRef.current[selId]?._lastSeen || 0;
+            if ((isFullPoll && !incomingIds.has(selId)) || (nowTime - lastSeen > 180000)) {
+              missedPollsRef.current++;
+              if (missedPollsRef.current >= 3) {
+                setSelectedVehicle(null);
+                missedPollsRef.current = 0;
+              }
+            } else if (incomingIds.has(selId)) {
+              missedPollsRef.current = 0;
+            }
+          }
+
           // Prune only truly stale markers (not reported for > 3 minutes)
-          // NEVER reset selectedVehicle on poll changes or sleep/resume
           Object.keys(vehicleMarkersRef.current).forEach(id => {
             const lastSeen = knownVehiclesRef.current[id]?._lastSeen || 0;
             if (nowTime - lastSeen > 180000 && !incomingIds.has(id) && selectedVehicleRef.current?.id !== id) {
@@ -1842,38 +1904,58 @@ export default function App() {
               startGlobalAnimation();
             }
           });
+
+          // Instant camera centering on initial poll resolution for restored vehicle session
+          if (!hasInitialCenteredRef.current && selectedVehicleRef.current && isFollowingVehicleRef.current && map.current) {
+            const selId = selectedVehicleRef.current.id;
+            const live = knownVehiclesRef.current[selId];
+            if (live && live.lat && live.lng) {
+              hasInitialCenteredRef.current = true;
+              map.current.easeTo({
+                center: [live.lng, live.lat],
+                zoom: Math.max(map.current.getZoom(), 15.5),
+                duration: 600
+              });
+            }
+          }
         }
       } catch (err) {
         if (err.name !== 'AbortError') {
           console.error("Failed to fetch live vehicles", err);
         }
-      }
-
-      if (isActive) {
-        fetchVehiclesTimeoutRef.current = setTimeout(fetchVehicles, 10000);
+      } finally {
+        isFetchingVehicles = false;
+        if (isActive) {
+          if (fetchVehiclesTimeoutRef.current) {
+            clearTimeout(fetchVehiclesTimeoutRef.current);
+          }
+          fetchVehiclesTimeoutRef.current = setTimeout(fetchVehicles, 10000);
+        }
       }
     };
 
     const handleVisibilityChange = () => {
       lastResumeTimeRef.current = Date.now();
-      if (!document.hidden && isActive) {
-        if (fetchVehiclesTimeoutRef.current) {
-          clearTimeout(fetchVehiclesTimeoutRef.current);
-        }
-        curk = "0";
-        fetchVehicles();
-        startGlobalAnimation();
+      if (document.hidden || !isActive) return;
+      if (Date.now() - lastVehicleKickTime < 2000) return; // Dedupes visibilitychange + focus + pageshow burst
+      lastVehicleKickTime = Date.now();
 
-        // Restore camera position if vehicle is selected and following is enabled
-        if (selectedVehicleRef.current && isFollowingVehicleRef.current) {
-          const id = selectedVehicleRef.current.id;
-          const live = knownVehiclesRef.current[id] || selectedVehicleRef.current;
-          if (map.current && live && live.lat && live.lng) {
-            map.current.easeTo({
-              center: [live.lng, live.lat],
-              duration: 400
-            });
-          }
+      if (fetchVehiclesTimeoutRef.current) {
+        clearTimeout(fetchVehiclesTimeoutRef.current);
+      }
+      curk = "0";
+      fetchVehicles();
+      startGlobalAnimation();
+
+      // Restore camera position if vehicle is selected and following is enabled
+      if (selectedVehicleRef.current && isFollowingVehicleRef.current) {
+        const id = selectedVehicleRef.current.id;
+        const live = knownVehiclesRef.current[id] || selectedVehicleRef.current;
+        if (map.current && live && live.lat && live.lng) {
+          map.current.easeTo({
+            center: [live.lng, live.lat],
+            duration: 400
+          });
         }
       }
     };
@@ -1900,7 +1982,59 @@ export default function App() {
     };
   }, [selectedRoutes]);
 
-  // Route Nodes and Forecasts fetching
+  // Selected Vehicle Camera Centering & Follow Activation (Runs only on selection change)
+  useEffect(() => {
+    if (!map.current) return;
+    const currentId = selectedVehicle?.id;
+    const isNewSelection = currentId && currentId !== prevSelectedVehicleIdRef.current;
+    prevSelectedVehicleIdRef.current = currentId;
+
+    if (!selectedVehicle) {
+      setIsFollowingVehicle(false);
+      isFollowingVehicleRef.current = false;
+      isInitialFlyingRef.current = false;
+      return;
+    }
+
+    // Only auto-fly and reset follow state if a NEW vehicle was selected during active interaction
+    if (isNewSelection) {
+      hasInitialCenteredRef.current = true;
+      setIsFollowingVehicle(true);
+      isFollowingVehicleRef.current = true;
+      isInitialFlyingRef.current = true;
+
+      const marker = vehicleMarkersRef.current[selectedVehicle.id];
+      const mPos = marker ? marker.getLngLat() : null;
+      const anim = activeAnimationsRef.current[selectedVehicle.id];
+      const liveVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
+      const targetLng = mPos ? mPos.lng : (anim ? anim.currentLng : (liveVeh.lng || selectedVehicle.lng));
+      const targetLat = mPos ? mPos.lat : (anim ? anim.currentLat : (liveVeh.lat || selectedVehicle.lat));
+
+      if (map.current && targetLng != null && targetLat != null) {
+        map.current.flyTo({
+          center: [targetLng, targetLat],
+          zoom: Math.max(map.current.getZoom(), 15.5),
+          duration: 800,
+          essential: true
+        });
+        setTimeout(() => {
+          isInitialFlyingRef.current = false;
+        }, 850);
+      }
+    }
+  }, [selectedVehicle?.id]);
+
+  const stationsByIdRef = useRef(stationsById);
+  useEffect(() => {
+    stationsByIdRef.current = stationsById;
+  }, [stationsById]);
+
+  const isNearTerminalStopRef = useRef(isNearTerminalStop);
+  useEffect(() => {
+    isNearTerminalStopRef.current = isNearTerminalStop;
+  }, [isNearTerminalStop]);
+
+  // Route Nodes and Forecasts fetching (Decoupled from camera flyTo and stationsById deps)
   useEffect(() => {
     if (!map.current) return;
 
@@ -1910,9 +2044,6 @@ export default function App() {
 
     if (!selectedVehicle) {
       setNextStationInfo(null);
-      setIsFollowingVehicle(false);
-      isFollowingVehicleRef.current = false;
-      isInitialFlyingRef.current = false;
       if (map.current.getLayer("route-nodes-layer")) {
         map.current.setLayoutProperty("route-nodes-layer", "visibility", "none");
       }
@@ -1922,30 +2053,6 @@ export default function App() {
         source.setData({ type: "FeatureCollection", features: [] });
       }
       return;
-    }
-
-    // Vehicle selected: activate camera tracking and smoothly fly to vehicle position
-    setIsFollowingVehicle(true);
-    isFollowingVehicleRef.current = true;
-    isInitialFlyingRef.current = true;
-
-    const marker = vehicleMarkersRef.current[selectedVehicle.id];
-    const mPos = marker ? marker.getLngLat() : null;
-    const anim = activeAnimationsRef.current[selectedVehicle.id];
-    const liveVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
-    const targetLng = mPos ? mPos.lng : (anim ? anim.currentLng : (liveVeh.lng || selectedVehicle.lng));
-    const targetLat = mPos ? mPos.lat : (anim ? anim.currentLat : (liveVeh.lat || selectedVehicle.lat));
-
-    if (map.current && targetLng != null && targetLat != null) {
-      map.current.flyTo({
-        center: [targetLng, targetLat],
-        zoom: Math.max(map.current.getZoom(), 15.5),
-        duration: 800,
-        essential: true
-      });
-      setTimeout(() => {
-        isInitialFlyingRef.current = false;
-      }, 850);
     }
 
     // Immediately clear old route stations to prevent stale data flashing
@@ -2005,8 +2112,12 @@ export default function App() {
       }
     };
 
+    let isFetchingForecasts = false;
+    let lastForecastKickTime = 0;
+
     const fetchForecasts = async () => {
-      if (!isActive) return;
+      if (!isActive || isFetchingForecasts) return;
+      isFetchingForecasts = true;
       try {
         // Fetch and draw station forecasts
         const resForecasts = await apiFetch(`/api/vehicle_forecasts?vehid=${encodeURIComponent(selectedVehicle.id)}`, { signal });
@@ -2033,7 +2144,7 @@ export default function App() {
 
           if (uniqueForecasts.length > 0) {
             const nextF = uniqueForecasts[0];
-            const nextSt = stationsById.get(nextF.stid);
+            const nextSt = stationsByIdRef.current.get(nextF.stid);
             if (nextSt) {
               setNextStationInfo({
                 name: nextSt.properties?.name || "Остановка",
@@ -2044,7 +2155,7 @@ export default function App() {
           }
 
           uniqueForecasts.forEach(f => {
-            const st = stationsById.get(f.stid);
+            const st = stationsByIdRef.current.get(f.stid);
             if (st) {
               const coords = st.geometry.coordinates;
               const el = document.createElement("div");
@@ -2100,7 +2211,7 @@ export default function App() {
         } else {
           // If no forward forecasts, check if vehicle is actually at terminal stop (within 100m)
           const currentVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
-          if (currentVeh && currentVeh.lat && currentVeh.lng && isNearTerminalStop(currentVeh)) {
+          if (currentVeh && currentVeh.lat && currentVeh.lng && isNearTerminalStopRef.current(currentVeh)) {
             setNextStationInfo({
               name: "Конечная (ожидает)",
               time: null,
@@ -2126,21 +2237,25 @@ export default function App() {
       } catch (err) {
         if (err.name === 'AbortError') return;
         console.error("Failed to fetch forecasts:", err);
-      }
-
-      if (isActive) {
-        forecastTimeout = setTimeout(fetchForecasts, 10000);
+      } finally {
+        isFetchingForecasts = false;
+        if (isActive) {
+          if (forecastTimeout) clearTimeout(forecastTimeout);
+          forecastTimeout = setTimeout(fetchForecasts, 10000);
+        }
       }
     };
 
     const handleForecastVisibility = () => {
-      if (!document.hidden && isActive) {
-        if (forecastTimeout) clearTimeout(forecastTimeout);
-        fetchForecasts();
-      }
+      if (document.hidden || !isActive) return;
+      if (Date.now() - lastForecastKickTime < 2000) return; // Dedupes visibilitychange burst
+      lastForecastKickTime = Date.now();
+      if (forecastTimeout) clearTimeout(forecastTimeout);
+      fetchForecasts();
     };
 
     document.addEventListener("visibilitychange", handleForecastVisibility);
+    debouncedForecastRefreshRef.current = fetchForecasts;
 
     fetchNodes();
     fetchRouteStations();
@@ -2148,11 +2263,12 @@ export default function App() {
 
     return () => {
       isActive = false;
+      debouncedForecastRefreshRef.current = null;
       document.removeEventListener("visibilitychange", handleForecastVisibility);
       abortController.abort();
       if (forecastTimeout) clearTimeout(forecastTimeout);
     };
-  }, [selectedVehicle, stationsById, isNearTerminalStop]);
+  }, [selectedVehicle?.id, selectedVehicle?.rid]);
 
   // Optimized Search Filter using pre-indexed search tokens
   const searchResults = useMemo(() => {
@@ -2294,9 +2410,9 @@ export default function App() {
                 <span className="hud-next-name" title={nextStationInfo.name}>
                   {nextStationInfo.name}
                 </span>
-                {nextStationInfo.time && (
-                  <span className="hud-next-time">
-                    ~{nextStationInfo.time} мин
+                {nextStationInfo.time != null && nextStationInfo.time !== "" && (
+                  <span className={`hud-next-time ${parseInt(nextStationInfo.time, 10) <= 0 ? 'arriving' : ''}`}>
+                    {parseInt(nextStationInfo.time, 10) <= 0 ? 'прибывает' : `~${nextStationInfo.time} мин`}
                   </span>
                 )}
               </div>

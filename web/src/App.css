@@ -1197,4 +1197,10 @@ body {
   flex-shrink: 0;
 }
 
+.hud-next-time.arriving {
+  background: #ecfdf5;
+  color: #059669;
+  border-color: #a7f3d0;
+}
+
 
