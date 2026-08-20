@@ -475,7 +475,14 @@ export default function App() {
   });
   const [selectedRouteStations, setSelectedRouteStations] = useState(null);
   const [nextStationInfo, setNextStationInfo] = useState(null);
-  const [isFollowingVehicle, setIsFollowingVehicle] = useState(true);
+  const [isFollowingVehicle, setIsFollowingVehicle] = useState(() => {
+    try {
+      const saved = localStorage.getItem("pref_isFollowingVehicle");
+      return saved !== null ? saved === "true" : true;
+    } catch {
+      return true;
+    }
+  });
   const isFollowingVehicleRef = useRef(true);
   const isInitialFlyingRef = useRef(false);
   const selectedVehicleRef = useRef(null);
@@ -519,6 +526,13 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("pref_selectedRoutes", JSON.stringify(Array.from(selectedRoutes)));
   }, [selectedRoutes]);
+
+  useEffect(() => {
+    isFollowingVehicleRef.current = isFollowingVehicle;
+    try {
+      localStorage.setItem("pref_isFollowingVehicle", isFollowingVehicle);
+    } catch {}
+  }, [isFollowingVehicle]);
 
   useEffect(() => {
     try {
@@ -1405,6 +1419,9 @@ export default function App() {
         isZoomingOrPinchingRef.current = false;
       });
       map.current.on("dragstart", () => {
+        if (document.hidden || Date.now() - lastResumeTimeRef.current < 1000 || isZoomingOrPinchingRef.current) {
+          return;
+        }
         if (isFollowingVehicleRef.current) {
           isFollowingVehicleRef.current = false;
           setIsFollowingVehicle(false);
