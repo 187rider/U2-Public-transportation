@@ -1035,6 +1035,7 @@ body {
   max-width: calc(100vw - 32px);
   width: auto;
   min-width: 280px;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes hudSlideDown {
@@ -1295,6 +1296,52 @@ body {
   background: #ecfdf5;
   color: #059669;
   border-color: #a7f3d0;
+}
+
+/* Compact 1-line Top Pill when any bottom drawer tab is open */
+.selected-vehicle-hud.compact {
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  padding: 4px 8px;
+  gap: 0;
+  border-radius: 20px;
+  min-width: auto;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.selected-vehicle-hud.compact .hud-next-station-row {
+  display: none;
+}
+
+.selected-vehicle-hud.compact .hud-top-row {
+  gap: 6px;
+}
+
+.selected-vehicle-hud.compact .hud-badge {
+  padding: 2px 7px;
+  font-size: 12px;
+}
+
+.selected-vehicle-hud.compact .hud-gos-num {
+  display: none;
+}
+
+.selected-vehicle-hud.compact .hud-follow-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+@media (max-width: 600px) {
+  .selected-vehicle-hud.compact .hud-follow-btn span:not(.material-symbols-outlined) {
+    display: none;
+  }
+
+  .selected-vehicle-hud.compact .hud-follow-btn {
+    padding: 3px;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    justify-content: center;
+  }
 }
 
 /* History Drawer Tab Styles */

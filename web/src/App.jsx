@@ -2857,7 +2857,7 @@ export default function App() {
           const currentVehIcon = currentVehType === 'tram' ? 'tram' : (currentVehType === 'minibus' ? 'airport_shuttle' : 'directions_bus');
 
           return (
-            <div className="selected-vehicle-hud">
+            <div className={`selected-vehicle-hud ${activeTab !== 0 ? 'compact' : ''}`}>
               <div className="hud-top-row">
                 <div className="hud-vehicle-info">
                   <div className={`hud-badge hud-badge-${currentVehType}`}>
