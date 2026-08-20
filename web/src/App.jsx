@@ -625,13 +625,18 @@ export default function App() {
     } catch { }
   };
 
+  const prevHistorySavedVehicleIdRef = useRef(null);
   useEffect(() => {
     try {
       if (selectedVehicle) {
         const toSave = { ...selectedVehicle, savedAt: selectedVehicle.savedAt || Date.now() };
         localStorage.setItem("pref_selectedVehicle", JSON.stringify(toSave));
-        addToVehicleHistory(selectedVehicle);
+        if (selectedVehicle.id !== prevHistorySavedVehicleIdRef.current) {
+          prevHistorySavedVehicleIdRef.current = selectedVehicle.id;
+          addToVehicleHistory(selectedVehicle);
+        }
       } else {
+        prevHistorySavedVehicleIdRef.current = null;
         localStorage.removeItem("pref_selectedVehicle");
       }
     } catch { }
@@ -796,42 +801,6 @@ export default function App() {
     return false;
   }, []);
 
-  // Pure time-based pruning without serial network traffic
-  const pruneStaleVehicles = (maxAgeMs = 180000) => {
-    const now = Date.now();
-    const currentSelectedId = selectedVehicleRef.current?.id;
-
-    const ids = Object.keys(knownVehiclesRef.current);
-    for (const id of ids) {
-      const veh = knownVehiclesRef.current[id];
-      if (!veh) continue;
-      const marker = vehicleMarkersRef.current[id];
-      const lastAlive = Math.max(veh._lastSeen || 0, marker?._lastUpdateTime || 0);
-
-      // Only prune if the server has completely stopped reporting it for > 3 minutes
-      if (now - lastAlive > maxAgeMs) {
-        if (marker) {
-          try {
-            marker.remove();
-          } catch { }
-          delete vehicleMarkersRef.current[id];
-        }
-        delete activeAnimationsRef.current[id];
-        delete knownVehiclesRef.current[id];
-      }
-    }
-
-    // Also remove any orphan DOM markers whose vehicle is no longer tracked
-    Object.keys(vehicleMarkersRef.current).forEach(id => {
-      if (!knownVehiclesRef.current[id]) {
-        try {
-          vehicleMarkersRef.current[id].remove();
-        } catch { }
-        delete vehicleMarkersRef.current[id];
-        delete activeAnimationsRef.current[id];
-      }
-    });
-  };
 
   const filteredStations = useMemo(() => {
     return (stations || []).filter(st => {
@@ -1751,6 +1720,9 @@ export default function App() {
           }
 
           const allVeh = data.vehicles.filter(v => {
+            // Keep tracked vehicle visible on map even if route was temporarily toggled
+            if (selectedVehicleRef.current?.id === v.id) return true;
+
             const vType = normalizeVehicleType(v.type, v.route || v.rnum);
             if (vType === "tram" && !showTram) return false;
             if ((vType === "bus" || vType === "minibus") && !showBus) return false;
@@ -1785,14 +1757,23 @@ export default function App() {
             }
           }
 
-          // Prune markers for vehicles no longer active/visible
+          // Prune markers for vehicles no longer active/visible on map
           Object.keys(vehicleMarkersRef.current).forEach(id => {
-            if (!incomingIds.has(id)) {
-              try {
-                vehicleMarkersRef.current[id].remove();
-              } catch { }
-              delete vehicleMarkersRef.current[id];
-              delete activeAnimationsRef.current[id];
+            if (incomingIds.has(id)) return;
+            if (selectedVehicleRef.current?.id === id) return; // never orphan the actively tracked vehicle
+            try {
+              vehicleMarkersRef.current[id].remove();
+            } catch { }
+            delete vehicleMarkersRef.current[id];
+            delete activeAnimationsRef.current[id];
+          });
+
+          // Periodic memory sweep: purge stale off-shift entries from knownVehiclesRef (> 10 minutes)
+          Object.keys(knownVehiclesRef.current).forEach(id => {
+            if (selectedVehicleRef.current?.id === id) return;
+            if (vehicleMarkersRef.current[id]) return;
+            const lastSeen = knownVehiclesRef.current[id]?._lastSeen || 0;
+            if (nowTime - lastSeen > 600000) {
               delete knownVehiclesRef.current[id];
             }
           });
@@ -1805,7 +1786,7 @@ export default function App() {
 
           // Add or update markers
           allVeh.forEach(v => {
-            const vType = v.type === "М" ? "minibus" : (v.type === "Т" || v.type === "Тм" || (v.route || "").startsWith("Т-") ? "tram" : "bus");
+            const vType = normalizeVehicleType(v.type, v.route || v.rnum);
             const rotation = v.dir || 0;
 
             if (vehicleMarkersRef.current[v.id]) {
@@ -1981,19 +1962,39 @@ export default function App() {
 
               wrapper.onclick = (e) => {
                 e.stopPropagation();
-                if (v.rid && v.id) {
-                  const curMarker = vehicleMarkersRef.current[v.id];
-                  const mPos = curMarker ? curMarker.getLngLat() : null;
-                  const anim = activeAnimationsRef.current[v.id];
-                  const live = knownVehiclesRef.current[v.id] || v;
-                  const curLat = mPos ? mPos.lat : (anim ? anim.currentLat : (live.lat || v.lat));
-                  const curLng = mPos ? mPos.lng : (anim ? anim.currentLng : (live.lng || v.lng));
+                if (!v.id) return;
 
-                  setSelectedVehicle(prev => {
-                    if (prev && prev.id === v.id) return null;
-                    return { rid: v.rid, id: v.id, gosNum: live.gosNum || v.gosNum, route: live.rnum || live.route || v.rnum || v.route, type: vType, lat: curLat, lng: curLng };
-                  });
+                const curMarker = vehicleMarkersRef.current[v.id];
+                const mPos = curMarker ? curMarker.getLngLat() : null;
+                const anim = activeAnimationsRef.current[v.id];
+                const live = knownVehiclesRef.current[v.id] || v;
+                const curLat = mPos ? mPos.lat : (anim ? anim.currentLat : (live.lat || v.lat));
+                const curLng = mPos ? mPos.lng : (anim ? anim.currentLng : (live.lng || v.lng));
+
+                let resolvedRid = v.rid || live.rid;
+                if (!resolvedRid && routesRef.current) {
+                  const vNum = String(live.rnum || live.route || v.rnum || v.route || "").trim().toLowerCase();
+                  const match = routesRef.current.find(r => 
+                    String(r.number).trim().toLowerCase() === vNum &&
+                    normalizeVehicleType(r.type, r.number) === vType
+                  );
+                  if (match && match.id) {
+                    resolvedRid = String(match.id).split(",")[0].trim();
+                  }
                 }
+
+                setSelectedVehicle(prev => {
+                  if (prev && prev.id === v.id) return null;
+                  return {
+                    rid: resolvedRid || null,
+                    id: v.id,
+                    gosNum: live.gosNum || v.gosNum,
+                    route: live.rnum || live.route || v.rnum || v.route,
+                    type: vType,
+                    lat: curLat,
+                    lng: curLng
+                  };
+                });
               };
 
               const popup = new Popup({ offset: 25, closeButton: false });
@@ -2885,7 +2886,7 @@ export default function App() {
                             (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) ||
                             (v.id && item.id && String(v.id) === String(item.id))
                           );
-                        const isLiveOnMap = !!live && (Date.now() - (live._lastSeen || 0) < 180000);
+                        const isLiveOnMap = !!live && (Date.now() - (live._lastSeen || 0) < 60000);
                         const isSelected = selectedVehicle?.id === item.id || (live && selectedVehicle?.id === live.id);
 
                         const vehType = normalizeVehicleType(item.type, item.route);
@@ -2932,8 +2933,10 @@ export default function App() {
                               if (targetType === "bus" && !showBus) setShowBus(true);
                               if (targetType === "minibus" && !showBus) setShowBus(true);
 
+                              const firstRid = routeItem ? String(routeItem.id).split(",")[0].trim() : (targetVeh.rid || item.rid || null);
+
                               setSelectedVehicle({
-                                rid: targetVeh.rid || (routeItem ? routeItem.id : null),
+                                rid: targetVeh.rid || firstRid,
                                 id: targetVeh.id,
                                 gosNum: targetVeh.gosNum,
                                 route: targetVeh.route || targetVeh.rnum || item.route,

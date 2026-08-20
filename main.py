@@ -272,16 +272,16 @@ class ServerVehiclePoller:
             self.curk = str(max_curk)
             self.version += 1
 
-            # Evict vehicles that have not been reported for > 60 seconds (6 consecutive polls)
-            stale_keys = [k for k, ts in self.veh_last_seen.items() if now - ts > 60.0]
-            for k in stale_keys:
-                self.vehicles.pop(k, None)
-                self.veh_last_seen.pop(k, None)
-
         except httpx.HTTPError as e:
             logger.warning("Background vehicle poll upstream error: %s", e)
         except Exception as e:
             logger.error("Background vehicle poll unexpected error: %s", e)
+        finally:
+            # Evict vehicles that have not been reported for > 120 seconds (outside try to run on every tick)
+            stale_keys = [k for k, ts in self.veh_last_seen.items() if now - ts > 120.0]
+            for k in stale_keys:
+                self.vehicles.pop(k, None)
+                self.veh_last_seen.pop(k, None)
 
     async def run_loop(self):
         self._running = True
