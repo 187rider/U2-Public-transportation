@@ -153,8 +153,8 @@ class ServerVehiclePoller:
         results = []
         for veh in self.vehicles.values():
             if rid_set is not None:
-                veh_rid = veh.get("rid", "")
-                if veh_rid and veh_rid not in rid_set:
+                veh_rid = str(veh.get("rid") or "").strip()
+                if not veh_rid or veh_rid not in rid_set:
                     continue
             results.append(veh)
 

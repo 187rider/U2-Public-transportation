@@ -569,6 +569,11 @@ export default function App() {
     favoritesRef.current = favorites;
   }, [favorites]);
 
+  const vehicleHistoryRef = useRef(vehicleHistory);
+  useEffect(() => {
+    vehicleHistoryRef.current = vehicleHistory;
+  }, [vehicleHistory]);
+
   useEffect(() => {
     filtersRef.current = { bus: showBus, tram: showTram };
     localStorage.setItem("pref_showBus", showBus);
@@ -584,7 +589,7 @@ export default function App() {
     isFollowingVehicleRef.current = isFollowingVehicle;
     try {
       localStorage.setItem("pref_isFollowingVehicle", isFollowingVehicle);
-    } catch {}
+    } catch { }
   }, [isFollowingVehicle]);
 
   const addToVehicleHistory = useCallback((veh, nextSt = null) => {
@@ -608,7 +613,7 @@ export default function App() {
       const updated = [newEntry, ...filtered].slice(0, 9);
       try {
         localStorage.setItem("pref_vehicleHistory", JSON.stringify(updated));
-      } catch {}
+      } catch { }
       return updated;
     });
   }, []);
@@ -617,7 +622,7 @@ export default function App() {
     setVehicleHistory([]);
     try {
       localStorage.removeItem("pref_vehicleHistory");
-    } catch {}
+    } catch { }
   };
 
   useEffect(() => {
@@ -629,7 +634,7 @@ export default function App() {
       } else {
         localStorage.removeItem("pref_selectedVehicle");
       }
-    } catch {}
+    } catch { }
     selectedVehicleRef.current = selectedVehicle;
     selectedRouteStationsRef.current = selectedRouteStations;
 
@@ -696,7 +701,7 @@ export default function App() {
   const routeTerminalsMap = useMemo(() => {
     const norm = (s) => String(s || "")
       .toLowerCase()
-      .replace(/[kamtoerpyxc]/g, c => ({ k:'к', a:'а', m:'м', t:'т', o:'о', e:'е', r:'р', p:'р', y:'у', x:'х', c:'с' }[c] || c))
+      .replace(/[kamtoerpyxc]/g, c => ({ k: 'к', a: 'а', m: 'м', t: 'т', o: 'о', e: 'е', r: 'р', p: 'р', y: 'у', x: 'х', c: 'с' }[c] || c))
       .replace(/[^a-zа-я0-9]/g, '');
 
     // Pre-map normalized station names to coordinates
@@ -775,7 +780,7 @@ export default function App() {
 
     const norm = (s) => String(s || "")
       .toLowerCase()
-      .replace(/[kamtoerpyxc]/g, c => ({ k:'к', a:'а', m:'м', t:'т', o:'о', e:'е', r:'р', p:'р', y:'у', x:'х', c:'с' }[c] || c))
+      .replace(/[kamtoerpyxc]/g, c => ({ k: 'к', a: 'а', m: 'м', t: 'т', o: 'о', e: 'е', r: 'р', p: 'р', y: 'у', x: 'х', c: 'с' }[c] || c))
       .replace(/[^a-zа-я0-9]/g, '');
 
     const coordsList = termMap.get(String(veh.rid)) || termMap.get(norm(veh.route || veh.rnum));
@@ -808,7 +813,7 @@ export default function App() {
         if (marker) {
           try {
             marker.remove();
-          } catch {}
+          } catch { }
           delete vehicleMarkersRef.current[id];
         }
         delete activeAnimationsRef.current[id];
@@ -821,7 +826,7 @@ export default function App() {
       if (!knownVehiclesRef.current[id]) {
         try {
           vehicleMarkersRef.current[id].remove();
-        } catch {}
+        } catch { }
         delete vehicleMarkersRef.current[id];
         delete activeAnimationsRef.current[id];
       }
@@ -916,7 +921,7 @@ export default function App() {
           try {
             const parsed = JSON.parse(saved);
             if (Array.isArray(parsed) && parsed.length > 0) return new Set(parsed);
-          } catch {}
+          } catch { }
         }
         return new Set(fetchedRoutes.map(r => r.id));
       });
@@ -996,7 +1001,7 @@ export default function App() {
       let hasActive = false;
       const anims = activeAnimationsRef.current;
       const z = map.current.getZoom();
-      
+
       if (z < 12) {
         // Snap everything
         for (const id in anims) {
@@ -1337,7 +1342,7 @@ export default function App() {
             pitch: map.current.getPitch(),
             bearing: map.current.getBearing()
           }));
-        } catch {}
+        } catch { }
       }, 500);
     });
 
@@ -1475,7 +1480,7 @@ export default function App() {
       let lastMoveUpdateTime = 0;
       const debouncedUpdate = (force = false) => {
         if (debounceTimer) cancelAnimationFrame(debounceTimer);
-        
+
         const now = performance.now();
         // If map is currently moving/pinching, throttle DOM queries to avoid main-thread touch gesture lag
         if (!force && map.current && (map.current.isMoving() || map.current.isZooming() || map.current.isRotating())) {
@@ -1665,7 +1670,38 @@ export default function App() {
       }
       lastFetchTime = now;
 
-      if (selectedRoutes.size === 0) {
+      const pollRidsSet = new Set();
+      if (selectedRoutes.size > 0 && (showBus || showTram)) {
+        selectedRoutes.forEach(r => {
+          String(r).split(",").forEach(id => {
+            if (id.trim()) pollRidsSet.add(id.trim());
+          });
+        });
+      }
+
+      // Always include history vehicles' rids so their online LED dot is live
+      if (vehicleHistoryRef.current) {
+        vehicleHistoryRef.current.forEach(item => {
+          if (item.rid) {
+            String(item.rid).split(",").forEach(id => {
+              if (id.trim()) pollRidsSet.add(id.trim());
+            });
+          }
+          if (routesRef.current && routesRef.current.length > 0) {
+            const match = routesRef.current.find(r => 
+              String(r.number).trim().toLowerCase() === String(item.route || "").trim().toLowerCase() &&
+              normalizeVehicleType(r.type, r.number) === normalizeVehicleType(item.type, item.route)
+            );
+            if (match && match.id) {
+              String(match.id).split(",").forEach(id => {
+                if (id.trim()) pollRidsSet.add(id.trim());
+              });
+            }
+          }
+        });
+      }
+
+      if (pollRidsSet.size === 0) {
         Object.values(vehicleMarkersRef.current).forEach(m => m.remove());
         vehicleMarkersRef.current = {};
         activeAnimationsRef.current = {};
@@ -1679,7 +1715,7 @@ export default function App() {
         return;
       }
 
-      const rids = Array.from(selectedRoutes).map(encodeURIComponent).join(",");
+      const rids = Array.from(pollRidsSet).map(encodeURIComponent).join(",");
       try {
         const res = await apiFetch(`/api/vehicles?rids=${rids}&curk=${encodeURIComponent(curk)}`, { signal: abortCtrl.signal });
         const data = await res.json();
@@ -1691,10 +1727,47 @@ export default function App() {
           const updatesMap = {};
           const isFullPoll = !data.next_curk || data.next_curk === "0" || curk === "0";
 
+          // Record live status for ALL queried vehicles (including history telemetry)
           data.vehicles.forEach(v => {
-            incomingIds.add(v.id);
             knownVehiclesRef.current[v.id] = { ...v, _lastSeen: nowTime };
             updatesMap[v.id] = v;
+          });
+
+          // Filter map markers strictly by active selectedRoutes and category chips (Bus/Tram)
+          const activeRids = new Set();
+          const activeRouteKeys = new Set();
+          if (showBus || showTram) {
+            if (routes && routes.length > 0) {
+              routes.forEach(r => {
+                if (selectedRoutes.has(r.id)) {
+                  String(r.id).split(",").forEach(id => {
+                    if (id.trim()) activeRids.add(id.trim());
+                  });
+                  const normType = normalizeVehicleType(r.type, r.number);
+                  activeRouteKeys.add(`${normType}_${String(r.number).trim().toLowerCase()}`);
+                }
+              });
+            }
+          }
+
+          const allVeh = data.vehicles.filter(v => {
+            const vType = normalizeVehicleType(v.type, v.route || v.rnum);
+            if (vType === "tram" && !showTram) return false;
+            if ((vType === "bus" || vType === "minibus") && !showBus) return false;
+
+            const vNum = String(v.route || v.rnum || "").trim().toLowerCase();
+            const vKey = `${vType}_${vNum}`;
+            const hasRid = v.rid && activeRids.has(String(v.rid).trim());
+            const hasKey = activeRouteKeys.has(vKey);
+
+            if (!hasRid && !hasKey) {
+              return false;
+            }
+            return true;
+          });
+
+          allVeh.forEach(v => {
+            incomingIds.add(v.id);
           });
 
           // Validate selected vehicle - auto-deselect if off-shift after 3 missed polls
@@ -1712,13 +1785,12 @@ export default function App() {
             }
           }
 
-          // Prune only truly stale markers (not reported for > 3 minutes)
+          // Prune markers for vehicles no longer active/visible
           Object.keys(vehicleMarkersRef.current).forEach(id => {
-            const lastSeen = knownVehiclesRef.current[id]?._lastSeen || 0;
-            if (nowTime - lastSeen > 180000 && !incomingIds.has(id) && selectedVehicleRef.current?.id !== id) {
+            if (!incomingIds.has(id)) {
               try {
                 vehicleMarkersRef.current[id].remove();
-              } catch {}
+              } catch { }
               delete vehicleMarkersRef.current[id];
               delete activeAnimationsRef.current[id];
               delete knownVehiclesRef.current[id];
@@ -1726,8 +1798,6 @@ export default function App() {
           });
 
           if (!isActive) return;
-
-          let allVeh = data.vehicles;
 
           if (data.next_curk && data.next_curk !== "0") {
             curk = data.next_curk;
@@ -2034,10 +2104,11 @@ export default function App() {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pageshow", handleVisibilityChange);
     window.addEventListener("focus", handleVisibilityChange);
-    fetchVehicles();
+    const initialTimer = setTimeout(fetchVehicles, 60);
 
     return () => {
       isActive = false;
+      clearTimeout(initialTimer);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handleVisibilityChange);
       window.removeEventListener("focus", handleVisibilityChange);
@@ -2051,7 +2122,7 @@ export default function App() {
         globalAnimationId.current = null;
       }
     };
-  }, [selectedRoutes]);
+  }, [selectedRoutes, showBus, showTram, routes]);
 
   // Selected Vehicle Camera Centering & Follow Activation (Runs only on selection change)
   useEffect(() => {
@@ -2237,7 +2308,7 @@ export default function App() {
                 if (hasChange) {
                   try {
                     localStorage.setItem("pref_vehicleHistory", JSON.stringify(updated));
-                  } catch {}
+                  } catch { }
                   return updated;
                 }
                 return prev;
@@ -2321,7 +2392,7 @@ export default function App() {
               if (hasChange) {
                 try {
                   localStorage.setItem("pref_vehicleHistory", JSON.stringify(updated));
-                } catch {}
+                } catch { }
                 return updated;
               }
               return prev;
@@ -2489,47 +2560,47 @@ export default function App() {
                   )}
                 </div>
 
-              <div className="hud-actions">
-                <button
-                  className={`hud-follow-btn ${isFollowingVehicle ? 'following' : 'paused'}`}
-                  onClick={toggleFollowVehicle}
-                  title={isFollowingVehicle ? "Слежение активно (нажмите, чтобы остановить)" : "Возобновить слежение за транспортом"}
-                >
-                  <span className={`material-symbols-outlined hud-btn-icon ${isFollowingVehicle ? 'pulse' : ''}`} style={{ fontSize: "15px" }}>
-                    {isFollowingVehicle ? 'my_location' : 'near_me'}
-                  </span>
-                  <span>{isFollowingVehicle ? 'Слежение вкл' : 'Следить'}</span>
-                </button>
+                <div className="hud-actions">
+                  <button
+                    className={`hud-follow-btn ${isFollowingVehicle ? 'following' : 'paused'}`}
+                    onClick={toggleFollowVehicle}
+                    title={isFollowingVehicle ? "Слежение активно (нажмите, чтобы остановить)" : "Возобновить слежение за транспортом"}
+                  >
+                    <span className={`material-symbols-outlined hud-btn-icon ${isFollowingVehicle ? 'pulse' : ''}`} style={{ fontSize: "15px" }}>
+                      {isFollowingVehicle ? 'my_location' : 'near_me'}
+                    </span>
+                    <span>{isFollowingVehicle ? 'Слежение вкл' : 'Следить'}</span>
+                  </button>
 
-                <button
-                  className="hud-close-btn"
-                  onClick={() => setSelectedVehicle(null)}
-                  title="Снять выбор"
-                  aria-label="Снять выбор"
-                >
-                  ✕
-                </button>
+                  <button
+                    className="hud-close-btn"
+                    onClick={() => setSelectedVehicle(null)}
+                    title="Снять выбор"
+                    aria-label="Снять выбор"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
-            </div>
 
-            {nextStationInfo && (
-              <div className="hud-next-station-row">
-                <span className="material-symbols-outlined hud-next-icon">
-                  {nextStationInfo.isTerminal ? 'flag' : 'arrow_forward'}
-                </span>
-                <span className="hud-next-label">
-                  {nextStationInfo.isTerminal ? 'Статус:' : 'След. ост:'}
-                </span>
-                <span className="hud-next-name" title={nextStationInfo.name}>
-                  {nextStationInfo.name}
-                </span>
-                {nextStationInfo.time != null && nextStationInfo.time !== "" && (
-                  <span className={`hud-next-time ${parseInt(nextStationInfo.time, 10) <= 0 ? 'arriving' : ''}`}>
-                    {parseInt(nextStationInfo.time, 10) <= 0 ? 'прибывает' : `~${nextStationInfo.time} мин`}
+              {nextStationInfo && (
+                <div className="hud-next-station-row">
+                  <span className="material-symbols-outlined hud-next-icon">
+                    {nextStationInfo.isTerminal ? 'flag' : 'arrow_forward'}
                   </span>
-                )}
-              </div>
-            )}
+                  <span className="hud-next-label">
+                    {nextStationInfo.isTerminal ? 'Статус:' : 'След. ост:'}
+                  </span>
+                  <span className="hud-next-name" title={nextStationInfo.name}>
+                    {nextStationInfo.name}
+                  </span>
+                  {nextStationInfo.time != null && nextStationInfo.time !== "" && (
+                    <span className={`hud-next-time ${parseInt(nextStationInfo.time, 10) <= 0 ? 'arriving' : ''}`}>
+                      {parseInt(nextStationInfo.time, 10) <= 0 ? 'прибывает' : `~${nextStationInfo.time} мин`}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           );
         })()}
@@ -2768,16 +2839,16 @@ export default function App() {
                             star
                           </span>
                           <div>
-                            <div style={{ fontWeight: 600, fontSize: "14px", color: "#1e293b" }}>{st.properties.name}</div>
-                            <div style={{ fontSize: "11px", color: "#64748b", display: "flex", alignItems: "center", gap: "4px" }}>
-                              <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>
+                            <div style={{ fontWeight: 700, fontSize: "16px", color: "#0f172a" }}>{st.properties.name}</div>
+                            <div style={{ fontSize: "13px", fontWeight: 600, color: "#64748b", display: "flex", alignItems: "center", gap: "4px", marginTop: "2px" }}>
+                              <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>
                                 {st.properties.type === "bus" ? "directions_bus" : "tram"}
                               </span>
                               <span>{st.properties.type === "bus" ? "Автобус" : "Трамвай"}</span>
                             </div>
                           </div>
                         </div>
-                        <span className="badge badge-bus" style={{ fontSize: "10px" }}>Показать</span>
+                        <span className="badge badge-bus" style={{ fontSize: "12px", padding: "4px 10px" }}>Показать</span>
                       </div>
                     ))
                   )}
@@ -2808,9 +2879,14 @@ export default function App() {
                   ) : (
                     <div className="history-list">
                       {vehicleHistory.map((item) => {
-                        const live = knownVehiclesRef.current[item.id];
-                        const isLiveOnMap = !!live;
-                        const isSelected = selectedVehicle?.id === item.id;
+                        const itemPlate = formatGosNum(item.gosNum).toLowerCase();
+                        const live = knownVehiclesRef.current[item.id] ||
+                          Object.values(knownVehiclesRef.current).find(v => 
+                            (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) ||
+                            (v.id && item.id && String(v.id) === String(item.id))
+                          );
+                        const isLiveOnMap = !!live && (Date.now() - (live._lastSeen || 0) < 180000);
+                        const isSelected = selectedVehicle?.id === item.id || (live && selectedVehicle?.id === live.id);
 
                         const vehType = normalizeVehicleType(item.type, item.route);
                         const iconName = vehType === "tram" ? "tram" : (vehType === "minibus" ? "airport_shuttle" : "directions_bus");
@@ -2821,13 +2897,43 @@ export default function App() {
                         return (
                           <div
                             key={item.id}
-                            className={`history-card ${isSelected ? 'selected' : ''} ${!isLiveOnMap ? 'inactive' : ''}`}
+                            className={`history-card ${isSelected ? 'selected' : ''}`}
                             onClick={() => {
-                              if (!isLiveOnMap) return;
                               const targetVeh = live || item;
                               const targetType = normalizeVehicleType(targetVeh.type || item.type, targetVeh.route || targetVeh.rnum || item.route);
+                              
+                              let routeItem = null;
+                              if (routes && routes.length > 0) {
+                                routeItem = routes.find(r => {
+                                  const ids = String(r.id || "").split(",");
+                                  return (targetVeh.rid && ids.includes(String(targetVeh.rid))) || (item.rid && ids.includes(String(item.rid)));
+                                });
+                                if (!routeItem) {
+                                  routeItem = routes.find(r => {
+                                    const matchNum = String(r.number).trim().toLowerCase() === String(targetVeh.route || targetVeh.rnum || item.route || "").trim().toLowerCase();
+                                    const matchType = normalizeVehicleType(r.type, r.number) === targetType;
+                                    return matchNum && matchType;
+                                  });
+                                }
+                              }
+
+                              const targetRouteId = routeItem ? routeItem.id : (targetVeh.rid || item.rid);
+
+                              if (targetRouteId) {
+                                setSelectedRoutes(prev => {
+                                  if (prev.has(targetRouteId)) return prev;
+                                  const next = new Set(prev);
+                                  next.add(targetRouteId);
+                                  return next;
+                                });
+                              }
+
+                              if (targetType === "tram" && !showTram) setShowTram(true);
+                              if (targetType === "bus" && !showBus) setShowBus(true);
+                              if (targetType === "minibus" && !showBus) setShowBus(true);
+
                               setSelectedVehicle({
-                                rid: targetVeh.rid,
+                                rid: targetVeh.rid || (routeItem ? routeItem.id : null),
                                 id: targetVeh.id,
                                 gosNum: targetVeh.gosNum,
                                 route: targetVeh.route || targetVeh.rnum || item.route,
@@ -2839,21 +2945,21 @@ export default function App() {
                             }}
                           >
                             <div className="history-card-left">
-                              <div className={`hud-badge hud-badge-${vehType}`}>
-                                <span className="material-symbols-outlined" style={{ fontSize: "15px" }}>
+                              <div className={`hud-badge hud-badge-${vehType}`} style={{ padding: "6px 10px", borderRadius: "12px" }}>
+                                <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
                                   {iconName}
                                 </span>
-                                <span className={`hud-route-num ${isRouteLong ? 'running-text' : ''}`}>{item.route || '—'}</span>
+                                <span className="hud-route-num" style={{ fontSize: "15px", fontWeight: "800" }}>{item.route || '—'}</span>
                               </div>
 
                               <div className="history-card-details">
                                 <div className="history-card-title-row">
                                   {item.gosNum && (
-                                    <span className="hud-gos-num">{formatGosNum(item.gosNum)}</span>
+                                    <span className="history-plate-text">{formatGosNum(item.gosNum)}</span>
                                   )}
                                   <span
                                     className={`status-dot ${isLiveOnMap ? 'live' : 'offline'}`}
-                                    title={isLiveOnMap ? "На линии" : "Не на линии"}
+                                    title={isLiveOnMap ? "На линии" : "Не на карте (нажмите для включения)"}
                                   />
                                 </div>
 
@@ -2871,21 +2977,15 @@ export default function App() {
                             </div>
 
                             <div className="history-card-right">
-                              {isLiveOnMap ? (
-                                <button
-                                  className={`history-select-btn ${isSelected ? 'active' : ''}`}
-                                  title={isSelected ? "Слежение активно" : "Показать и следить"}
-                                  aria-label={isSelected ? "Слежение активно" : "Показать и следить"}
-                                >
-                                  <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
-                                    {isSelected ? 'my_location' : 'near_me'}
-                                  </span>
-                                </button>
-                              ) : (
-                                <span className="history-offline-badge">
-                                  Не на линии
+                              <button
+                                className={`history-select-btn ${isSelected ? 'active' : ''}`}
+                                title={isSelected ? "Слежение активно" : "Показать и следить"}
+                                aria-label={isSelected ? "Слежение активно" : "Показать и следить"}
+                              >
+                                <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
+                                  {isSelected ? 'my_location' : 'near_me'}
                                 </span>
-                              )}
+                              </button>
                             </div>
                           </div>
                         );
@@ -2912,12 +3012,12 @@ export default function App() {
             <span className="material-symbols-outlined mui-nav-icon">bus_map_pin</span>
           </button>
 
-          <button className={activeTab === 3 ? "mui-nav-item active" : "mui-nav-item"} onClick={() => setActiveTab(activeTab === 3 ? 0 : 3)} title={`Избранное (${favorites.size})`} aria-label="Избранное">
-            <span className="material-symbols-outlined mui-nav-icon">bookmark_star</span>
-          </button>
-
           <button className={activeTab === 5 ? "mui-nav-item active" : "mui-nav-item"} onClick={() => setActiveTab(activeTab === 5 ? 0 : 5)} title={`История (${vehicleHistory.length})`} aria-label="История">
             <span className="material-symbols-outlined mui-nav-icon">history</span>
+          </button>
+
+          <button className={activeTab === 3 ? "mui-nav-item active" : "mui-nav-item"} onClick={() => setActiveTab(activeTab === 3 ? 0 : 3)} title={`Избранное (${favorites.size})`} aria-label="Избранное">
+            <span className="material-symbols-outlined mui-nav-icon">bookmark_star</span>
           </button>
         </div>
       </div>
