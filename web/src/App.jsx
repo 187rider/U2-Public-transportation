@@ -465,11 +465,23 @@ export default function App() {
   });
 
   // Vehicle Tracking & Route Overlay States
-  const [selectedVehicle, setSelectedVehicle] = useState(null);
+  const [selectedVehicle, setSelectedVehicle] = useState(() => {
+    try {
+      const saved = localStorage.getItem("pref_selectedVehicle");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [selectedRouteStations, setSelectedRouteStations] = useState(null);
+  const [nextStationInfo, setNextStationInfo] = useState(null);
+  const [isFollowingVehicle, setIsFollowingVehicle] = useState(true);
+  const isFollowingVehicleRef = useRef(true);
+  const isInitialFlyingRef = useRef(false);
   const selectedVehicleRef = useRef(null);
   const selectedRouteStationsRef = useRef(null);
   const knownVehiclesRef = useRef({});
+  const lastResumeTimeRef = useRef(Date.now());
 
   // MapLibre & Marker / Animation Refs
   const markersRef = useRef({});
@@ -508,6 +520,13 @@ export default function App() {
   }, [selectedRoutes]);
 
   useEffect(() => {
+    try {
+      if (selectedVehicle) {
+        localStorage.setItem("pref_selectedVehicle", JSON.stringify(selectedVehicle));
+      } else {
+        localStorage.removeItem("pref_selectedVehicle");
+      }
+    } catch {}
     selectedVehicleRef.current = selectedVehicle;
     selectedRouteStationsRef.current = selectedRouteStations;
     // Update existing markers to show/hide the glowing effect
@@ -690,10 +709,6 @@ export default function App() {
         }
         delete activeAnimationsRef.current[id];
         delete knownVehiclesRef.current[id];
-
-        if (currentSelectedId === id) {
-          setSelectedVehicle(null);
-        }
       }
     }
 
@@ -983,6 +998,16 @@ export default function App() {
             t.marker._lastRot = visualAngle;
             t.marker._currentRot = t.currentDirection;
           }
+        }
+      }
+
+      // Smooth Camera Tracking for Selected Vehicle
+      if (selectedVehicleRef.current && isFollowingVehicleRef.current && !isInitialFlyingRef.current && map.current) {
+        const selAnim = anims[selectedVehicleRef.current.id];
+        if (selAnim && !selAnim.idle) {
+          map.current.jumpTo({
+            center: [selAnim.currentLng, selAnim.currentLat]
+          });
         }
       }
 
@@ -1283,11 +1308,17 @@ export default function App() {
 
       // Map-wide click handler for deselection
       map.current.on("click", (e) => {
-        // Prevent map click if we clicked on a marker
+        // Ignore clicks immediately upon unlocking/resuming screen (prevents tap-to-wake deselection)
+        if (Date.now() - lastResumeTimeRef.current < 1000) {
+          return;
+        }
+
+        // Prevent map click if we clicked on a marker or HUD
         if (e.originalEvent.target.closest('.vehicle-marker') ||
           e.originalEvent.target.closest('.cluster-marker') ||
           e.originalEvent.target.closest('.forecast-marker') ||
-          e.originalEvent.target.closest('.stop-pill-marker')) {
+          e.originalEvent.target.closest('.stop-pill-marker') ||
+          e.originalEvent.target.closest('.selected-vehicle-hud')) {
           return;
         }
 
@@ -1342,6 +1373,12 @@ export default function App() {
       map.current.on("move", () => debouncedUpdate(false));
       map.current.on("moveend", () => debouncedUpdate(true));
       map.current.on("zoomend", () => debouncedUpdate(true));
+      map.current.on("dragstart", () => {
+        if (isFollowingVehicleRef.current) {
+          isFollowingVehicleRef.current = false;
+          setIsFollowingVehicle(false);
+        }
+      });
       map.current.on("rotate", () => {
         for (const id in activeAnimationsRef.current) {
           activeAnimationsRef.current[id]._forceRender = true;
@@ -1477,24 +1514,16 @@ export default function App() {
             updatesMap[v.id] = v;
           });
 
-          // Immediately remove any markers that the backend dropped from active tracking
+          // Prune only truly stale markers (not reported for > 3 minutes)
+          // NEVER reset selectedVehicle on poll changes or sleep/resume
           Object.keys(vehicleMarkersRef.current).forEach(id => {
-            if (!incomingIds.has(id)) {
+            const lastSeen = knownVehiclesRef.current[id]?._lastSeen || 0;
+            if (nowTime - lastSeen > 180000 && !incomingIds.has(id) && selectedVehicleRef.current?.id !== id) {
               try {
                 vehicleMarkersRef.current[id].remove();
               } catch {}
               delete vehicleMarkersRef.current[id];
               delete activeAnimationsRef.current[id];
-              delete knownVehiclesRef.current[id];
-              if (selectedVehicleRef.current?.id === id) {
-                setSelectedVehicle(null);
-              }
-            }
-          });
-
-          // Clean any orphan knownVehicles
-          Object.keys(knownVehiclesRef.current).forEach(id => {
-            if (!incomingIds.has(id)) {
               delete knownVehiclesRef.current[id];
             }
           });
@@ -1688,7 +1717,7 @@ export default function App() {
                 if (v.rid && v.id) {
                   setSelectedVehicle(prev => {
                     if (prev && prev.id === v.id) return null;
-                    return { rid: v.rid, id: v.id, gosNum: v.gosNum, route: v.rnum || v.route, lat: v.lat, lng: v.lng };
+                    return { rid: v.rid, id: v.id, gosNum: v.gosNum, route: v.rnum || v.route, type: vType, lat: v.lat, lng: v.lng };
                   });
                 }
               };
@@ -1754,10 +1783,40 @@ export default function App() {
       }
     };
 
+    const handleVisibilityChange = () => {
+      lastResumeTimeRef.current = Date.now();
+      if (!document.hidden && isActive) {
+        if (fetchVehiclesTimeoutRef.current) {
+          clearTimeout(fetchVehiclesTimeoutRef.current);
+        }
+        curk = "0";
+        fetchVehicles();
+        startGlobalAnimation();
+
+        // Restore camera position if vehicle is selected and following is enabled
+        if (selectedVehicleRef.current && isFollowingVehicleRef.current) {
+          const id = selectedVehicleRef.current.id;
+          const live = knownVehiclesRef.current[id] || selectedVehicleRef.current;
+          if (map.current && live && live.lat && live.lng) {
+            map.current.easeTo({
+              center: [live.lng, live.lat],
+              duration: 400
+            });
+          }
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handleVisibilityChange);
+    window.addEventListener("focus", handleVisibilityChange);
     fetchVehicles();
 
     return () => {
       isActive = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pageshow", handleVisibilityChange);
+      window.removeEventListener("focus", handleVisibilityChange);
       abortCtrl.abort();
       if (fetchVehiclesTimeoutRef.current) {
         clearTimeout(fetchVehiclesTimeoutRef.current);
@@ -1779,6 +1838,10 @@ export default function App() {
     forecastMarkersRef.current = [];
 
     if (!selectedVehicle) {
+      setNextStationInfo(null);
+      setIsFollowingVehicle(false);
+      isFollowingVehicleRef.current = false;
+      isInitialFlyingRef.current = false;
       if (map.current.getLayer("route-nodes-layer")) {
         map.current.setLayoutProperty("route-nodes-layer", "visibility", "none");
       }
@@ -1788,6 +1851,28 @@ export default function App() {
         source.setData({ type: "FeatureCollection", features: [] });
       }
       return;
+    }
+
+    // Vehicle selected: activate camera tracking and smoothly fly to vehicle position
+    setIsFollowingVehicle(true);
+    isFollowingVehicleRef.current = true;
+    isInitialFlyingRef.current = true;
+
+    const anim = activeAnimationsRef.current[selectedVehicle.id];
+    const liveVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
+    const targetLng = anim ? anim.currentLng : (liveVeh.lng || selectedVehicle.lng);
+    const targetLat = anim ? anim.currentLat : (liveVeh.lat || selectedVehicle.lat);
+
+    if (map.current && targetLng != null && targetLat != null) {
+      map.current.flyTo({
+        center: [targetLng, targetLat],
+        zoom: Math.max(map.current.getZoom(), 15.5),
+        duration: 800,
+        essential: true
+      });
+      setTimeout(() => {
+        isInitialFlyingRef.current = false;
+      }, 850);
     }
 
     // Immediately clear old route stations to prevent stale data flashing
@@ -1870,6 +1955,21 @@ export default function App() {
             }
           });
 
+          // Sort by arrival time ascending to identify the immediate next stop
+          uniqueForecasts.sort((a, b) => (parseInt(a.time, 10) || 0) - (parseInt(b.time, 10) || 0));
+
+          if (uniqueForecasts.length > 0) {
+            const nextF = uniqueForecasts[0];
+            const nextSt = stationsById.get(nextF.stid);
+            if (nextSt) {
+              setNextStationInfo({
+                name: nextSt.properties?.name || "Остановка",
+                time: nextF.time,
+                isTerminal: false
+              });
+            }
+          }
+
           uniqueForecasts.forEach(f => {
             const st = stationsById.get(f.stid);
             if (st) {
@@ -1928,6 +2028,11 @@ export default function App() {
           // If no forward forecasts, check if vehicle is actually at terminal stop (within 100m)
           const currentVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
           if (currentVeh && currentVeh.lat && currentVeh.lng && isNearTerminalStop(currentVeh)) {
+            setNextStationInfo({
+              name: "Конечная (ожидает)",
+              time: null,
+              isTerminal: true
+            });
             const el = document.createElement("div");
             el.className = "forecast-marker terminal-waiting-badge";
             el.innerHTML = `
@@ -1941,6 +2046,8 @@ export default function App() {
               .addTo(map.current);
 
             forecastMarkersRef.current.push(marker);
+          } else {
+            setNextStationInfo(null);
           }
         }
       } catch (err) {
@@ -1953,12 +2060,22 @@ export default function App() {
       }
     };
 
+    const handleForecastVisibility = () => {
+      if (!document.hidden && isActive) {
+        if (forecastTimeout) clearTimeout(forecastTimeout);
+        fetchForecasts();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleForecastVisibility);
+
     fetchNodes();
     fetchRouteStations();
     fetchForecasts();
 
     return () => {
       isActive = false;
+      document.removeEventListener("visibilitychange", handleForecastVisibility);
       abortController.abort();
       if (forecastTimeout) clearTimeout(forecastTimeout);
     };
@@ -1999,13 +2116,45 @@ export default function App() {
     return stations.filter((st) => favorites.has(st.properties.id));
   }, [stations, favorites]);
 
+  const recenterSelectedVehicle = () => {
+    if (!selectedVehicle || !map.current) return;
+    const anim = activeAnimationsRef.current[selectedVehicle.id];
+    const liveVeh = knownVehiclesRef.current[selectedVehicle.id] || selectedVehicle;
+    const targetLng = anim ? anim.currentLng : (liveVeh.lng || selectedVehicle.lng);
+    const targetLat = anim ? anim.currentLat : (liveVeh.lat || selectedVehicle.lat);
+
+    if (targetLng != null && targetLat != null) {
+      isInitialFlyingRef.current = true;
+      map.current.flyTo({
+        center: [targetLng, targetLat],
+        zoom: Math.max(map.current.getZoom(), 15.5),
+        duration: 600,
+        essential: true
+      });
+      setTimeout(() => {
+        isInitialFlyingRef.current = false;
+      }, 650);
+      setIsFollowingVehicle(true);
+      isFollowingVehicleRef.current = true;
+    }
+  };
+
+  const toggleFollowVehicle = () => {
+    if (isFollowingVehicle) {
+      setIsFollowingVehicle(false);
+      isFollowingVehicleRef.current = false;
+    } else {
+      recenterSelectedVehicle();
+    }
+  };
+
   return (
     <>
       <div className="app-root">
 
         {/* Loading Spinner */}
         {loading && (
-          <div style={{ position: "fixed", top: "16px", left: "50%", transform: "translateX(-50%)", background: "rgba(15, 23, 42, 0.88)", color: "#ffffff", padding: "8px 16px", borderRadius: "24px", fontSize: "13px", fontWeight: 600, display: "flex", alignItems: "center", gap: "8px", zIndex: 10000, boxShadow: "0 4px 14px rgba(0,0,0,0.2)" }}>
+          <div style={{ position: "fixed", top: "calc(env(safe-area-inset-top, 0px) + 12px)", left: "50%", transform: "translateX(-50%)", background: "rgba(15, 23, 42, 0.88)", color: "#ffffff", padding: "8px 16px", borderRadius: "24px", fontSize: "13px", fontWeight: 600, display: "flex", alignItems: "center", gap: "8px", zIndex: 10000, boxShadow: "0 4px 14px rgba(0,0,0,0.2)" }}>
             <span className="material-symbols-outlined" style={{ animation: "spin 1s linear infinite", fontSize: "18px" }}>refresh</span>
             Загрузка маршрутов...
           </div>
@@ -2013,10 +2162,70 @@ export default function App() {
 
         {/* Error Banner */}
         {error && (
-          <div style={{ position: "fixed", top: "16px", left: "50%", transform: "translateX(-50%)", background: "#ef4444", color: "#ffffff", padding: "10px 18px", borderRadius: "12px", fontSize: "13px", fontWeight: 600, zIndex: 10000, boxShadow: "0 4px 14px rgba(0,0,0,0.25)", display: "flex", alignItems: "center", gap: "10px", maxWidth: "90%" }}>
+          <div style={{ position: "fixed", top: "calc(env(safe-area-inset-top, 0px) + 12px)", left: "50%", transform: "translateX(-50%)", background: "#ef4444", color: "#ffffff", padding: "10px 18px", borderRadius: "12px", fontSize: "13px", fontWeight: 600, zIndex: 10000, boxShadow: "0 4px 14px rgba(0,0,0,0.25)", display: "flex", alignItems: "center", gap: "10px", maxWidth: "90%" }}>
             <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>error</span>
             <span>{error}</span>
             <button onClick={fetchData} style={{ background: "#ffffff", color: "#ef4444", border: "none", borderRadius: "6px", padding: "4px 10px", fontWeight: 700, cursor: "pointer", marginLeft: "8px" }}>Повторить</button>
+          </div>
+        )}
+
+        {/* Selected Vehicle Tracking HUD */}
+        {selectedVehicle && (
+          <div className="selected-vehicle-hud">
+            <div className="hud-top-row">
+              <div className="hud-vehicle-info">
+                <div className={`hud-badge hud-badge-${selectedVehicle.type || 'bus'}`}>
+                  <span className="material-symbols-outlined" style={{ fontSize: "15px" }}>
+                    {selectedVehicle.type === 'tram' ? 'tram' : 'directions_bus'}
+                  </span>
+                  <span className="hud-route-num">{selectedVehicle.route || 'Маршрут'}</span>
+                </div>
+                {selectedVehicle.gosNum && (
+                  <span className="hud-gos-num">{selectedVehicle.gosNum}</span>
+                )}
+              </div>
+
+              <div className="hud-actions">
+                <button
+                  className={`hud-follow-btn ${isFollowingVehicle ? 'following' : 'paused'}`}
+                  onClick={toggleFollowVehicle}
+                  title={isFollowingVehicle ? "Слежение активно (нажмите, чтобы остановить)" : "Возобновить слежение за транспортом"}
+                >
+                  <span className={`material-symbols-outlined hud-btn-icon ${isFollowingVehicle ? 'pulse' : ''}`} style={{ fontSize: "15px" }}>
+                    {isFollowingVehicle ? 'my_location' : 'near_me'}
+                  </span>
+                  <span>{isFollowingVehicle ? 'Слежение вкл' : 'Следить'}</span>
+                </button>
+
+                <button
+                  className="hud-close-btn"
+                  onClick={() => setSelectedVehicle(null)}
+                  title="Снять выбор"
+                  aria-label="Снять выбор"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {nextStationInfo && (
+              <div className="hud-next-station-row">
+                <span className="material-symbols-outlined hud-next-icon">
+                  {nextStationInfo.isTerminal ? 'flag' : 'arrow_forward'}
+                </span>
+                <span className="hud-next-label">
+                  {nextStationInfo.isTerminal ? 'Статус:' : 'След. ост:'}
+                </span>
+                <span className="hud-next-name" title={nextStationInfo.name}>
+                  {nextStationInfo.name}
+                </span>
+                {nextStationInfo.time && (
+                  <span className="hud-next-time">
+                    ~{nextStationInfo.time} мин
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
 
