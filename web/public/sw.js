@@ -1,4 +1,7 @@
-const CACHE_NAME = 'u2-transport-shell-v2';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v3';
+const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
+const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
+
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -12,7 +15,7 @@ const STATIC_ASSETS = [
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
+    caches.open(SHELL_CACHE_NAME).then((cache) => {
       return cache.addAll(STATIC_ASSETS).catch((err) => {
         console.warn('SW pre-cache warning:', err);
       });
@@ -21,11 +24,12 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
+  const allowedCaches = [SHELL_CACHE_NAME, TILES_CACHE_NAME, STATIC_API_CACHE_NAME];
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
         keys.map((key) => {
-          if (key !== CACHE_NAME) {
+          if (!allowedCaches.includes(key)) {
             return caches.delete(key);
           }
         })
@@ -47,24 +51,69 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Strictly only cache own-origin HTTP/HTTPS requests (ignores chrome-extension://, etc.)
+  // Strictly only cache own-origin HTTP/HTTPS requests
   if (!url.protocol.startsWith('http') || url.origin !== self.location.origin) {
     return;
   }
 
-  // Strictly network-only for dynamic API requests and map tiles
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/tiles/')) {
+  // 1. Vector Map Tiles: CACHE-FIRST (0ms load from disk, saves 99% mobile traffic)
+  if (url.pathname.startsWith('/tiles/')) {
+    event.respondWith(
+      caches.open(TILES_CACHE_NAME).then((cache) => {
+        return cache.match(event.request).then((cachedTile) => {
+          if (cachedTile) {
+            return cachedTile; // Return cached tile instantly with 0 network usage
+          }
+          return fetch(event.request)
+            .then((networkTile) => {
+              if (networkTile && networkTile.status === 200) {
+                cache.put(event.request, networkTile.clone()).catch(() => {});
+              }
+              return networkTile;
+            })
+            .catch(() => {
+              return new Response(null, { status: 204, statusText: 'No Content' });
+            });
+        });
+      })
+    );
     return;
   }
 
-  // Network-first with cache fallback for HTML navigation
+  // 2. Static Transit Data (Stations & Routes): STALE-WHILE-REVALIDATE (Instant offline startup)
+  if (url.pathname === '/api/stations' || url.pathname === '/api/routes') {
+    event.respondWith(
+      caches.open(STATIC_API_CACHE_NAME).then((cache) => {
+        return cache.match(event.request).then((cachedData) => {
+          const fetchPromise = fetch(event.request)
+            .then((networkResponse) => {
+              if (networkResponse && networkResponse.status === 200) {
+                cache.put(event.request, networkResponse.clone()).catch(() => {});
+              }
+              return networkResponse;
+            })
+            .catch(() => cachedData);
+
+          return cachedData || fetchPromise;
+        });
+      })
+    );
+    return;
+  }
+
+  // 3. Live Telemetry (/api/vehicles, /api/forecasts): Strictly Network-Only
+  if (url.pathname.startsWith('/api/')) {
+    return;
+  }
+
+  // 4. HTML Navigation: Network-first with cache fallback
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
           if (response && response.status === 200) {
             const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
+            caches.open(SHELL_CACHE_NAME).then((cache) => {
               cache.put(event.request, clone).catch(() => {});
             });
           }
@@ -75,14 +124,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Stale-while-revalidate for local static assets (js, css, fonts, images)
+  // 5. Static Assets (JS, CSS, fonts, icons): Stale-while-revalidate
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       const fetchPromise = fetch(event.request)
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
+            caches.open(SHELL_CACHE_NAME).then((cache) => {
               cache.put(event.request, clone).catch(() => {});
             });
           }
