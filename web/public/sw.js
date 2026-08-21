@@ -1,4 +1,4 @@
-const CACHE_NAME = 'u2-transport-shell-v1';
+const CACHE_NAME = 'u2-transport-shell-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -10,12 +10,13 @@ const STATIC_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(STATIC_ASSETS).catch((err) => {
         console.warn('SW pre-cache warning:', err);
       });
-    }).then(() => self.skipWaiting())
+    })
   );
 });
 
@@ -34,15 +35,25 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
-
-  // Only cache http and https schemes (ignore chrome-extension, etc.)
-  if (!url.protocol.startsWith('http')) {
+  // Only handle GET requests
+  if (event.request.method !== 'GET') {
     return;
   }
 
-  // Strictly network-only for API requests, map tiles, and non-GET methods
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/tiles/') || event.request.method !== 'GET') {
+  let url;
+  try {
+    url = new URL(event.request.url);
+  } catch {
+    return;
+  }
+
+  // Strictly only cache own-origin HTTP/HTTPS requests (ignores chrome-extension://, etc.)
+  if (!url.protocol.startsWith('http') || url.origin !== self.location.origin) {
+    return;
+  }
+
+  // Strictly network-only for dynamic API requests and map tiles
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/tiles/')) {
     return;
   }
 
@@ -53,7 +64,9 @@ self.addEventListener('fetch', (event) => {
         .then((response) => {
           if (response && response.status === 200) {
             const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, clone).catch(() => {});
+            });
           }
           return response;
         })
@@ -62,14 +75,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Stale-while-revalidate for static assets (js, css, fonts, images)
+  // Stale-while-revalidate for local static assets (js, css, fonts, images)
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       const fetchPromise = fetch(event.request)
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, clone).catch(() => {});
+            });
           }
           return networkResponse;
         })
