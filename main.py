@@ -11,6 +11,7 @@ from Crypto.Util.Padding import pad
 import binascii
 from datetime import datetime, timezone
 import os
+import json
 from dotenv import load_dotenv
 import hashlib
 import hmac
@@ -51,17 +52,26 @@ def set_in_cache(key: str, data, ttl: float):
         del CACHE[k]
 
 
-BUS62_URL = os.getenv("BUS62_URL", "http://apitest2.bus62.ru:8080").rstrip('/')
+def load_local_fallback(filename: str):
+    try:
+        if os.path.exists(filename):
+            with open(filename, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning("Failed to load local fallback %s: %s", filename, e)
+    return None
+
+
+BUS62_URL = os.getenv("BUS62_URL", "https://api9.bus62.ru").rstrip('/')
 BUS62_CITY = os.getenv("BUS62_CITY", "ulanude")
 
 STATIONS_API_URL = f"{BUS62_URL}/getAllStations.php"
 ROUTES_API_URL = f"{BUS62_URL}/getAllRoutes.php"
 VEHICLES_API_URL = f"{BUS62_URL}/getVehicleAnimations.php"
-VEHICLES_API9_URL = os.getenv("VEHICLES_API9_URL", "http://api.bus62.ru/api9/getVehicleAnimations.php")
+VEHICLES_API9_URL = os.getenv("VEHICLES_API9_URL", "https://api9.bus62.ru/getVehicleAnimations.php")
 
 KEY = os.getenv("BUS62_KEY", "maps.bus62.ru:80").encode('utf-8')
 IV  = os.getenv("BUS62_IV", "Content-MD5-Hash").encode('utf-8')
-BUS62_HEX_KEY = os.getenv("BUS62_HEX_KEY", "")
 
 
 def generate_hash():
@@ -177,36 +187,22 @@ class ServerVehiclePoller:
         params = {"curk": self.curk, "city": BUS62_CITY, "rids": active_rids}
         
         try:
-            if BUS62_HEX_KEY:
-                # Note: query_string is signed in raw string format; upstream validates before url decoding
-                secret_bytes = bytes.fromhex(BUS62_HEX_KEY)
-                query_string = f"curk={params['curk']}&city={params['city']}&rids={params['rids']}"
-                payload = secret_bytes + query_string.encode('utf-8')
-                signature = hashlib.sha256(payload).hexdigest()
-                
-                headers = {
-                    "Content-MD5-Hash": signature,
-                    "User-Agent": "ios_BE690AAB-3365-4C72-9975-C71A288BF57E_f3d999a6",
-                    "Accept": "*/*",
-                    "Accept-Language": "ru",
-                    "Accept-Encoding": "gzip, deflate",
-                    "Connection": "keep-alive",
-                }
-                api_url = VEHICLES_API9_URL
-            else:
-                headers = get_headers()
-                api_url = VEHICLES_API_URL
+            headers = get_headers()
+            api_url = VEHICLES_API9_URL if VEHICLES_API9_URL else VEHICLES_API_URL
 
-            r = await async_client.get(api_url, params=params, headers=headers, timeout=10)
-            r.raise_for_status()
+            r = None
+            for attempt in range(2):
+                try:
+                    r = await async_client.get(api_url, params=params, headers=headers, timeout=12)
+                    r.raise_for_status()
+                    break
+                except (httpx.ReadError, httpx.ConnectError, httpx.RemoteProtocolError) as retry_err:
+                    if attempt == 0:
+                        await asyncio.sleep(0.6)
+                    else:
+                        raise retry_err
 
-            if not r.text.strip() and api_url == VEHICLES_API9_URL:
-                headers = get_headers()
-                api_url = VEHICLES_API_URL
-                r = await async_client.get(api_url, params=params, headers=headers, timeout=10)
-                r.raise_for_status()
-
-            if not r.text.strip():
+            if not r or not r.text.strip():
                 return
 
             data = r.json()
@@ -273,12 +269,12 @@ class ServerVehiclePoller:
             self.version += 1
 
         except httpx.HTTPError as e:
-            logger.warning("Background vehicle poll upstream error: %s", e)
+            logger.warning("Background vehicle poll upstream error (%s): %s", type(e).__name__, e or repr(e))
         except Exception as e:
-            logger.error("Background vehicle poll unexpected error: %s", e)
+            logger.error("Background vehicle poll unexpected error (%s): %s", type(e).__name__, e, exc_info=True)
         finally:
-            # Evict vehicles that have not been reported for > 120 seconds (outside try to run on every tick)
-            stale_keys = [k for k, ts in self.veh_last_seen.items() if now - ts > 120.0]
+            # Evict vehicles that have not been reported for > 60 seconds (synced 1:1 with frontend isLiveOnMap)
+            stale_keys = [k for k, ts in self.veh_last_seen.items() if now - ts > 60.0]
             for k in stale_keys:
                 self.vehicles.pop(k, None)
                 self.veh_last_seen.pop(k, None)
@@ -355,24 +351,37 @@ async def get_stations():
     if cached:
         return cached
 
-    try:
-        r = await async_client.get(
-            STATIONS_API_URL, 
-            params={"city": BUS62_CITY}, 
-            headers=get_headers(), 
-            timeout=30
-        )
-        r.raise_for_status()
-        raw_stations = r.json()
-    except httpx.HTTPError as e:
-        logger.error("Upstream stations fetch failed: %s", e)
+    raw_stations = None
+    candidate_urls = list(dict.fromkeys([
+        STATIONS_API_URL,
+        "https://api9.bus62.ru/getAllStations.php",
+        "http://bus62.ru/getAllStations.php"
+    ]))
+    for url in candidate_urls:
+        try:
+            r = await async_client.get(
+                url, 
+                params={"city": BUS62_CITY}, 
+                headers=get_headers(), 
+                timeout=12
+            )
+            r.raise_for_status()
+            parsed = r.json()
+            if isinstance(parsed, list) and len(parsed) > 0:
+                raw_stations = parsed
+                break
+        except Exception as e:
+            logger.warning("Upstream stations fetch failed from %s: %s", url, e)
+
+    if not raw_stations:
+        fallback = load_local_fallback("stations.json")
+        if fallback:
+            logger.info("Serving local fallback snapshot for stations")
+            set_in_cache("stations", fallback, CACHE_TTL_STATIC)
+            return fallback
         raise HTTPException(status_code=502, detail="Upstream transit API unavailable")
-    except Exception as e:
-        logger.error("Unexpected error processing stations: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to process stations")
 
     features = []
-
     for station in raw_stations:
         # 0 = bus, 1 = tram
         st_type = "bus" if str(station.get("type")) == "0" else "tram"
@@ -409,6 +418,13 @@ async def get_stations():
         "type": "FeatureCollection",
         "features": features
     }
+    # Persist updated snapshot for future offline/fallback usage
+    try:
+        with open("stations.json", "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("Failed to persist stations.json snapshot: %s", e)
+
     set_in_cache("stations", result, CACHE_TTL_STATIC)
     return result
 
@@ -419,36 +435,54 @@ async def get_routes():
     if cached:
         return cached
 
-    try:
-        r = await async_client.get(
-            ROUTES_API_URL, 
-            params={"city": BUS62_CITY}, 
-            headers=get_headers(), 
-            timeout=30
-        )
-        r.raise_for_status()
-        raw_routes = r.json()
-    except httpx.HTTPError as e:
-        logger.error("Upstream routes fetch failed: %s", e)
+    raw_routes = None
+    candidate_urls = list(dict.fromkeys([
+        ROUTES_API_URL,
+        "https://api9.bus62.ru/getAllRoutes.php",
+        "http://bus62.ru/getAllRoutes.php"
+    ]))
+    for url in candidate_urls:
+        try:
+            r = await async_client.get(
+                url, 
+                params={"city": BUS62_CITY}, 
+                headers=get_headers(), 
+                timeout=12
+            )
+            r.raise_for_status()
+            parsed = r.json()
+            if isinstance(parsed, list) and len(parsed) > 0:
+                raw_routes = parsed
+                break
+        except Exception as e:
+            logger.warning("Routes fetch failed from %s: %s", url, e)
+
+    if not raw_routes:
+        fallback = load_local_fallback("routes.json")
+        if fallback:
+            logger.info("Serving local fallback snapshot for routes")
+            set_in_cache("routes", fallback, CACHE_TTL_STATIC)
+            return fallback
         raise HTTPException(status_code=502, detail="Upstream transit API unavailable")
-    except Exception as e:
-        logger.error("Unexpected error processing routes: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to process routes")
 
     routes_by_num = {}
     for rt in raw_routes:
         num = str(rt.get("number", "")).strip()
         name = str(rt.get("name", "")).strip()
-        raw_type = rt.get("type", "")
-        if raw_type in ["Т", "Тм", "Трамвай"] or name.startswith("Т-"):
+        raw_type = str(rt.get("type", "")).strip()
+        
+        # 'А' -> bus, 'М' -> minibus, 'Т'/'Тм' -> tram
+        if raw_type in ["Т", "Тм", "Трамвай"] or name.startswith("Т-") or name.startswith("Тм-"):
             rt_type = "tram"
-        elif raw_type == "М":
+        elif raw_type in ["М", "М-"] or name.startswith("М-"):
             rt_type = "minibus"
         else:
             rt_type = "bus"
 
         key = f"{rt_type}_{num}"
         rt_id = str(rt.get("id", "")).strip()
+        from_st = str(rt.get("from_station_name") or rt.get("from_station") or "").strip()
+        to_st = str(rt.get("to_station_name") or rt.get("to_station") or "").strip()
         
         if key not in routes_by_num:
             routes_by_num[key] = {
@@ -456,18 +490,22 @@ async def get_routes():
                 "number": num,
                 "name": name,
                 "type": rt_type,
-                "from_station": rt.get("from_station_name", ""),
-                "to_station": rt.get("to_station_name", ""),
+                "from_station": from_st,
+                "to_station": to_st,
                 "subroutes": []
             }
         else:
             if rt_id and rt_id not in routes_by_num[key]["id"]:
                 routes_by_num[key]["id"].append(rt_id)
+            if not routes_by_num[key]["from_station"] and from_st:
+                routes_by_num[key]["from_station"] = from_st
+            if not routes_by_num[key]["to_station"] and to_st:
+                routes_by_num[key]["to_station"] = to_st
 
         routes_by_num[key]["subroutes"].append({
             "id": rt_id,
-            "from_station": rt.get("from_station_name", ""),
-            "to_station": rt.get("to_station_name", "")
+            "from_station": from_st,
+            "to_station": to_st
         })
 
     formatted_routes = list(routes_by_num.values())
@@ -484,6 +522,13 @@ async def get_routes():
         "count": len(formatted_routes),
         "routes": formatted_routes
     }
+    # Persist updated snapshot for future offline/fallback usage
+    try:
+        with open("routes.json", "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("Failed to persist routes.json snapshot: %s", e)
+
     set_in_cache("routes", result, CACHE_TTL_STATIC)
     return result
 

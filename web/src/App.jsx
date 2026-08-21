@@ -505,6 +505,8 @@ export default function App() {
   const routeStationsCacheRef = useRef({});
   const pendingRouteStationsRef = useRef(new Set());
   const [loading, setLoading] = useState(true);
+  const [isSplashMounted, setIsSplashMounted] = useState(true);
+  const [isSplashFading, setIsSplashFading] = useState(false);
   const [error, setError] = useState(null);
   const [routeStationsOrder, setRouteStationsOrder] = useState([]);
   const [telemetryTick, setTelemetryTick] = useState(0); // eslint-disable-line no-unused-vars -- State setter forces re-render on telemetry updates
@@ -597,6 +599,9 @@ export default function App() {
   const isDraggingRef = useRef(false);
   const dragStartPointRef = useRef(null);
   const wasFollowingBeforeHiddenRef = useRef(initialIsFollowing);
+  const wakeLockRef = useRef(null);
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [consecutiveFetchErrors, setConsecutiveFetchErrors] = useState(0);
   const isProgrammaticMoveRef = useRef(false);
   const lastFollowPillUpdateRef = useRef(0);
   const missedPollsRef = useRef(0);
@@ -685,6 +690,72 @@ export default function App() {
       localStorage.setItem("pref_isFollowingVehicle", isFollowingVehicle);
     } catch { }
   }, [isFollowingVehicle]);
+
+  // Online / Offline Connectivity Monitor
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // Screen Wake Lock API (keeps display awake while following an approaching vehicle)
+  useEffect(() => {
+    if (!('wakeLock' in navigator)) return;
+    let isSubscribed = true;
+
+    const requestLock = async () => {
+      if (selectedVehicle && isFollowingVehicle && document.visibilityState === 'visible' && isSubscribed) {
+        try {
+          if (!wakeLockRef.current) {
+            const lock = await navigator.wakeLock.request('screen');
+            if (!isSubscribed) {
+              await lock.release();
+              return;
+            }
+            wakeLockRef.current = lock;
+            wakeLockRef.current.addEventListener('release', () => {
+              wakeLockRef.current = null;
+            });
+          }
+        } catch (err) {
+          // Non-blocking fallback
+        }
+      }
+    };
+
+    const releaseLock = async () => {
+      if (wakeLockRef.current) {
+        try {
+          await wakeLockRef.current.release();
+        } catch { }
+        wakeLockRef.current = null;
+      }
+    };
+
+    if (selectedVehicle && isFollowingVehicle) {
+      requestLock();
+    } else {
+      releaseLock();
+    }
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && selectedVehicle && isFollowingVehicle && isSubscribed) {
+        requestLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      isSubscribed = false;
+      document.removeEventListener('visibilitychange', handleVisibility);
+      releaseLock();
+    };
+  }, [selectedVehicle?.id, isFollowingVehicle]);
 
   const addToVehicleHistory = useCallback((veh, nextSt = null) => {
     if (!veh || !veh.id) return;
@@ -1209,10 +1280,16 @@ export default function App() {
       });
 
       setLoading(false);
+      setTimeout(() => {
+        setIsSplashFading(true);
+        setTimeout(() => setIsSplashMounted(false), 550);
+      }, 900);
     } catch (err) {
       console.error("Failed to load transit data:", err);
       setError("Не удалось загрузить данные. Проверьте, запущен ли FastAPI backend (main.py).");
       setLoading(false);
+      setIsSplashFading(true);
+      setTimeout(() => setIsSplashMounted(false), 550);
     }
   };
 
@@ -2062,6 +2139,7 @@ export default function App() {
         const res = await apiFetch(`/api/vehicles?rids=${rids}&curk=${encodeURIComponent(curk)}`, { signal: abortCtrl.signal });
         const data = await res.json();
         if (!isActive) return;
+        setConsecutiveFetchErrors(0);
 
         if (data && data.vehicles) {
           const nowTime = Date.now();
@@ -2442,6 +2520,7 @@ export default function App() {
       } catch (err) {
         if (err.name !== 'AbortError') {
           console.error("Failed to fetch live vehicles", err);
+          setConsecutiveFetchErrors(c => c + 1);
         }
       } finally {
         isFetchingVehicles = false;
@@ -2929,8 +3008,91 @@ export default function App() {
     <>
       <div className="app-root">
 
-        {/* Loading Spinner */}
-        {loading && (
+        {/* Startup Animated Splash Screen */}
+        {isSplashMounted && (
+          <div className={`startup-splash-overlay ${isSplashFading ? 'fade-out' : ''}`}>
+            <div className="startup-splash-content">
+              {/* Flat Vector Bus Illustration Scene */}
+              <div className="startup-vehicle-scene">
+                {/* Dust Puffs at Rear */}
+                <div className="startup-dust-container">
+                  <span className="startup-dust-puff puff-1"></span>
+                  <span className="startup-dust-puff puff-2"></span>
+                  <span className="startup-dust-puff puff-3"></span>
+                </div>
+
+                {/* Bus Body */}
+                <div className="startup-vehicle-body">
+                  <svg className="startup-bus-svg" viewBox="0 0 160 90" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    {/* Speed trail dashes behind bus */}
+                    <g className="speed-lines-trail" stroke="#cbd5e1" strokeWidth="2.5" strokeLinecap="round">
+                      <line x1="2" y1="30" x2="10" y2="30" />
+                      <line x1="0" y1="42" x2="8" y2="42" />
+                      <line x1="4" y1="54" x2="11" y2="54" />
+                    </g>
+
+                    {/* Main Yellow Bus Body */}
+                    <rect x="15" y="16" width="130" height="49" rx="12" fill="#FBB034" />
+
+                    {/* Light Grey Bottom Trim */}
+                    <path d="M15 58 H145 V62 C145 64 143 65 141 65 H19 C17 65 15 64 15 62 Z" fill="#B0BEC5" />
+
+                    {/* Front Windshield */}
+                    <path d="M116 23 H138 C140.5 23 142 24.8 142 27.5 V42 H116 Z" fill="#CBE9FE" />
+
+                    {/* 6 Side Windows */}
+                    <rect x="26" y="23" width="11" height="13" rx="1.5" fill="#CBE9FE" />
+                    <rect x="41" y="23" width="11" height="13" rx="1.5" fill="#CBE9FE" />
+                    <rect x="56" y="23" width="11" height="13" rx="1.5" fill="#CBE9FE" />
+                    <rect x="71" y="23" width="11" height="13" rx="1.5" fill="#CBE9FE" />
+                    <rect x="86" y="23" width="11" height="13" rx="1.5" fill="#CBE9FE" />
+                    <rect x="101" y="23" width="11" height="13" rx="1.5" fill="#CBE9FE" />
+
+                    {/* 2 White Side Accent Stripes */}
+                    <rect x="42" y="42" width="62" height="3.5" rx="1.75" fill="#FFFFFF" />
+                    <rect x="42" y="49.5" width="62" height="3.5" rx="1.75" fill="#FFFFFF" />
+
+                    {/* Yellow Front Headlight */}
+                    <rect x="139" y="48" width="7" height="6" rx="3" fill="#FFD54F" />
+
+                    {/* Red Rear Taillight */}
+                    <rect x="14" y="48" width="6" height="6" rx="3" fill="#EF4444" />
+                  </svg>
+
+                  {/* Rounding Rotating Wheels */}
+                  <div className="startup-wheel rear-wheel">
+                    <div className="wheel-tire">
+                      <div className="wheel-rim"></div>
+                    </div>
+                  </div>
+
+                  <div className="startup-wheel front-wheel">
+                    <div className="wheel-tire">
+                      <div className="wheel-rim"></div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Road surface & moving dashed lines */}
+                <div className="startup-road-track">
+                  <div className="startup-road-dashes"></div>
+                </div>
+              </div>
+
+              {/* Text & Loader Bar */}
+              <div className="startup-splash-text-wrap">
+                <h1 className="startup-splash-title">ТРАНСПОРТ УЛАН-УДЭ</h1>
+
+                <div className="startup-loader-bar">
+                  <div className="startup-loader-progress"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Small top spinner for background refreshes */}
+        {loading && !isSplashMounted && (
           <div style={{ position: "fixed", top: "calc(env(safe-area-inset-top, 0px) + 12px)", left: "50%", transform: "translateX(-50%)", background: "rgba(15, 23, 42, 0.88)", color: "#ffffff", padding: "8px 16px", borderRadius: "24px", fontSize: "13px", fontWeight: 600, display: "flex", alignItems: "center", gap: "8px", zIndex: 10000, boxShadow: "0 4px 14px rgba(0,0,0,0.2)" }}>
             <span className="material-symbols-outlined" style={{ animation: "spin 1s linear infinite", fontSize: "18px" }}>refresh</span>
             Загрузка маршрутов...
@@ -2943,6 +3105,16 @@ export default function App() {
             <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>error</span>
             <span>{error}</span>
             <button onClick={fetchData} style={{ background: "#ffffff", color: "#ef4444", border: "none", borderRadius: "6px", padding: "4px 10px", fontWeight: 700, cursor: "pointer", marginLeft: "8px" }}>Повторить</button>
+          </div>
+        )}
+
+        {/* Offline / Connectivity Banner */}
+        {(!isOnline || consecutiveFetchErrors >= 2) && !error && (
+          <div className="connectivity-banner">
+            <span className="material-symbols-outlined" style={{ fontSize: "16px", animation: isOnline ? "spin 2s linear infinite" : "none" }}>
+              {!isOnline ? "cloud_off" : "sync"}
+            </span>
+            <span>{!isOnline ? "Нет подключения к сети" : "Переподключение к серверу..."}</span>
           </div>
         )}
 
