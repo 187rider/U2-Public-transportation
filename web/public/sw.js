@@ -36,8 +36,13 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Strictly network-only for all API requests
-  if (url.pathname.startsWith('/api/') || event.request.method !== 'GET') {
+  // Only cache http and https schemes (ignore chrome-extension, etc.)
+  if (!url.protocol.startsWith('http')) {
+    return;
+  }
+
+  // Strictly network-only for API requests, map tiles, and non-GET methods
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/tiles/') || event.request.method !== 'GET') {
     return;
   }
 
