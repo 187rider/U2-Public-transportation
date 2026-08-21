@@ -7,9 +7,6 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
-    optimizeDeps: {
-      exclude: ["maplibre-gl"]
-    },
     server: {
       host: "0.0.0.0",
       proxy: {
