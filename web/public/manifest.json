@@ -4,8 +4,8 @@
   "description": "Public transport tracking map",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#F5F6F8",
-  "theme_color": "#1E75EC",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
   "icons": [
     {
       "src": "/favicon.svg",
