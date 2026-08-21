@@ -235,57 +235,38 @@ class YandexLocationHeadingControl {
       );
     }
 
-    // 2. Hardware compass / orientation listener with 60fps smooth interpolation
-    this._orientationHandler = (e) => {
-      if (!this._map) return;
-
-      let compass = e.webkitCompassHeading;
-      if (compass == null && e.alpha != null) {
-        compass = Math.abs(e.alpha - 360);
-      }
-      if (compass != null && Number.isFinite(compass)) {
-        const target = ((compass % 360) + 360) % 360;
-        const current = ((this._map.getBearing() % 360) + 360) % 360;
-        let diff = (target - current) % 360;
-        if (diff > 180) diff -= 360;
-        if (diff < -180) diff += 360;
-
-        const nextBearing = ((current + diff * 0.35) % 360 + 360) % 360;
-        this._map.setBearing(nextBearing);
-      }
-    };
-
-    // 2. Hardware compass / orientation listener (Only on iOS)
     const isIOS = typeof navigator !== 'undefined' && (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 
-    if (isIOS && typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      DeviceOrientationEvent.requestPermission().then((res) => {
-        if (res === 'granted') {
-          window.addEventListener('deviceorientation', this._orientationHandler, true);
-        } else {
-          this._deactivateHeadingTracking();
-        }
-      }).catch(() => {
-        this._deactivateHeadingTracking();
-      });
-    }
+    // Hardware compass orientation ONLY on iOS
+    if (isIOS) {
+      this._orientationHandler = (e) => {
+        if (!this._map) return;
 
-    // 3. Follow movement and GPS course heading
-    this._geoWatchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        if (!this._map || !pos.coords) return;
-        if (pos.coords.heading != null && Number.isFinite(pos.coords.heading) && (pos.coords.speed || 0) > 0.5) {
-          const target = ((pos.coords.heading % 360) + 360) % 360;
+        let compass = e.webkitCompassHeading;
+        if (compass != null && Number.isFinite(compass)) {
+          const target = ((compass % 360) + 360) % 360;
           const current = ((this._map.getBearing() % 360) + 360) % 360;
           let diff = (target - current) % 360;
           if (diff > 180) diff -= 360;
           if (diff < -180) diff += 360;
-          this._map.setBearing(((current + diff * 0.35) % 360 + 360) % 360);
+
+          const nextBearing = ((current + diff * 0.35) % 360 + 360) % 360;
+          this._map.setBearing(nextBearing);
         }
-      },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 2000 }
-    );
+      };
+
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission().then((res) => {
+          if (res === 'granted') {
+            window.addEventListener('deviceorientation', this._orientationHandler, true);
+          } else {
+            this._deactivateHeadingTracking();
+          }
+        }).catch(() => {
+          this._deactivateHeadingTracking();
+        });
+      }
+    }
   }
 
   _deactivateHeadingTracking() {
