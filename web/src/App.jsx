@@ -130,18 +130,10 @@ class CompassControl {
     };
     this._map.on('rotate', this._rotateListener);
 
-    // If user starts dragging the map manually, disengage live compass
-    this._dragListener = () => {
-      if (this._isHeadingActive) {
-        this._stopHeadingTracking();
-      }
-    };
-    this._map.on('dragstart', this._dragListener);
-
     this._btn.onclick = async () => {
       if (this._isHeadingActive) {
         this._stopHeadingTracking();
-        this._map.easeTo({ bearing: 0, duration: 450 });
+        this._map.easeTo({ bearing: 0, duration: 400 });
       } else {
         await this._startHeadingTracking();
       }
@@ -165,9 +157,6 @@ class CompassControl {
         console.warn('DeviceOrientationEvent.requestPermission failed:', err);
       }
     }
-
-    this._lastHeading = this._map.getBearing();
-    this._targetHeading = this._lastHeading;
 
     // Strategy 1: Modern Android Generic Sensor API (AbsoluteOrientationSensor)
     if (typeof AbsoluteOrientationSensor !== 'undefined') {
@@ -199,7 +188,7 @@ class CompassControl {
         // iOS True North
         rawHeading = e.webkitCompassHeading;
       } else if (e.alpha != null) {
-        // Android / standard compass
+        // Android compass
         rawHeading = (360 - e.alpha) % 360;
       }
 
@@ -232,28 +221,18 @@ class CompassControl {
   }
 
   _updateHeading(heading) {
-    if (heading == null || !Number.isFinite(heading)) return;
-    this._targetHeading = heading;
-    if (!this._rafId) {
-      this._rafId = requestAnimationFrame(this._smoothRotate.bind(this));
-    }
-  }
-
-  _smoothRotate() {
-    this._rafId = null;
-    if (!this._isHeadingActive || !this._map) return;
-
-    let diff = (this._targetHeading - this._lastHeading) % 360;
+    if (heading == null || !Number.isFinite(heading) || !this._isHeadingActive || !this._map) return;
+    
+    const target = ((heading % 360) + 360) % 360;
+    const current = ((this._map.getBearing() % 360) + 360) % 360;
+    
+    let diff = (target - current) % 360;
     if (diff > 180) diff -= 360;
     if (diff < -180) diff += 360;
 
-    // Smooth exponential damping
-    this._lastHeading = (this._lastHeading + diff * 0.28) % 360;
-    this._map.setBearing(this._lastHeading);
-
-    if (Math.abs(diff) > 0.4) {
-      this._rafId = requestAnimationFrame(this._smoothRotate.bind(this));
-    }
+    // Apply smooth step
+    const nextBearing = ((current + diff * 0.45) % 360 + 360) % 360;
+    this._map.setBearing(nextBearing);
   }
 
   _stopHeadingTracking() {
@@ -274,19 +253,14 @@ class CompassControl {
       window.removeEventListener('deviceorientation', this._handler, false);
       this._handler = null;
     }
-    if (this._rafId) {
-      cancelAnimationFrame(this._rafId);
-      this._rafId = null;
-    }
     this._isHeadingActive = false;
     this._btn.classList.remove('compass-active');
   }
 
   onRemove() {
     this._stopHeadingTracking();
-    if (this._map) {
-      if (this._rotateListener) this._map.off('rotate', this._rotateListener);
-      if (this._dragListener) this._map.off('dragstart', this._dragListener);
+    if (this._map && this._rotateListener) {
+      this._map.off('rotate', this._rotateListener);
     }
     if (this._container && this._container.parentNode) {
       this._container.parentNode.removeChild(this._container);
