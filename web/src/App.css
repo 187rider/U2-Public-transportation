@@ -2021,14 +2021,16 @@ body {
   }
 }
 
-/* Align MapLibre controls and floating compass disc */
+/* Position right controls at vertical center on right side */
 .maplibregl-ctrl-top-right {
-  top: 14px !important;
+  top: 50% !important;
   right: 14px !important;
+  transform: translateY(-50%) !important;
   display: flex !important;
   flex-direction: column !important;
   align-items: center !important;
-  gap: 8px !important;
+  gap: 10px !important;
+  z-index: 10 !important;
 }
 
 .maplibregl-ctrl-top-right .maplibregl-ctrl {
