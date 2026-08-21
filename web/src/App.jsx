@@ -156,7 +156,8 @@ class YandexFloatingCompassControl {
 
 // Yandex-Style Geolocation & Heading Mode Button (↗ Idle vs | ▲ | Active Heading Mode)
 class YandexLocationHeadingControl {
-  constructor() {
+  constructor(geolocateControl) {
+    this._geolocateControl = geolocateControl;
     this._mode = 'idle'; // 'idle' or 'active'
     this._geoWatchId = null;
     this._orientationHandler = null;
@@ -208,25 +209,31 @@ class YandexLocationHeadingControl {
   }
 
   _activateHeadingTracking() {
-    if (typeof navigator === 'undefined' || !navigator.geolocation) return;
-
     this._mode = 'active';
     this._renderIcon();
 
-    // 1. Center map on user location
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        if (this._map && pos.coords) {
-          this._map.flyTo({
-            center: [pos.coords.longitude, pos.coords.latitude],
-            zoom: Math.max(this._map.getZoom(), 15),
-            duration: 700
-          });
-        }
-      },
-      (err) => console.warn('Geo error:', err),
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
+    // 1. Automatically call and trigger GeolocateControl (GPS location + pulsing dot)
+    if (this._geolocateControl) {
+      try {
+        this._geolocateControl.trigger();
+      } catch (err) {
+        console.warn("Could not trigger geolocateControl:", err);
+      }
+    } else if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (this._map && pos.coords) {
+            this._map.flyTo({
+              center: [pos.coords.longitude, pos.coords.latitude],
+              zoom: Math.max(this._map.getZoom(), 15),
+              duration: 700
+            });
+          }
+        },
+        (err) => console.warn('Geo error:', err),
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    }
 
     // 2. Hardware compass / orientation listener with 60fps smooth interpolation
     this._orientationHandler = (e) => {
@@ -1979,7 +1986,7 @@ export default function App() {
     });
 
     map.current.addControl(geolocateControl, "top-right");
-    map.current.addControl(new YandexLocationHeadingControl(), "top-right");
+    map.current.addControl(new YandexLocationHeadingControl(geolocateControl), "top-right");
 
     // Add custom 3D Control
     map.current.addControl(new ThreeDControl(() => {
