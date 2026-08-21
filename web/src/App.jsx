@@ -95,14 +95,71 @@ class ThreeDControl {
   }
 }
 
-// Custom MapLibre Control for Live Compass & North Alignment
-class CompassControl {
+// Floating 3D Red/White Compass Disc (Appears when map is rotated away from North)
+class YandexFloatingCompassControl {
+  onAdd(map) {
+    this._map = map;
+    this._container = document.createElement('div');
+    this._container.className = 'yandex-compass-ctrl';
+    this._container.title = 'Сбросить поворот карты на Север';
+    
+    this._container.innerHTML = `
+      <svg class="yandex-compass-svg" viewBox="0 0 44 44" width="42" height="42" style="display: block; margin: auto; transition: transform 0.12s ease-out;">
+        <circle cx="22" cy="22" r="19" fill="#ffffff" fill-opacity="0.95" stroke="#e2e8f0" stroke-width="1.2" filter="drop-shadow(0 2px 6px rgba(0,0,0,0.18))"/>
+        <!-- 3D Red North Tip (faceted) -->
+        <polygon points="22,6 22,22 15,19" fill="#EF4444"/>
+        <polygon points="22,6 29,19 22,22" fill="#DC2626"/>
+        <!-- 3D White/Silver South Tip (faceted) -->
+        <polygon points="22,38 15,25 22,22" fill="#F8FAFC"/>
+        <polygon points="22,38 22,22 29,25" fill="#CBD5E1"/>
+        <circle cx="22" cy="22" r="1.6" fill="#0F172A"/>
+      </svg>
+    `;
+
+    this._svg = this._container.querySelector('.yandex-compass-svg');
+
+    this._updateRotation = () => {
+      if (!this._map) return;
+      const bearing = this._map.getBearing();
+      if (this._svg) {
+        this._svg.style.transform = `rotate(${-bearing}deg)`;
+      }
+      // Show disc when map is rotated away from North, hide when perfectly 0°
+      if (Math.abs(bearing) > 1.5) {
+        this._container.classList.add('visible');
+      } else {
+        this._container.classList.remove('visible');
+      }
+    };
+
+    this._map.on('rotate', this._updateRotation);
+    this._updateRotation();
+
+    this._container.onclick = () => {
+      if (!this._map) return;
+      this._map.easeTo({ bearing: 0, duration: 400 });
+    };
+
+    return this._container;
+  }
+
+  onRemove() {
+    if (this._map && this._updateRotation) {
+      this._map.off('rotate', this._updateRotation);
+    }
+    if (this._container && this._container.parentNode) {
+      this._container.parentNode.removeChild(this._container);
+    }
+    this._map = undefined;
+  }
+}
+
+// Yandex-Style Geolocation & Heading Mode Button (↗ Idle vs | ▲ | Active Heading Mode)
+class YandexLocationHeadingControl {
   constructor() {
-    this._isHeadingActive = false;
-    this._handler = null;
-    this._lastHeading = 0;
-    this._rafId = null;
-    this._targetHeading = 0;
+    this._mode = 'idle'; // 'idle' or 'active'
+    this._geoWatchId = null;
+    this._orientationHandler = null;
   }
   onAdd(map) {
     this._map = map;
@@ -110,32 +167,17 @@ class CompassControl {
     this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
 
     this._btn = document.createElement('button');
-    this._btn.className = 'maplibregl-ctrl-icon compass-ctrl-btn';
+    this._btn.className = 'maplibregl-ctrl-icon yandex-nav-btn';
     this._btn.type = 'button';
-    this._btn.title = 'Компас / Север';
-    this._btn.innerHTML = `
-      <svg class="compass-needle-icon" viewBox="0 0 24 24" width="22" height="22" style="display: block; margin: auto; transition: transform 0.1s ease-out;">
-        <path d="M12 2L16.5 11H7.5L12 2Z" fill="#EF4444"/>
-        <path d="M12 22L7.5 13H16.5L12 22Z" fill="#94A3B8"/>
-        <circle cx="12" cy="12" r="1.8" fill="#1E293B"/>
-      </svg>
-    `;
+    this._btn.title = 'Мое местоположение и слежение по курсу';
+    
+    this._renderIcon();
 
-    this._rotateListener = () => {
-      const bearing = this._map.getBearing();
-      const svg = this._btn.querySelector('.compass-needle-icon');
-      if (svg) {
-        svg.style.transform = `rotate(${-bearing}deg)`;
-      }
-    };
-    this._map.on('rotate', this._rotateListener);
-
-    this._btn.onclick = async () => {
-      if (this._isHeadingActive) {
-        this._stopHeadingTracking();
-        this._map.easeTo({ bearing: 0, duration: 400 });
+    this._btn.onclick = () => {
+      if (this._mode === 'idle') {
+        this._activateHeadingTracking();
       } else {
-        await this._startHeadingTracking();
+        this._deactivateHeadingTracking();
       }
     };
 
@@ -143,91 +185,114 @@ class CompassControl {
     return this._container;
   }
 
-  _startHeadingTracking() {
-    if (typeof window === 'undefined') return false;
+  _renderIcon() {
+    if (this._mode === 'idle') {
+      // 1st Screenshot: Dark grey/black angled navigation arrowhead ↗
+      this._btn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="#1e293b" style="display: block; margin: auto;">
+          <path d="M4 11.5L19.5 4.5L12.5 20L11 13.5L4 11.5Z"/>
+        </svg>
+      `;
+      this._btn.classList.remove('active-heading');
+    } else {
+      // 2nd Screenshot: Blue navigation arrowhead with dashed course lines | ▲ |
+      this._btn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="24" height="24" style="display: block; margin: auto;">
+          <line x1="12" y1="2" x2="12" y2="6.5" stroke="#94A3B8" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="2 3"/>
+          <path d="M12 7.5L17.5 17L12 15L6.5 17L12 7.5Z" fill="#2563eb"/>
+          <line x1="12" y1="17.5" x2="12" y2="22" stroke="#94A3B8" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="2 3"/>
+        </svg>
+      `;
+      this._btn.classList.add('active-heading');
+    }
+  }
 
-    this._handler = (e) => {
+  _activateHeadingTracking() {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) return;
+
+    this._mode = 'active';
+    this._renderIcon();
+
+    // 1. Center map on user location
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (this._map && pos.coords) {
+          this._map.flyTo({
+            center: [pos.coords.longitude, pos.coords.latitude],
+            zoom: Math.max(this._map.getZoom(), 15),
+            duration: 700
+          });
+        }
+      },
+      (err) => console.warn('Geo error:', err),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+
+    // 2. Hardware compass / orientation listener
+    this._orientationHandler = (e) => {
       let compass = e.webkitCompassHeading;
       if (compass == null && e.alpha != null) {
         compass = Math.abs(e.alpha - 360);
       }
-
-      if (compass != null && Number.isFinite(compass)) {
-        this._updateHeading(compass);
+      if (compass != null && Number.isFinite(compass) && this._map) {
+        const target = ((compass % 360) + 360) % 360;
+        const current = ((this._map.getBearing() % 360) + 360) % 360;
+        let diff = (target - current) % 360;
+        if (diff > 180) diff -= 360;
+        if (diff < -180) diff += 360;
+        this._map.setBearing(((current + diff * 0.4) % 360 + 360) % 360);
       }
     };
 
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      DeviceOrientationEvent.requestPermission()
-        .then((response) => {
-          if (response === 'granted') {
-            window.addEventListener('deviceorientation', this._handler, true);
-          }
-        })
-        .catch((err) => console.warn('iOS motion permission error:', err));
+      DeviceOrientationEvent.requestPermission().then((res) => {
+        if (res === 'granted') window.addEventListener('deviceorientation', this._orientationHandler, true);
+      }).catch(() => {});
     } else {
       if ('ondeviceorientationabsolute' in window) {
-        window.addEventListener('deviceorientationabsolute', this._handler, true);
+        window.addEventListener('deviceorientationabsolute', this._orientationHandler, true);
       }
-      window.addEventListener('deviceorientation', this._handler, true);
+      window.addEventListener('deviceorientation', this._orientationHandler, true);
     }
 
-    // Fallback: GPS Course Over Ground (movement heading fallback)
-    if (typeof navigator !== 'undefined' && navigator.geolocation) {
-      try {
-        this._geoWatchId = navigator.geolocation.watchPosition(
-          (pos) => {
-            if (pos && pos.coords && pos.coords.heading != null && Number.isFinite(pos.coords.heading) && (pos.coords.speed || 0) > 0.5) {
-              this._updateHeading(pos.coords.heading);
-            }
-          },
-          () => {},
-          { enableHighAccuracy: true, maximumAge: 2000 }
-        );
-      } catch { }
-    }
-
-    this._isHeadingActive = true;
-    this._btn.classList.add('compass-active');
-    return true;
+    // 3. Follow movement and GPS course heading
+    this._geoWatchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (!this._map || !pos.coords) return;
+        if (pos.coords.heading != null && Number.isFinite(pos.coords.heading) && (pos.coords.speed || 0) > 0.5) {
+          const target = ((pos.coords.heading % 360) + 360) % 360;
+          const current = ((this._map.getBearing() % 360) + 360) % 360;
+          let diff = (target - current) % 360;
+          if (diff > 180) diff -= 360;
+          if (diff < -180) diff += 360;
+          this._map.setBearing(((current + diff * 0.4) % 360 + 360) % 360);
+        }
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 2000 }
+    );
   }
 
-  _updateHeading(heading) {
-    if (heading == null || !Number.isFinite(heading) || !this._isHeadingActive || !this._map) return;
-    
-    const target = ((heading % 360) + 360) % 360;
-    const current = ((this._map.getBearing() % 360) + 360) % 360;
-    
-    let diff = (target - current) % 360;
-    if (diff > 180) diff -= 360;
-    if (diff < -180) diff += 360;
+  _deactivateHeadingTracking() {
+    this._mode = 'idle';
+    this._renderIcon();
 
-    // Apply smooth step
-    const nextBearing = ((current + diff * 0.45) % 360 + 360) % 360;
-    this._map.setBearing(nextBearing);
-  }
-
-  _stopHeadingTracking() {
     if (this._geoWatchId != null) {
-      try {
-        navigator.geolocation.clearWatch(this._geoWatchId);
-      } catch { }
+      navigator.geolocation.clearWatch(this._geoWatchId);
       this._geoWatchId = null;
     }
-    if (this._handler) {
-      window.removeEventListener('deviceorientationabsolute', this._handler, true);
-      window.removeEventListener('deviceorientation', this._handler, true);
-      this._handler = null;
+    if (this._orientationHandler) {
+      window.removeEventListener('deviceorientationabsolute', this._orientationHandler, true);
+      window.removeEventListener('deviceorientation', this._orientationHandler, true);
+      this._orientationHandler = null;
     }
-    this._isHeadingActive = false;
-    this._btn.classList.remove('compass-active');
+    if (this._map) {
+      this._map.easeTo({ bearing: 0, duration: 400 });
+    }
   }
 
   onRemove() {
-    this._stopHeadingTracking();
-    if (this._map && this._rotateListener) {
-      this._map.off('rotate', this._rotateListener);
-    }
+    this._deactivateHeadingTracking();
     if (this._container && this._container.parentNode) {
       this._container.parentNode.removeChild(this._container);
     }
@@ -1886,30 +1951,9 @@ export default function App() {
       }, 500);
     });
 
+    map.current.addControl(new YandexFloatingCompassControl(), "top-right");
     map.current.addControl(new NavigationControl({ showCompass: false, showZoom: true }), "top-right");
-    map.current.addControl(new CompassControl(), "top-right");
-    
-    const geolocateControl = new GeolocateControl({
-      positionOptions: {
-        enableHighAccuracy: true,
-        timeout: 12000,
-        maximumAge: 5000
-      },
-      trackUserLocation: true,
-      showUserLocation: true,
-      showAccuracyCircle: true
-    });
-
-    geolocateControl.on("error", (err) => {
-      console.warn("GPS Geolocation error:", err);
-      if (err.code === 1) {
-        setError("Доступ к геопозиции запрещен. Разрешите геолокацию в Настройках iPhone (Конфиденциальность -> Службы геолокации -> Safari).");
-      } else if (err.code === 2 || err.code === 3) {
-        setError("Не удалось определить GPS-координаты. Проверьте включен ли GPS.");
-      }
-    });
-
-    map.current.addControl(geolocateControl, "top-right");
+    map.current.addControl(new YandexLocationHeadingControl(), "top-right");
 
     // Add custom 3D Control
     map.current.addControl(new ThreeDControl(() => {
