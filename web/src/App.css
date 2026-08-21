@@ -4,35 +4,33 @@ body {
   padding: 0;
   font-family: 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overflow: hidden;
-  background-color: #f2f0e9;
+  background-color: #f2f0e9 !important;
   overscroll-behavior: none;
+  width: 100%;
   height: 100%;
-  height: 100dvh;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
+  min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
 }
 
 #root,
 .app-root,
 .map-container,
-.map {
+.map,
+.maplibregl-canvas-container,
+.maplibregl-canvas {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
   right: 0;
   width: 100%;
+  height: 100%;
+  min-height: 100%;
   margin: 0;
   padding: 0;
   overflow: hidden;
+  background-color: #f2f0e9 !important;
 }
 
 
