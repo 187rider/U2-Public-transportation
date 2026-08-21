@@ -202,14 +202,14 @@ class CompassControl {
       }
     }
 
-    // Strategy 2: Standard deviceorientation and deviceorientationabsolute
+    // Strategy 2: Standard deviceorientation and deviceorientationabsolute on window & document
     this._handler = (e) => {
       let rawHeading = null;
       if (e.webkitCompassHeading != null) {
         // iOS WebKit True North
         rawHeading = e.webkitCompassHeading;
       } else if (e.alpha != null) {
-        // Android / standard compass
+        // Android compass
         rawHeading = (360 - e.alpha) % 360;
       }
 
@@ -220,6 +220,10 @@ class CompassControl {
 
     window.addEventListener('deviceorientationabsolute', this._handler, true);
     window.addEventListener('deviceorientation', this._handler, true);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('deviceorientationabsolute', this._handler, true);
+      document.addEventListener('deviceorientation', this._handler, true);
+    }
 
     this._isHeadingActive = true;
     this._btn.classList.add('compass-active');
@@ -261,6 +265,10 @@ class CompassControl {
     if (this._handler) {
       window.removeEventListener('deviceorientationabsolute', this._handler, true);
       window.removeEventListener('deviceorientation', this._handler, true);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('deviceorientationabsolute', this._handler, true);
+        document.removeEventListener('deviceorientation', this._handler, true);
+      }
       this._handler = null;
     }
     if (this._rafId) {
