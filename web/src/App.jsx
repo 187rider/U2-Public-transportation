@@ -178,12 +178,42 @@ class CompassControl {
     this._lastHeading = this._map.getBearing();
     this._targetHeading = this._lastHeading;
 
+    this._eventName = ('ondeviceorientationabsolute' in window) ? 'deviceorientationabsolute' : 'deviceorientation';
+
     this._handler = (e) => {
       let rawHeading = null;
       if (e.webkitCompassHeading != null) {
+        // iOS WebKit True North
         rawHeading = e.webkitCompassHeading;
       } else if (e.alpha != null) {
-        rawHeading = (360 - e.alpha) % 360;
+        // Android 3D gimbal heading calculation
+        const degToRad = Math.PI / 180;
+        const alpha = (e.alpha || 0) * degToRad;
+        const beta = (e.beta || 0) * degToRad;
+        const gamma = (e.gamma || 0) * degToRad;
+
+        const cA = Math.cos(alpha);
+        const sA = Math.sin(alpha);
+        const cB = Math.cos(beta);
+        const sB = Math.sin(beta);
+        const cG = Math.cos(gamma);
+        const sG = Math.sin(gamma);
+
+        // Calculate normal vector
+        const rA = -cA * sG - sA * sB * cG;
+        const rB = -sA * sG + cA * sB * cG;
+
+        let compass = Math.atan2(rA, rB) * (180 / Math.PI);
+        if (compass < 0) compass += 360;
+
+        // If phone is lying relatively flat
+        if (Math.abs(e.beta || 0) < 20 && Math.abs(e.gamma || 0) < 20) {
+          compass = (360 - (e.alpha || 0)) % 360;
+        }
+
+        // Adjust for screen orientation angle if rotated
+        const screenAngle = (typeof window.orientation !== 'undefined' ? window.orientation : (screen.orientation?.angle || 0));
+        rawHeading = (compass + screenAngle + 360) % 360;
       }
 
       if (rawHeading != null && Number.isFinite(rawHeading)) {
@@ -194,7 +224,12 @@ class CompassControl {
       }
     };
 
-    window.addEventListener('deviceorientation', this._handler, true);
+    window.addEventListener(this._eventName, this._handler, true);
+    // Also listen to deviceorientation as fallback on Android
+    if (this._eventName !== 'deviceorientation') {
+      window.addEventListener('deviceorientation', this._handler, true);
+    }
+
     this._isHeadingActive = true;
     this._btn.classList.add('compass-active');
     return true;
@@ -219,6 +254,9 @@ class CompassControl {
 
   _stopHeadingTracking() {
     if (this._handler) {
+      if (this._eventName) {
+        window.removeEventListener(this._eventName, this._handler, true);
+      }
       window.removeEventListener('deviceorientation', this._handler, true);
       this._handler = null;
     }
