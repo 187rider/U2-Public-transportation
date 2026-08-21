@@ -250,12 +250,17 @@ class YandexLocationHeadingControl {
 
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
       DeviceOrientationEvent.requestPermission().then((res) => {
-        if (res === 'granted') window.addEventListener('deviceorientation', this._orientationHandler, true);
-      }).catch(() => {});
+        if (res === 'granted') {
+          window.addEventListener('deviceorientation', this._orientationHandler, true);
+        } else {
+          this._deactivateHeadingTracking();
+        }
+      }).catch(() => {
+        this._deactivateHeadingTracking();
+      });
+    } else if ('ondeviceorientationabsolute' in window) {
+      window.addEventListener('deviceorientationabsolute', this._orientationHandler, true);
     } else {
-      if ('ondeviceorientationabsolute' in window) {
-        window.addEventListener('deviceorientationabsolute', this._orientationHandler, true);
-      }
       window.addEventListener('deviceorientation', this._orientationHandler, true);
     }
 
@@ -1970,12 +1975,7 @@ export default function App() {
     });
 
     geolocateControl.on("error", (err) => {
-      console.warn("GPS Geolocation error:", err);
-      if (err.code === 1) {
-        setError("Доступ к геопозиции запрещен. Разрешите геолокацию в Настройках iPhone (Конфиденциальность -> Службы геолокации -> Safari).");
-      } else if (err.code === 2 || err.code === 3) {
-        setError("Не удалось определить GPS-координаты. Проверьте включен ли GPS.");
-      }
+      console.warn("GPS Geolocation error:", err?.message || err);
     });
 
     map.current.addControl(geolocateControl, "top-right");
