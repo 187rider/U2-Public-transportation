@@ -4,17 +4,9 @@ import { Map as MapLibreMap, NavigationControl, GeolocateControl, Popup, Marker 
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./App.css";
 
-const TILE_URL = "/tiles/{z}/{x}/{y}.pbf";
-
-/**
- * ⚠️ SECURITY NOTE
- * Anything prefixed VITE_ is compiled into the public JS bundle, so this
- * "secret" is visible to anyone who opens DevTools. The timestamp+HMAC-ish
- * signature below is therefore only a *scraper deterrent*, not authentication.
- * Real protection must live server-side (sessions, tokens, rate limiting).
- */
-const API_SECRET = import.meta.env.VITE_API_SECRET || "";
+const API_SECRET = import.meta.env.VITE_API_SECRET || "REDACTED_SECRET";
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+const TILE_URL = API_BASE_URL ? `${API_BASE_URL}/tiles/{z}/{x}/{y}.pbf` : "/tiles/{z}/{x}/{y}.pbf";
 
 if (!API_SECRET && import.meta.env.DEV) {
   console.warn("Missing VITE_API_SECRET environment variable.");
