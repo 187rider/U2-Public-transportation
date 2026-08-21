@@ -95,6 +95,106 @@ class ThreeDControl {
   }
 }
 
+// Custom MapLibre Control for Live Compass & North Alignment
+class CompassControl {
+  constructor() {
+    this._isHeadingActive = false;
+    this._handler = null;
+  }
+  onAdd(map) {
+    this._map = map;
+    this._container = document.createElement('div');
+    this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+
+    this._btn = document.createElement('button');
+    this._btn.className = 'maplibregl-ctrl-icon compass-ctrl-btn';
+    this._btn.type = 'button';
+    this._btn.title = 'Компас / Север (Нажмите для синхронизации с положением телефона)';
+    this._btn.innerHTML = `
+      <svg class="compass-needle-icon" viewBox="0 0 24 24" width="22" height="22" style="display: block; margin: auto; transition: transform 0.1s ease-out;">
+        <path d="M12 2L16.5 11H7.5L12 2Z" fill="#EF4444"/>
+        <path d="M12 22L7.5 13H16.5L12 22Z" fill="#94A3B8"/>
+        <circle cx="12" cy="12" r="1.8" fill="#1E293B"/>
+      </svg>
+    `;
+
+    this._rotateListener = () => {
+      const bearing = this._map.getBearing();
+      const svg = this._btn.querySelector('.compass-needle-icon');
+      if (svg) {
+        svg.style.transform = `rotate(${-bearing}deg)`;
+      }
+    };
+    this._map.on('rotate', this._rotateListener);
+
+    this._btn.onclick = async () => {
+      if (this._isHeadingActive) {
+        this._stopHeadingTracking();
+        this._map.easeTo({ bearing: 0, pitch: this._map.getPitch(), duration: 500 });
+      } else {
+        const started = await this._startHeadingTracking();
+        if (!started) {
+          this._map.easeTo({ bearing: 0, pitch: this._map.getPitch(), duration: 500 });
+        }
+      }
+    };
+
+    this._container.appendChild(this._btn);
+    return this._container;
+  }
+
+  async _startHeadingTracking() {
+    if (typeof window === 'undefined') return false;
+
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      try {
+        const permission = await DeviceOrientationEvent.requestPermission();
+        if (permission !== 'granted') return false;
+      } catch {
+        return false;
+      }
+    }
+
+    this._handler = (e) => {
+      let heading = null;
+      if (e.webkitCompassHeading != null) {
+        heading = e.webkitCompassHeading;
+      } else if (e.alpha != null) {
+        heading = (360 - e.alpha) % 360;
+      }
+
+      if (heading != null && Number.isFinite(heading)) {
+        this._map.setBearing(heading);
+      }
+    };
+
+    window.addEventListener('deviceorientation', this._handler, true);
+    this._isHeadingActive = true;
+    this._btn.classList.add('compass-active');
+    return true;
+  }
+
+  _stopHeadingTracking() {
+    if (this._handler) {
+      window.removeEventListener('deviceorientation', this._handler, true);
+      this._handler = null;
+    }
+    this._isHeadingActive = false;
+    this._btn.classList.remove('compass-active');
+  }
+
+  onRemove() {
+    this._stopHeadingTracking();
+    if (this._map && this._rotateListener) {
+      this._map.off('rotate', this._rotateListener);
+    }
+    if (this._container && this._container.parentNode) {
+      this._container.parentNode.removeChild(this._container);
+    }
+    this._map = undefined;
+  }
+}
+
 const style = {
   version: 8,
   sources: {
@@ -1746,7 +1846,8 @@ export default function App() {
       }, 500);
     });
 
-    map.current.addControl(new NavigationControl(), "top-right");
+    map.current.addControl(new NavigationControl({ showCompass: false, showZoom: true }), "top-right");
+    map.current.addControl(new CompassControl(), "top-right");
     
     const geolocateControl = new GeolocateControl({
       positionOptions: {

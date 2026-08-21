@@ -2020,3 +2020,29 @@ body {
     width: 35%;
   }
 }
+
+/* Custom Live Compass Control Button */
+.compass-ctrl-btn {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+}
+
+.compass-ctrl-btn.compass-active {
+  background-color: #eff6ff !important;
+}
+
+.compass-ctrl-btn.compass-active .compass-needle-icon {
+  filter: drop-shadow(0 0 6px rgba(37, 99, 235, 0.7));
+  animation: compassPulse 2s infinite ease-in-out;
+}
+
+@keyframes compassPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
