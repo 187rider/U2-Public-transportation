@@ -255,7 +255,10 @@ class YandexLocationHeadingControl {
       }
     };
 
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    // 2. Hardware compass / orientation listener (Only on iOS)
+    const isIOS = typeof navigator !== 'undefined' && (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+
+    if (isIOS && typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
       DeviceOrientationEvent.requestPermission().then((res) => {
         if (res === 'granted') {
           window.addEventListener('deviceorientation', this._orientationHandler, true);
@@ -265,10 +268,6 @@ class YandexLocationHeadingControl {
       }).catch(() => {
         this._deactivateHeadingTracking();
       });
-    } else if ('ondeviceorientationabsolute' in window) {
-      window.addEventListener('deviceorientationabsolute', this._orientationHandler, true);
-    } else {
-      window.addEventListener('deviceorientation', this._orientationHandler, true);
     }
 
     // 3. Follow movement and GPS course heading
