@@ -228,14 +228,9 @@ class YandexLocationHeadingControl {
       { enableHighAccuracy: true, timeout: 10000 }
     );
 
-    // 2. Hardware compass / orientation listener with animation lock and throttling
-    let lastBearingUpdate = 0;
+    // 2. Hardware compass / orientation listener with 60fps smooth interpolation
     this._orientationHandler = (e) => {
-      const now = Date.now();
-      if (now - lastBearingUpdate < 75) return; // Limit to ~13 updates/sec to not block UI/zoom
-
-      // Don't interrupt user zoom gestures or 3D camera transitions
-      if (!this._map || this._map.isZooming()) return;
+      if (!this._map) return;
 
       let compass = e.webkitCompassHeading;
       if (compass == null && e.alpha != null) {
@@ -248,11 +243,8 @@ class YandexLocationHeadingControl {
         if (diff > 180) diff -= 360;
         if (diff < -180) diff += 360;
 
-        if (Math.abs(diff) > 2.0) {
-          lastBearingUpdate = now;
-          const nextBearing = ((current + diff * 0.4) % 360 + 360) % 360;
-          this._map.setBearing(nextBearing);
-        }
+        const nextBearing = ((current + diff * 0.35) % 360 + 360) % 360;
+        this._map.setBearing(nextBearing);
       }
     };
 
@@ -270,16 +262,14 @@ class YandexLocationHeadingControl {
     // 3. Follow movement and GPS course heading
     this._geoWatchId = navigator.geolocation.watchPosition(
       (pos) => {
-        if (!this._map || !pos.coords || this._map.isZooming()) return;
+        if (!this._map || !pos.coords) return;
         if (pos.coords.heading != null && Number.isFinite(pos.coords.heading) && (pos.coords.speed || 0) > 0.5) {
           const target = ((pos.coords.heading % 360) + 360) % 360;
           const current = ((this._map.getBearing() % 360) + 360) % 360;
           let diff = (target - current) % 360;
           if (diff > 180) diff -= 360;
           if (diff < -180) diff += 360;
-          if (Math.abs(diff) > 2.0) {
-            this._map.setBearing(((current + diff * 0.4) % 360 + 360) % 360);
-          }
+          this._map.setBearing(((current + diff * 0.35) % 360 + 360) % 360);
         }
       },
       () => {},
