@@ -1953,6 +1953,28 @@ export default function App() {
 
     map.current.addControl(new YandexFloatingCompassControl(), "top-right");
     map.current.addControl(new NavigationControl({ showCompass: false, showZoom: true }), "top-right");
+    
+    const geolocateControl = new GeolocateControl({
+      positionOptions: {
+        enableHighAccuracy: true,
+        timeout: 12000,
+        maximumAge: 5000
+      },
+      trackUserLocation: true,
+      showUserLocation: true,
+      showAccuracyCircle: true
+    });
+
+    geolocateControl.on("error", (err) => {
+      console.warn("GPS Geolocation error:", err);
+      if (err.code === 1) {
+        setError("Доступ к геопозиции запрещен. Разрешите геолокацию в Настройках iPhone (Конфиденциальность -> Службы геолокации -> Safari).");
+      } else if (err.code === 2 || err.code === 3) {
+        setError("Не удалось определить GPS-координаты. Проверьте включен ли GPS.");
+      }
+    });
+
+    map.current.addControl(geolocateControl, "top-right");
     map.current.addControl(new YandexLocationHeadingControl(), "top-right");
 
     // Add custom 3D Control
