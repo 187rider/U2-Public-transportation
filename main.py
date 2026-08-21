@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
@@ -12,6 +12,7 @@ import binascii
 from datetime import datetime, timezone
 import os
 import json
+import sqlite3
 from dotenv import load_dotenv
 import hashlib
 import hmac
@@ -340,9 +341,44 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
+
+MBTILES_PATH = os.getenv("MBTILES_PATH", "ulan-ude.mbtiles")
+
+@app.api_route("/tiles/{z}/{x}/{y}.pbf", methods=["GET", "HEAD"])
+async def get_tile(z: int, x: int, y: int):
+    if not os.path.exists(MBTILES_PATH):
+        raise HTTPException(status_code=404, detail="MBTiles file not found")
+    
+    tms_y = (1 << z) - 1 - y
+    try:
+        conn = sqlite3.connect(f"file:{MBTILES_PATH}?mode=ro", uri=True)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?",
+            (z, x, tms_y)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row or not row[0]:
+            raise HTTPException(status_code=404, detail="Tile not found")
+            
+        return Response(
+            content=row[0],
+            media_type="application/x-protobuf",
+            headers={
+                "Content-Encoding": "gzip",
+                "Cache-Control": "public, max-age=604800, immutable"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error reading tile (%d, %d, %d): %s", z, x, y, e)
+        raise HTTPException(status_code=500, detail="Tile query failed")
 
 
 @app.get("/api/stations", dependencies=[Depends(verify_signature)])
