@@ -1244,7 +1244,7 @@ export default function App() {
     return groups;
   }, [routes]);
 
-  // Fetch stations & routes
+  // Fetch stations & routes & preload initial vehicle telemetry during splash screen
   const fetchData = async () => {
     setLoading(true);
     setError(null);
@@ -1267,29 +1267,55 @@ export default function App() {
       setStations(features);
       setRoutes(fetchedRoutes);
 
-      setSelectedRoutes(prev => {
-        if (prev && prev.size > 0) return prev;
-        const saved = localStorage.getItem("pref_selectedRoutes");
-        if (saved) {
-          try {
-            const parsed = JSON.parse(saved);
-            if (Array.isArray(parsed) && parsed.length > 0) return new Set(parsed);
-          } catch { }
-        }
-        return new Set(fetchedRoutes.map(r => r.id));
+      let initialSelected = new Set();
+      const saved = localStorage.getItem("pref_selectedRoutes");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) initialSelected = new Set(parsed);
+        } catch { }
+      }
+      if (initialSelected.size === 0) {
+        initialSelected = new Set(fetchedRoutes.map(r => r.id));
+      }
+      setSelectedRoutes(initialSelected);
+
+      // Preload initial vehicles during splash screen so map is immediately populated with live buses
+      const initialRids = [];
+      initialSelected.forEach(r => {
+        String(r).split(",").forEach(id => {
+          if (id.trim()) initialRids.push(id.trim());
+        });
       });
+
+      if (initialRids.length > 0) {
+        try {
+          const vRes = await apiFetch(`/api/vehicles?rids=${initialRids.join(",")}&curk=0`);
+          if (vRes.ok) {
+            const vData = await vRes.json();
+            if (vData && vData.vehicles) {
+              const nowTime = Date.now();
+              vData.vehicles.forEach(v => {
+                knownVehiclesRef.current[v.id] = { ...v, _lastSeen: nowTime };
+              });
+            }
+          }
+        } catch {
+          // Non-blocking fallback: poller continues in background
+        }
+      }
 
       setLoading(false);
       setTimeout(() => {
         setIsSplashFading(true);
-        setTimeout(() => setIsSplashMounted(false), 550);
-      }, 900);
+        setTimeout(() => setIsSplashMounted(false), 780);
+      }, 500);
     } catch (err) {
       console.error("Failed to load transit data:", err);
       setError("Не удалось загрузить данные. Проверьте, запущен ли FastAPI backend (main.py).");
       setLoading(false);
       setIsSplashFading(true);
-      setTimeout(() => setIsSplashMounted(false), 550);
+      setTimeout(() => setIsSplashMounted(false), 780);
     }
   };
 

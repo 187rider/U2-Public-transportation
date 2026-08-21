@@ -1679,14 +1679,57 @@ body {
   justify-content: center;
   z-index: 999999;
   overflow: hidden;
-  transition: opacity 0.55s cubic-bezier(0.4, 0, 0.2, 1), transform 0.55s cubic-bezier(0.4, 0, 0.2, 1);
-  will-change: opacity, transform;
+  transition: opacity 0.45s ease 0.3s;
+  will-change: opacity;
 }
 
 .startup-splash-overlay.fade-out {
   opacity: 0;
-  transform: scale(1.05);
   pointer-events: none;
+}
+
+/* Bus Accelerates & Drives Off the Screen to the Right */
+@keyframes busDriveAway {
+  0% {
+    transform: translateX(0) translateY(0);
+  }
+  14% {
+    transform: translateX(-18px) translateY(1.5px);
+  }
+  100% {
+    transform: translateX(calc(100vw + 260px)) translateY(-2px);
+  }
+}
+
+.startup-splash-overlay.fade-out .startup-vehicle-body {
+  animation: busDriveAway 0.72s cubic-bezier(0.4, 0, 0.2, 1) forwards !important;
+  will-change: transform;
+}
+
+.startup-splash-overlay.fade-out .wheel-tire {
+  animation: wheelSpin 0.12s linear infinite !important;
+}
+
+.startup-splash-overlay.fade-out .speed-lines-trail {
+  transform: scaleX(2.5) translateX(-18px) !important;
+  opacity: 0.95 !important;
+  transition: transform 0.25s ease, opacity 0.25s ease !important;
+}
+
+.startup-splash-overlay.fade-out .startup-splash-text-wrap {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+
+.startup-splash-overlay.fade-out .startup-road-track {
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+
+.startup-splash-overlay.fade-out .startup-dust-container {
+  opacity: 0;
+  transition: opacity 0.3s ease;
 }
 
 .startup-splash-content {
