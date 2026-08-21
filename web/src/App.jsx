@@ -100,6 +100,9 @@ class CompassControl {
   constructor() {
     this._isHeadingActive = false;
     this._handler = null;
+    this._lastHeading = 0;
+    this._rafId = null;
+    this._targetHeading = 0;
   }
   onAdd(map) {
     this._map = map;
@@ -109,7 +112,7 @@ class CompassControl {
     this._btn = document.createElement('button');
     this._btn.className = 'maplibregl-ctrl-icon compass-ctrl-btn';
     this._btn.type = 'button';
-    this._btn.title = 'Компас / Север (Нажмите для синхронизации с положением телефона)';
+    this._btn.title = 'Компас / Север';
     this._btn.innerHTML = `
       <svg class="compass-needle-icon" viewBox="0 0 24 24" width="22" height="22" style="display: block; margin: auto; transition: transform 0.1s ease-out;">
         <path d="M12 2L16.5 11H7.5L12 2Z" fill="#EF4444"/>
@@ -127,14 +130,30 @@ class CompassControl {
     };
     this._map.on('rotate', this._rotateListener);
 
-    this._btn.onclick = async () => {
+    // If user starts dragging the map manually, disengage live compass
+    this._dragListener = () => {
       if (this._isHeadingActive) {
         this._stopHeadingTracking();
-        this._map.easeTo({ bearing: 0, pitch: this._map.getPitch(), duration: 500 });
+      }
+    };
+    this._map.on('dragstart', this._dragListener);
+
+    this._btn.onclick = async () => {
+      const currentBearing = this._map.getBearing();
+      
+      // If map is currently rotated and compass tracking is off, simply snap to North
+      if (!this._isHeadingActive && Math.abs(currentBearing) > 3) {
+        this._map.easeTo({ bearing: 0, duration: 450 });
+        return;
+      }
+
+      if (this._isHeadingActive) {
+        this._stopHeadingTracking();
+        this._map.easeTo({ bearing: 0, duration: 450 });
       } else {
         const started = await this._startHeadingTracking();
         if (!started) {
-          this._map.easeTo({ bearing: 0, pitch: this._map.getPitch(), duration: 500 });
+          this._map.easeTo({ bearing: 0, duration: 450 });
         }
       }
     };
@@ -146,6 +165,7 @@ class CompassControl {
   async _startHeadingTracking() {
     if (typeof window === 'undefined') return false;
 
+    // iOS 13+ permission request
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
       try {
         const permission = await DeviceOrientationEvent.requestPermission();
@@ -155,16 +175,22 @@ class CompassControl {
       }
     }
 
+    this._lastHeading = this._map.getBearing();
+    this._targetHeading = this._lastHeading;
+
     this._handler = (e) => {
-      let heading = null;
+      let rawHeading = null;
       if (e.webkitCompassHeading != null) {
-        heading = e.webkitCompassHeading;
+        rawHeading = e.webkitCompassHeading;
       } else if (e.alpha != null) {
-        heading = (360 - e.alpha) % 360;
+        rawHeading = (360 - e.alpha) % 360;
       }
 
-      if (heading != null && Number.isFinite(heading)) {
-        this._map.setBearing(heading);
+      if (rawHeading != null && Number.isFinite(rawHeading)) {
+        this._targetHeading = rawHeading;
+        if (!this._rafId) {
+          this._rafId = requestAnimationFrame(this._smoothRotate.bind(this));
+        }
       }
     };
 
@@ -174,10 +200,31 @@ class CompassControl {
     return true;
   }
 
+  _smoothRotate() {
+    this._rafId = null;
+    if (!this._isHeadingActive || !this._map) return;
+
+    let diff = (this._targetHeading - this._lastHeading) % 360;
+    if (diff > 180) diff -= 360;
+    if (diff < -180) diff += 360;
+
+    // Smooth exponential damping
+    this._lastHeading = (this._lastHeading + diff * 0.25) % 360;
+    this._map.setBearing(this._lastHeading);
+
+    if (Math.abs(diff) > 0.5) {
+      this._rafId = requestAnimationFrame(this._smoothRotate.bind(this));
+    }
+  }
+
   _stopHeadingTracking() {
     if (this._handler) {
       window.removeEventListener('deviceorientation', this._handler, true);
       this._handler = null;
+    }
+    if (this._rafId) {
+      cancelAnimationFrame(this._rafId);
+      this._rafId = null;
     }
     this._isHeadingActive = false;
     this._btn.classList.remove('compass-active');
@@ -185,8 +232,9 @@ class CompassControl {
 
   onRemove() {
     this._stopHeadingTracking();
-    if (this._map && this._rotateListener) {
-      this._map.off('rotate', this._rotateListener);
+    if (this._map) {
+      if (this._rotateListener) this._map.off('rotate', this._rotateListener);
+      if (this._dragListener) this._map.off('dragstart', this._dragListener);
     }
     if (this._container && this._container.parentNode) {
       this._container.parentNode.removeChild(this._container);
