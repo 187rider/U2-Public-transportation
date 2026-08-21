@@ -5,7 +5,11 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import "./App.css";
 
 const API_SECRET = import.meta.env.VITE_API_SECRET || "REDACTED_SECRET";
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+let rawBase = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+if (typeof window !== "undefined" && window.location.protocol === "https:" && rawBase.startsWith("http://")) {
+  rawBase = "";
+}
+const API_BASE_URL = rawBase;
 const TILE_URL = API_BASE_URL ? `${API_BASE_URL}/tiles/{z}/{x}/{y}.pbf` : "/tiles/{z}/{x}/{y}.pbf";
 
 if (!API_SECRET && import.meta.env.DEV) {
