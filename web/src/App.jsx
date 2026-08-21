@@ -143,70 +143,34 @@ class CompassControl {
     return this._container;
   }
 
-  async _startHeadingTracking() {
+  _startHeadingTracking() {
     if (typeof window === 'undefined') return false;
 
-    // iOS 13+ permission request
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      try {
-        const permission = await DeviceOrientationEvent.requestPermission();
-        if (permission !== 'granted') {
-          console.warn('iOS motion permission not granted');
-        }
-      } catch (err) {
-        console.warn('DeviceOrientationEvent.requestPermission failed:', err);
-      }
-    }
-
     this._handler = (e) => {
-      let heading = null;
-      if (e.webkitCompassHeading != null) {
-        // iOS True North
-        heading = e.webkitCompassHeading;
-      } else if (e.alpha != null) {
-        // Standard Android 3D Azimuth calculation
-        const alpha = e.alpha;
-        const beta = e.beta || 0;
-        const gamma = e.gamma || 0;
-
-        const deg = Math.PI / 180;
-        const x = beta * deg;
-        const y = gamma * deg;
-        const z = alpha * deg;
-
-        const cX = Math.cos(x);
-        const cY = Math.cos(y);
-        const cZ = Math.cos(z);
-        const sX = Math.sin(x);
-        const sY = Math.sin(y);
-        const sZ = Math.sin(z);
-
-        const Vx = -cZ * sY - sZ * sX * cY;
-        const Vy = -sZ * sY + cZ * sX * cY;
-
-        let comp = Math.atan2(Vx, Vy) * (180 / Math.PI);
-        if (comp < 0) comp += 360;
-
-        // If phone is flat on table, fall back to direct alpha
-        if (Math.abs(beta) < 15 && Math.abs(gamma) < 15) {
-          comp = (360 - alpha) % 360;
-        }
-
-        heading = comp;
+      let compass = e.webkitCompassHeading;
+      if (compass == null && e.alpha != null) {
+        compass = Math.abs(e.alpha - 360);
       }
 
-      if (heading != null && Number.isFinite(heading)) {
-        this._updateHeading(heading);
+      if (compass != null && Number.isFinite(compass)) {
+        this._updateHeading(compass);
       }
     };
 
-    // Prefer deviceorientationabsolute on Android, fallback to deviceorientation
-    if ('ondeviceorientationabsolute' in window) {
-      this._eventKey = 'deviceorientationabsolute';
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      DeviceOrientationEvent.requestPermission()
+        .then((response) => {
+          if (response === 'granted') {
+            window.addEventListener('deviceorientation', this._handler, true);
+          }
+        })
+        .catch((err) => console.warn('iOS motion permission error:', err));
     } else {
-      this._eventKey = 'deviceorientation';
+      if ('ondeviceorientationabsolute' in window) {
+        window.addEventListener('deviceorientationabsolute', this._handler, true);
+      }
+      window.addEventListener('deviceorientation', this._handler, true);
     }
-    window.addEventListener(this._eventKey, this._handler, false);
 
     // Fallback: GPS Course Over Ground (movement heading fallback)
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
@@ -250,8 +214,9 @@ class CompassControl {
       } catch { }
       this._geoWatchId = null;
     }
-    if (this._handler && this._eventKey) {
-      window.removeEventListener(this._eventKey, this._handler, false);
+    if (this._handler) {
+      window.removeEventListener('deviceorientationabsolute', this._handler, true);
+      window.removeEventListener('deviceorientation', this._handler, true);
       this._handler = null;
     }
     this._isHeadingActive = false;
