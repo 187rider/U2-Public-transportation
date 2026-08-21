@@ -139,22 +139,11 @@ class CompassControl {
     this._map.on('dragstart', this._dragListener);
 
     this._btn.onclick = async () => {
-      const currentBearing = this._map.getBearing();
-      
-      // If map is currently rotated and compass tracking is off, simply snap to North
-      if (!this._isHeadingActive && Math.abs(currentBearing) > 3) {
-        this._map.easeTo({ bearing: 0, duration: 450 });
-        return;
-      }
-
       if (this._isHeadingActive) {
         this._stopHeadingTracking();
         this._map.easeTo({ bearing: 0, duration: 450 });
       } else {
-        const started = await this._startHeadingTracking();
-        if (!started) {
-          this._map.easeTo({ bearing: 0, duration: 450 });
-        }
+        await this._startHeadingTracking();
       }
     };
 
@@ -169,9 +158,11 @@ class CompassControl {
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
       try {
         const permission = await DeviceOrientationEvent.requestPermission();
-        if (permission !== 'granted') return false;
-      } catch {
-        return false;
+        if (permission !== 'granted') {
+          console.warn('iOS motion permission not granted');
+        }
+      } catch (err) {
+        console.warn('DeviceOrientationEvent.requestPermission failed:', err);
       }
     }
 
@@ -185,7 +176,6 @@ class CompassControl {
         this._sensor.addEventListener('reading', () => {
           const q = this._sensor.quaternion;
           if (q && q.length === 4) {
-            // Convert quaternion to yaw/azimuth heading
             const siny_cosp = 2 * (q[3] * q[2] + q[0] * q[1]);
             const cosy_cosp = 1 - 2 * (q[1] * q[1] + q[2] * q[2]);
             let yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
@@ -202,14 +192,14 @@ class CompassControl {
       }
     }
 
-    // Strategy 2: Standard deviceorientation and deviceorientationabsolute on window & document
+    // Strategy 2: Standard deviceorientation and deviceorientationabsolute
     this._handler = (e) => {
       let rawHeading = null;
       if (e.webkitCompassHeading != null) {
-        // iOS WebKit True North
+        // iOS True North
         rawHeading = e.webkitCompassHeading;
       } else if (e.alpha != null) {
-        // Android compass
+        // Android / standard compass
         rawHeading = (360 - e.alpha) % 360;
       }
 
@@ -218,11 +208,22 @@ class CompassControl {
       }
     };
 
-    window.addEventListener('deviceorientationabsolute', this._handler, true);
-    window.addEventListener('deviceorientation', this._handler, true);
-    if (typeof document !== 'undefined') {
-      document.addEventListener('deviceorientationabsolute', this._handler, true);
-      document.addEventListener('deviceorientation', this._handler, true);
+    window.addEventListener('deviceorientationabsolute', this._handler, false);
+    window.addEventListener('deviceorientation', this._handler, false);
+
+    // Strategy 3: GPS Course Over Ground (movement heading fallback)
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      try {
+        this._geoWatchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            if (pos && pos.coords && pos.coords.heading != null && Number.isFinite(pos.coords.heading) && (pos.coords.speed || 0) > 0.5) {
+              this._updateHeading(pos.coords.heading);
+            }
+          },
+          () => {},
+          { enableHighAccuracy: true, maximumAge: 2000 }
+        );
+      } catch { }
     }
 
     this._isHeadingActive = true;
@@ -262,13 +263,15 @@ class CompassControl {
       } catch { }
       this._sensor = null;
     }
+    if (this._geoWatchId != null) {
+      try {
+        navigator.geolocation.clearWatch(this._geoWatchId);
+      } catch { }
+      this._geoWatchId = null;
+    }
     if (this._handler) {
-      window.removeEventListener('deviceorientationabsolute', this._handler, true);
-      window.removeEventListener('deviceorientation', this._handler, true);
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('deviceorientationabsolute', this._handler, true);
-        document.removeEventListener('deviceorientation', this._handler, true);
-      }
+      window.removeEventListener('deviceorientationabsolute', this._handler, false);
+      window.removeEventListener('deviceorientation', this._handler, false);
       this._handler = null;
     }
     if (this._rafId) {
