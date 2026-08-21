@@ -178,61 +178,60 @@ class CompassControl {
     this._lastHeading = this._map.getBearing();
     this._targetHeading = this._lastHeading;
 
-    this._eventName = ('ondeviceorientationabsolute' in window) ? 'deviceorientationabsolute' : 'deviceorientation';
+    // Strategy 1: Modern Android Generic Sensor API (AbsoluteOrientationSensor)
+    if (typeof AbsoluteOrientationSensor !== 'undefined') {
+      try {
+        this._sensor = new AbsoluteOrientationSensor({ frequency: 50 });
+        this._sensor.addEventListener('reading', () => {
+          const q = this._sensor.quaternion;
+          if (q && q.length === 4) {
+            // Convert quaternion to yaw/azimuth heading
+            const siny_cosp = 2 * (q[3] * q[2] + q[0] * q[1]);
+            const cosy_cosp = 1 - 2 * (q[1] * q[1] + q[2] * q[2]);
+            let yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
+            let heading = (360 - yaw) % 360;
+            this._updateHeading(heading);
+          }
+        });
+        this._sensor.addEventListener('error', (e) => {
+          console.warn('AbsoluteOrientationSensor error:', e);
+        });
+        this._sensor.start();
+      } catch (err) {
+        console.warn('Could not start AbsoluteOrientationSensor:', err);
+      }
+    }
 
+    // Strategy 2: Standard deviceorientation and deviceorientationabsolute
     this._handler = (e) => {
       let rawHeading = null;
       if (e.webkitCompassHeading != null) {
         // iOS WebKit True North
         rawHeading = e.webkitCompassHeading;
       } else if (e.alpha != null) {
-        // Android 3D gimbal heading calculation
-        const degToRad = Math.PI / 180;
-        const alpha = (e.alpha || 0) * degToRad;
-        const beta = (e.beta || 0) * degToRad;
-        const gamma = (e.gamma || 0) * degToRad;
-
-        const cA = Math.cos(alpha);
-        const sA = Math.sin(alpha);
-        const cB = Math.cos(beta);
-        const sB = Math.sin(beta);
-        const cG = Math.cos(gamma);
-        const sG = Math.sin(gamma);
-
-        // Calculate normal vector
-        const rA = -cA * sG - sA * sB * cG;
-        const rB = -sA * sG + cA * sB * cG;
-
-        let compass = Math.atan2(rA, rB) * (180 / Math.PI);
-        if (compass < 0) compass += 360;
-
-        // If phone is lying relatively flat
-        if (Math.abs(e.beta || 0) < 20 && Math.abs(e.gamma || 0) < 20) {
-          compass = (360 - (e.alpha || 0)) % 360;
-        }
-
-        // Adjust for screen orientation angle if rotated
-        const screenAngle = (typeof window.orientation !== 'undefined' ? window.orientation : (screen.orientation?.angle || 0));
-        rawHeading = (compass + screenAngle + 360) % 360;
+        // Android / standard compass
+        rawHeading = (360 - e.alpha) % 360;
       }
 
       if (rawHeading != null && Number.isFinite(rawHeading)) {
-        this._targetHeading = rawHeading;
-        if (!this._rafId) {
-          this._rafId = requestAnimationFrame(this._smoothRotate.bind(this));
-        }
+        this._updateHeading(rawHeading);
       }
     };
 
-    window.addEventListener(this._eventName, this._handler, true);
-    // Also listen to deviceorientation as fallback on Android
-    if (this._eventName !== 'deviceorientation') {
-      window.addEventListener('deviceorientation', this._handler, true);
-    }
+    window.addEventListener('deviceorientationabsolute', this._handler, true);
+    window.addEventListener('deviceorientation', this._handler, true);
 
     this._isHeadingActive = true;
     this._btn.classList.add('compass-active');
     return true;
+  }
+
+  _updateHeading(heading) {
+    if (heading == null || !Number.isFinite(heading)) return;
+    this._targetHeading = heading;
+    if (!this._rafId) {
+      this._rafId = requestAnimationFrame(this._smoothRotate.bind(this));
+    }
   }
 
   _smoothRotate() {
@@ -244,19 +243,23 @@ class CompassControl {
     if (diff < -180) diff += 360;
 
     // Smooth exponential damping
-    this._lastHeading = (this._lastHeading + diff * 0.25) % 360;
+    this._lastHeading = (this._lastHeading + diff * 0.28) % 360;
     this._map.setBearing(this._lastHeading);
 
-    if (Math.abs(diff) > 0.5) {
+    if (Math.abs(diff) > 0.4) {
       this._rafId = requestAnimationFrame(this._smoothRotate.bind(this));
     }
   }
 
   _stopHeadingTracking() {
+    if (this._sensor) {
+      try {
+        this._sensor.stop();
+      } catch { }
+      this._sensor = null;
+    }
     if (this._handler) {
-      if (this._eventName) {
-        window.removeEventListener(this._eventName, this._handler, true);
-      }
+      window.removeEventListener('deviceorientationabsolute', this._handler, true);
       window.removeEventListener('deviceorientation', this._handler, true);
       this._handler = null;
     }
