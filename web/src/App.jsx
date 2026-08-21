@@ -158,49 +158,57 @@ class CompassControl {
       }
     }
 
-    // Strategy 1: Modern Android Generic Sensor API (AbsoluteOrientationSensor)
-    if (typeof AbsoluteOrientationSensor !== 'undefined') {
-      try {
-        this._sensor = new AbsoluteOrientationSensor({ frequency: 50 });
-        this._sensor.addEventListener('reading', () => {
-          const q = this._sensor.quaternion;
-          if (q && q.length === 4) {
-            const siny_cosp = 2 * (q[3] * q[2] + q[0] * q[1]);
-            const cosy_cosp = 1 - 2 * (q[1] * q[1] + q[2] * q[2]);
-            let yaw = Math.atan2(siny_cosp, cosy_cosp) * (180 / Math.PI);
-            let heading = (360 - yaw) % 360;
-            this._updateHeading(heading);
-          }
-        });
-        this._sensor.addEventListener('error', (e) => {
-          console.warn('AbsoluteOrientationSensor error:', e);
-        });
-        this._sensor.start();
-      } catch (err) {
-        console.warn('Could not start AbsoluteOrientationSensor:', err);
-      }
-    }
-
-    // Strategy 2: Standard deviceorientation and deviceorientationabsolute
     this._handler = (e) => {
-      let rawHeading = null;
+      let heading = null;
       if (e.webkitCompassHeading != null) {
         // iOS True North
-        rawHeading = e.webkitCompassHeading;
+        heading = e.webkitCompassHeading;
       } else if (e.alpha != null) {
-        // Android compass
-        rawHeading = (360 - e.alpha) % 360;
+        // Standard Android 3D Azimuth calculation
+        const alpha = e.alpha;
+        const beta = e.beta || 0;
+        const gamma = e.gamma || 0;
+
+        const deg = Math.PI / 180;
+        const x = beta * deg;
+        const y = gamma * deg;
+        const z = alpha * deg;
+
+        const cX = Math.cos(x);
+        const cY = Math.cos(y);
+        const cZ = Math.cos(z);
+        const sX = Math.sin(x);
+        const sY = Math.sin(y);
+        const sZ = Math.sin(z);
+
+        const Vx = -cZ * sY - sZ * sX * cY;
+        const Vy = -sZ * sY + cZ * sX * cY;
+
+        let comp = Math.atan2(Vx, Vy) * (180 / Math.PI);
+        if (comp < 0) comp += 360;
+
+        // If phone is flat on table, fall back to direct alpha
+        if (Math.abs(beta) < 15 && Math.abs(gamma) < 15) {
+          comp = (360 - alpha) % 360;
+        }
+
+        heading = comp;
       }
 
-      if (rawHeading != null && Number.isFinite(rawHeading)) {
-        this._updateHeading(rawHeading);
+      if (heading != null && Number.isFinite(heading)) {
+        this._updateHeading(heading);
       }
     };
 
-    window.addEventListener('deviceorientationabsolute', this._handler, false);
-    window.addEventListener('deviceorientation', this._handler, false);
+    // Prefer deviceorientationabsolute on Android, fallback to deviceorientation
+    if ('ondeviceorientationabsolute' in window) {
+      this._eventKey = 'deviceorientationabsolute';
+    } else {
+      this._eventKey = 'deviceorientation';
+    }
+    window.addEventListener(this._eventKey, this._handler, false);
 
-    // Strategy 3: GPS Course Over Ground (movement heading fallback)
+    // Fallback: GPS Course Over Ground (movement heading fallback)
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
       try {
         this._geoWatchId = navigator.geolocation.watchPosition(
@@ -236,21 +244,14 @@ class CompassControl {
   }
 
   _stopHeadingTracking() {
-    if (this._sensor) {
-      try {
-        this._sensor.stop();
-      } catch { }
-      this._sensor = null;
-    }
     if (this._geoWatchId != null) {
       try {
         navigator.geolocation.clearWatch(this._geoWatchId);
       } catch { }
       this._geoWatchId = null;
     }
-    if (this._handler) {
-      window.removeEventListener('deviceorientationabsolute', this._handler, false);
-      window.removeEventListener('deviceorientation', this._handler, false);
+    if (this._handler && this._eventKey) {
+      window.removeEventListener(this._eventKey, this._handler, false);
       this._handler = null;
     }
     this._isHeadingActive = false;
