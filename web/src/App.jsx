@@ -2566,24 +2566,23 @@ export default function App() {
                         closestIdx = i;
                       }
                     }
-                    // Tight ~40m seam threshold to avoid jumping across circular loops
                     if (minDist < 0.0000005) {
                       matchIdx = closestIdx;
                     }
                   }
 
                   if (matchIdx !== -1) {
-                    // Seam found! Append smoothly.
+                    // Seam found! Append forward points seamlessly.
                     const newPoints = v.animPoints.slice(matchIdx + 1);
                     if (newPoints.length > 0) {
                       t.animationPoints = t.animationPoints.concat(newPoints);
-                      if (t.animationPoints.length > 4) {
-                        t.animationPoints = t.animationPoints.slice(-3);
+                      if (t.animationPoints.length > 5) {
+                        t.animationPoints = t.animationPoints.slice(-4);
                       }
                       t.lastAddedPoint = newPoints[newPoints.length - 1];
                     }
                   } else {
-                    // Fallback: compare with CURRENT visual position
+                    // Find forward point from current location without rolling back
                     let closestToCurrent = -1;
                     let minCurrentDist = Infinity;
                     for (let i = 0; i < v.animPoints.length; i++) {
@@ -2595,15 +2594,9 @@ export default function App() {
                       }
                     }
 
-                    t.animationPoints = v.animPoints.slice(closestToCurrent + 1);
-                    if (t.animationPoints.length > 4) {
-                      t.animationPoints = t.animationPoints.slice(-3);
-                    }
-                    if (t.animationPoints.length > 0) {
-                      t.lastAddedPoint = t.animationPoints[t.animationPoints.length - 1];
-                    } else {
-                      t.lastAddedPoint = null;
-                    }
+                    const forwardPoints = v.animPoints.slice(Math.max(0, closestToCurrent + 1));
+                    t.animationPoints = forwardPoints.length > 0 ? forwardPoints : v.animPoints.slice(-1);
+                    t.lastAddedPoint = t.animationPoints[t.animationPoints.length - 1];
                     t.timeRemaining = 0;
                     t.directionTimeRemaining = 0;
                   }
@@ -2613,18 +2606,13 @@ export default function App() {
                   t.idle = false;
                   startGlobalAnimation();
                 }
-              } else if (v.lat != null && v.lng != null) {
-                // Direct coordinate interpolation when sub-trajectory is absent or vehicle moved
+              } else if (!v.anim_key && v.lat != null && v.lng != null) {
+                // Direct coordinate interpolation only for static vehicles without anim_key
                 const dLat = Math.abs(v.lat - t.currentLat);
                 const dLng = Math.abs(v.lng - t.currentLng);
                 if (dLat > 0.00001 || dLng > 0.00001) {
                   t.animationPoints = [{ lat: v.lat, lng: v.lng, dir: rotation, percent: 100 }];
                   t.lastAddedPoint = { lat: v.lat, lng: v.lng, dir: rotation };
-                  t.idle = false;
-                  startGlobalAnimation();
-                } else if (rotation != null && Math.abs(shortestAngleDiff(rotation, t.currentDirection)) > 2) {
-                  t.velocityDirection = shortestAngleDiff(rotation, t.currentDirection) / 1000;
-                  t.directionTimeRemaining = 1000;
                   t.idle = false;
                   startGlobalAnimation();
                 }
