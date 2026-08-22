@@ -2499,7 +2499,7 @@ export default function App() {
           // Add or update markers
           allVeh.forEach(v => {
             const vType = normalizeVehicleType(v.type, v.route || v.rnum);
-            const rotation = v.dir || 0;
+            const validDir = (v.dir != null && Number.isFinite(v.dir) && v.dir > 0) ? v.dir : null;
 
             if (vehicleMarkersRef.current[v.id]) {
               const marker = vehicleMarkersRef.current[v.id];
@@ -2524,7 +2524,7 @@ export default function App() {
                   tSpan,
                   currentLat: mPos ? mPos.lat : v.lat,
                   currentLng: mPos ? mPos.lng : v.lng,
-                  currentDirection: marker._currentRot !== undefined ? marker._currentRot : rotation,
+                  currentDirection: marker._currentRot !== undefined ? marker._currentRot : (validDir || 0),
                   animationPoints: [],
                   timeRemaining: 0,
                   directionTimeRemaining: 0,
@@ -2546,7 +2546,7 @@ export default function App() {
                 t.directionTimeRemaining = 0;
                 t.currentLat = v.lat;
                 t.currentLng = v.lng;
-                t.currentDirection = rotation;
+                if (validDir != null) t.currentDirection = validDir;
                 t.lastAddedPoint = null;
                 marker.setLngLat([v.lng, v.lat]);
               }
