@@ -799,6 +799,7 @@ export default function App() {
   const isDraggingRef = useRef(false);
   const dragStartPointRef = useRef(null);
   const wasFollowingBeforeHiddenRef = useRef(initialIsFollowing);
+  const isAppResumeRef = useRef(false);
   const wakeLockRef = useRef(null);
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [consecutiveFetchErrors, setConsecutiveFetchErrors] = useState(0);
@@ -2630,14 +2631,16 @@ export default function App() {
                 t.veh = v;
               }
 
-              // Only handle true teleportation / bad GPS fix (jump > 1km)
-              if (Math.abs(v.lat - t.currentLat) > 0.01 || Math.abs(v.lng - t.currentLng) > 0.01) {
+              // On app resume from background or large jump (> 1km), snap directly to latest live coordinates
+              const isResumePoll = isAppResumeRef.current;
+              if (isResumePoll || Math.abs(v.lat - t.currentLat) > 0.01 || Math.abs(v.lng - t.currentLng) > 0.01) {
                 t.animationPoints = [];
                 t.timeRemaining = 0;
                 t.directionTimeRemaining = 0;
                 t.currentLat = v.lat;
                 t.currentLng = v.lng;
-                if (validDir != null) t.currentDirection = validDir;
+                const predicted = getNextStopBearing(v, v.lat, v.lng);
+                if (predicted != null) t.currentDirection = predicted;
                 t.lastAddedPoint = null;
                 marker.setLngLat([v.lng, v.lat]);
               }
@@ -2814,6 +2817,7 @@ export default function App() {
               startGlobalAnimation();
             }
           });
+          isAppResumeRef.current = false;
 
           // Instant camera centering on initial poll resolution for restored vehicle session
           if (!hasInitialCenteredRef.current && selectedVehicleRef.current && isFollowingVehicleRef.current && map.current) {
@@ -2857,6 +2861,7 @@ export default function App() {
       if (Date.now() - lastVehicleKickTime < 500) return; // Dedupes visibilitychange + focus + pageshow burst
       lastVehicleKickTime = Date.now();
 
+      isAppResumeRef.current = true;
       if (fetchVehiclesTimeoutRef.current) {
         clearTimeout(fetchVehiclesTimeoutRef.current);
       }
