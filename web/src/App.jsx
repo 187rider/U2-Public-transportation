@@ -2619,7 +2619,7 @@ export default function App() {
               }
 
               if (v.animPoints && v.animPoints.length > 0) {
-                if (v.anim_key !== t.anim_key || t.animationPoints.length === 0) {
+                if (v.anim_key !== t.anim_key) {
                   // Direct trajectory queue concatenation matching official bus62 pipeline (P)
                   t.animationPoints = t.animationPoints.concat(v.animPoints);
                   if (t.animationPoints.length > 8) {
