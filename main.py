@@ -466,6 +466,18 @@ class PushReminderManager:
                             rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
                             matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
                             if not matching_fc:
+                                # If the bus was close (<= 2 min) and now disappeared from forecast list, it has arrived!
+                                if rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 2:
+                                    rnum = rem.get("rnum", "")
+                                    stname = rem.get("stationName", "")
+                                    sub = rem.get("subscription")
+                                    await self.send_webpush(
+                                        sub=sub,
+                                        title=f"🚌 Маршрут {rnum} прибыл!",
+                                        body=f"Остановка «{stname}»",
+                                        tag=f"arrival_{rem['sid']}_{rem['rid']}"
+                                    )
+                                    self.reminders.pop(rem_key, None)
                                 continue
 
                             raw_t = matching_fc.get("time")
@@ -480,6 +492,9 @@ class PushReminderManager:
                             if cur_time <= 0:
                                 should_fire = True
                             elif last is None:
+                                rem["lastNotifiedTime"] = cur_time
+                            elif cur_time > last:
+                                # If bus was delayed by traffic, update baseline
                                 rem["lastNotifiedTime"] = cur_time
                             elif last >= 10 and cur_time >= 10:
                                 if cur_time <= last - 5:
