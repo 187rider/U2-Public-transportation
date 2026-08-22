@@ -323,17 +323,186 @@ class ServerVehiclePoller:
         self.poll_event.set()
 
 
+# ---------------------------------------------------------
+# Web Push Background Notification Manager (Wakes up locked devices)
+# ---------------------------------------------------------
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "BCtpQGP1j_AWcUfMfWS7btcOfQ5eBFvvY5eXroWcuGRinUwARdWtyQZGQayceaJn_Q_CHRX0-cyGsrlq2q7j7yE")
+VAPID_PRIVATE_KEY_PEM = os.getenv("VAPID_PRIVATE_KEY_PEM", """-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgc5Pavqsdo1IIZ9Lm
+etgXoVN6q1NU0PCbIyenW111bQOhRANCAAQraUBj9Y/wFnFHzH1ku27bDn0OXgRb
+72OXl66FnLhkYp1MAEXVrbkGRkGsnHmiZ/0Pwh0V9PnPhrK5atqu4+8h
+-----END PRIVATE KEY-----
+""")
+VAPID_CLAIMS = {"sub": "mailto:support@ridertech.online"}
+
+
+class PushReminderManager:
+    def __init__(self):
+        self.reminders: dict[str, dict] = {}
+        self._running = False
+
+    def add_reminder(self, data: dict) -> bool:
+        sub = data.get("subscription")
+        if not sub or not isinstance(sub, dict) or not sub.get("endpoint"):
+            return False
+        endpoint = sub.get("endpoint")
+        sid = str(data.get("sid", ""))
+        rid = str(data.get("rid", ""))
+        rem_key = f"{endpoint}_{sid}_{rid}"
+
+        init_time = data.get("initialTime")
+        init_num = None
+        if init_time is not None:
+            try:
+                init_num = int(init_time)
+            except (ValueError, TypeError):
+                pass
+
+        self.reminders[rem_key] = {
+            "subscription": sub,
+            "sid": sid,
+            "stationName": str(data.get("stationName", "Остановка")),
+            "rid": rid,
+            "rnum": str(data.get("rnum", "Транспорт")),
+            "lastNotifiedTime": init_num,
+            "created_at": time.time()
+        }
+        logger.info("Added push reminder: %s for %s (%s)", rem_key, data.get("rnum"), data.get("stationName"))
+        return True
+
+    def remove_reminder(self, endpoint: str, sid: str, rid: str):
+        rem_key = f"{endpoint}_{sid}_{rid}"
+        self.reminders.pop(rem_key, None)
+
+    async def send_webpush(self, sub: dict, title: str, body: str, tag: str = "arrival-alarm"):
+        payload = {
+            "title": title,
+            "body": body,
+            "icon": "/apple-touch-icon.png",
+            "badge": "/favicon.svg",
+            "tag": tag,
+            "url": "/"
+        }
+        try:
+            from pywebpush import webpush
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: webpush(
+                    subscription_info=sub,
+                    data=json.dumps(payload),
+                    vapid_private_key=VAPID_PRIVATE_KEY_PEM,
+                    vapid_claims=VAPID_CLAIMS,
+                    ttl=60
+                )
+            )
+        except Exception as e:
+            logger.warning("WebPush send error (%s): %s", type(e).__name__, e)
+
+    async def run_loop(self):
+        self._running = True
+        while self._running:
+            try:
+                await asyncio.sleep(6.0)
+                if not self.reminders:
+                    continue
+
+                now = time.time()
+                active_items = list(self.reminders.items())
+                sids = set(r["sid"] for _, r in active_items)
+
+                for sid in sids:
+                    try:
+                        fc_data = await get_station_forecasts(sid=sid)
+                        forecasts = fc_data.get("forecasts", [])
+
+                        for rem_key, rem in active_items:
+                            if rem.get("sid") != sid:
+                                continue
+
+                            # Evict reminders older than 2 hours to prevent memory leaks
+                            if now - rem.get("created_at", 0) > 7200:
+                                self.reminders.pop(rem_key, None)
+                                continue
+
+                            matching_fc = next((f for f in forecasts if str(f.get("rid")) == rem.get("rid")), None)
+                            if not matching_fc:
+                                continue
+
+                            raw_t = matching_fc.get("time")
+                            try:
+                                cur_time = int(raw_t) if raw_t is not None else 0
+                            except (ValueError, TypeError):
+                                cur_time = 0
+
+                            last = rem.get("lastNotifiedTime")
+                            should_fire = False
+
+                            if cur_time <= 0:
+                                should_fire = True
+                            elif last is None:
+                                rem["lastNotifiedTime"] = cur_time
+                            elif last >= 10 and cur_time >= 10:
+                                if cur_time <= last - 5:
+                                    should_fire = True
+                            elif last >= 10 and cur_time < 10:
+                                if cur_time <= last - 5 or cur_time <= 9:
+                                    should_fire = True
+                            elif cur_time < 10:
+                                if cur_time <= last - 1:
+                                    should_fire = True
+
+                            if should_fire:
+                                rem["lastNotifiedTime"] = cur_time
+                                rnum = rem.get("rnum", "")
+                                stname = rem.get("stationName", "")
+                                sub = rem.get("subscription")
+
+                                if cur_time <= 0:
+                                    # Final arrival push & reset from memory
+                                    await self.send_webpush(
+                                        sub=sub,
+                                        title=f"🚌 Маршрут {rnum} прибыл!",
+                                        body=f"Остановка «{stname}»",
+                                        tag=f"arrival_{rem['sid']}_{rem['rid']}"
+                                    )
+                                    self.reminders.pop(rem_key, None)
+                                else:
+                                    # Step countdown push
+                                    await self.send_webpush(
+                                        sub=sub,
+                                        title=f"🚌 Маршрут {rnum} — {cur_time} мин",
+                                        body=f"Остановка «{stname}» (прибытие через ~{cur_time} мин)",
+                                        tag=f"arrival_{rem['sid']}_{rem['rid']}"
+                                    )
+                    except Exception as sid_err:
+                        logger.warning("Error processing station reminders for sid %s: %s", sid, sid_err)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Error in push reminders loop: %s", e)
+                await asyncio.sleep(5.0)
+
+    def stop(self):
+        self._running = False
+
+
 vehicle_poller = ServerVehiclePoller()
+push_reminder_manager = PushReminderManager()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     poller_task = asyncio.create_task(vehicle_poller.run_loop())
+    reminder_task = asyncio.create_task(push_reminder_manager.run_loop())
     yield
     vehicle_poller.stop()
+    push_reminder_manager.stop()
     poller_task.cancel()
+    reminder_task.cancel()
     try:
-        await poller_task
+        await asyncio.gather(poller_task, reminder_task, return_exceptions=True)
     except asyncio.CancelledError:
         pass
     await async_client.aclose()
@@ -760,6 +929,41 @@ async def get_station_forecasts(sid: str = ""):
     except Exception as e:
         logger.error("Unexpected error fetching station forecasts: %s", e)
         raise HTTPException(status_code=500, detail="Failed to fetch station forecasts")
+
+
+@app.get("/api/vapid_public_key")
+async def get_vapid_public_key():
+    return {"publicKey": VAPID_PUBLIC_KEY}
+
+
+@app.post("/api/reminders/subscribe", dependencies=[Depends(verify_signature)])
+async def subscribe_reminder(request: Request):
+    try:
+        body = await request.json()
+        success = push_reminder_manager.add_reminder(body)
+        if not success:
+            raise HTTPException(status_code=400, detail="Invalid push subscription data")
+        return {"status": "ok", "message": "Subscribed to arrival push alerts"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to subscribe reminder: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/reminders/unsubscribe", dependencies=[Depends(verify_signature)])
+async def unsubscribe_reminder(request: Request):
+    try:
+        body = await request.json()
+        push_reminder_manager.remove_reminder(
+            endpoint=str(body.get("endpoint", "")),
+            sid=str(body.get("sid", "")),
+            rid=str(body.get("rid", ""))
+        )
+        return {"status": "ok", "message": "Unsubscribed from arrival push alerts"}
+    except Exception as e:
+        logger.error("Failed to unsubscribe reminder: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 if __name__ == "__main__":

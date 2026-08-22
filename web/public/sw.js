@@ -144,7 +144,33 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Push & Notification Click Handlers
+// Push Message & Notification Handlers
+self.addEventListener('push', (event) => {
+  let data = {};
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch {
+      data = { title: 'Транспорт Улан-Удэ', body: event.data.text() };
+    }
+  }
+
+  const title = data.title || '🚌 Транспорт Улан-Удэ';
+  const options = {
+    body: data.body || 'Обновление прибытия транспорта',
+    icon: data.icon || '/apple-touch-icon.png',
+    badge: data.badge || '/favicon.svg',
+    tag: data.tag || 'arrival-alarm',
+    renotify: true,
+    vibrate: [200, 100, 200, 100, 300],
+    data: { url: data.url || '/' }
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(title, options)
+  );
+});
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(

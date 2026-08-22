@@ -922,11 +922,38 @@ export default function App() {
   const [alertToast, setAlertToast] = useState(null);
 
   const toggleArrivalReminder = async (sid, stationName, rid, rnum, initialTime) => {
-    // 1. Request notification permission if needed
-    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      try {
-        await Notification.requestPermission();
-      } catch {}
+    let pushSub = null;
+    if (typeof Notification !== 'undefined') {
+      if (Notification.permission === 'default') {
+        try {
+          await Notification.requestPermission();
+        } catch {}
+      }
+
+      if ('serviceWorker' in navigator && Notification.permission === 'granted') {
+        try {
+          const reg = await navigator.serviceWorker.ready;
+          if (reg && reg.pushManager) {
+            pushSub = await reg.pushManager.getSubscription();
+            if (!pushSub) {
+              const VAPID_KEY = "BCtpQGP1j_AWcUfMfWS7btcOfQ5eBFvvY5eXroWcuGRinUwARdWtyQZGQayceaJn_Q_CHRX0-cyGsrlq2q7j7yE";
+              const padding = '='.repeat((4 - (VAPID_KEY.length % 4)) % 4);
+              const base64 = (VAPID_KEY + padding).replace(/-/g, '+').replace(/_/g, '/');
+              const rawData = window.atob(base64);
+              const outputArray = new Uint8Array(rawData.length);
+              for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+              }
+              pushSub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: outputArray
+              });
+            }
+          }
+        } catch (subErr) {
+          console.warn("Push subscription failed:", subErr);
+        }
+      }
     }
 
     const remId = `${sid}_${rid}`;
@@ -934,6 +961,17 @@ export default function App() {
 
     if (exists) {
       setReminders(prev => prev.filter(r => r.id !== remId));
+      if (pushSub) {
+        apiFetch('/api/reminders/unsubscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            endpoint: pushSub.endpoint,
+            sid: String(sid),
+            rid: String(rid)
+          })
+        }).catch(() => {});
+      }
       setAlertToast({
         title: "Уведомление отменено",
         body: `Напоминание для маршрута ${rnum} снято.`
@@ -954,10 +992,27 @@ export default function App() {
         lastNotifiedTime: !isNaN(initialNum) ? initialNum : null
       };
       setReminders(prev => [...prev.filter(r => r.id !== remId), newRem]);
+
+      // Register with server to wake device when locked/asleep
+      if (pushSub) {
+        apiFetch('/api/reminders/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscription: pushSub.toJSON(),
+            sid: String(sid),
+            stationName: String(stationName),
+            rid: String(rid),
+            rnum: String(rnum),
+            initialTime: String(initialTime || "")
+          })
+        }).catch((e) => console.warn("Server push subscribe error:", e));
+      }
+
       playArrivalChime();
       setAlertToast({
         title: `🔔 Напоминание установлено!`,
-        body: `Будем оповещать каждые 5 мин (до 10 мин) и каждую 1 мин (до прибытия).`
+        body: `Оповестим даже при заблокированном экране!`
       });
       setTimeout(() => setAlertToast(null), 4000);
       return true;
