@@ -1042,11 +1042,22 @@ export default function App() {
       }
 
       playArrivalChime();
-      setAlertToast({
-        title: `🔔 Напоминание установлено!`,
-        body: `Оповестим даже при заблокированном экране!`
-      });
-      setTimeout(() => setAlertToast(null), 4000);
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+      const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+
+      if (isIOS && !isStandalone) {
+        setAlertToast({
+          title: `🔔 Напоминание включено!`,
+          body: `💡 На iPhone для показа на заблокированном экране добавьте на экран «Домой» (Поделиться ➔ На экран «Домой»).`
+        });
+        setTimeout(() => setAlertToast(null), 6000);
+      } else {
+        setAlertToast({
+          title: `🔔 Напоминание установлено!`,
+          body: `Оповестим даже при заблокированном экране!`
+        });
+        setTimeout(() => setAlertToast(null), 4000);
+      }
       return true;
     }
   };

@@ -420,6 +420,7 @@ class PushReminderManager:
                     data=json.dumps(payload),
                     vapid_private_key=VAPID_KEY_FILE,
                     vapid_claims=fresh_claims,
+                    headers={"Urgency": "high"},
                     ttl=120
                 )
             )
