@@ -353,10 +353,10 @@ class PushReminderManager:
         init_time = data.get("initialTime")
         init_num = None
         if init_time is not None:
-            try:
-                init_num = int(init_time)
-            except (ValueError, TypeError):
-                pass
+            import re
+            m = re.search(r'\d+', str(init_time))
+            if m:
+                init_num = int(m.group())
 
         self.reminders[rem_key] = {
             "subscription": sub,
@@ -367,7 +367,7 @@ class PushReminderManager:
             "lastNotifiedTime": init_num,
             "created_at": time.time()
         }
-        logger.info("Added push reminder: %s for %s (%s)", rem_key, data.get("rnum"), data.get("stationName"))
+        logger.info("Added push reminder: %s for %s (%s) initial: %s", rem_key, data.get("rnum"), data.get("stationName"), init_num)
         return True
 
     def remove_reminder(self, endpoint: str, sid: str, rid: str):
@@ -393,9 +393,10 @@ class PushReminderManager:
                     data=json.dumps(payload),
                     vapid_private_key=VAPID_PRIVATE_KEY_PEM,
                     vapid_claims=VAPID_CLAIMS,
-                    ttl=60
+                    ttl=120
                 )
             )
+            logger.info("Sent background WebPush: %s - %s", title, body)
         except Exception as e:
             logger.warning("WebPush send error (%s): %s", type(e).__name__, e)
 
@@ -425,7 +426,8 @@ class PushReminderManager:
                                 self.reminders.pop(rem_key, None)
                                 continue
 
-                            matching_fc = next((f for f in forecasts if str(f.get("rid")) == rem.get("rid")), None)
+                            rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
+                            matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
                             if not matching_fc:
                                 continue
 

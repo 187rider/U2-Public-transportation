@@ -162,6 +162,7 @@ self.addEventListener('push', (event) => {
     badge: data.badge || '/favicon.svg',
     tag: data.tag || 'arrival-alarm',
     renotify: true,
+    requireInteraction: true,
     vibrate: [200, 100, 200, 100, 300],
     data: { url: data.url || '/' }
   };
