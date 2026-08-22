@@ -2500,6 +2500,7 @@ export default function App() {
           allVeh.forEach(v => {
             const vType = normalizeVehicleType(v.type, v.route || v.rnum);
             const validDir = (v.dir != null && Number.isFinite(v.dir) && v.dir > 0) ? v.dir : null;
+            const rotation = validDir || 0;
 
             if (vehicleMarkersRef.current[v.id]) {
               const marker = vehicleMarkersRef.current[v.id];
