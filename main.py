@@ -584,8 +584,9 @@ async def get_vehicles(rids: str = "", curk: str = "0"):
         
     has_new = vehicle_poller.register_client_request(rids)
     
-    # If new routes were requested or initial server start, poll upstream immediately
-    if has_new or vehicle_poller.last_poll_time == 0:
+    # If client requested full sync (curk == 0), new routes requested, or cache older than 4s, fetch fresh telemetry immediately
+    now = time.time()
+    if curk == "0" or has_new or (now - vehicle_poller.last_poll_time > 4.0):
         await vehicle_poller.poll_once(force=True)
 
     return vehicle_poller.get_snapshot(rids)

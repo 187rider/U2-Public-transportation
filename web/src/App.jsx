@@ -2830,12 +2830,13 @@ export default function App() {
         return;
       }
       if (!isActive) return;
-      if (Date.now() - lastVehicleKickTime < 1000) return; // Dedupes visibilitychange + focus + pageshow burst
+      if (Date.now() - lastVehicleKickTime < 500) return; // Dedupes visibilitychange + focus + pageshow burst
       lastVehicleKickTime = Date.now();
 
       if (fetchVehiclesTimeoutRef.current) {
         clearTimeout(fetchVehiclesTimeoutRef.current);
       }
+      isFetchingVehicles = false;
       curk = "0";
       fetchVehicles();
       startGlobalAnimation();
