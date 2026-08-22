@@ -1648,13 +1648,15 @@ export default function App() {
             t.velocityLat = (a.lat - t.currentLat) / rMs;
             t.velocityLng = (a.lng - t.currentLng) / rMs;
 
-            // Radian conversion for heading angle
-            let targetAngle = (a.dir != null && Number.isFinite(a.dir)) ? a.dir : t.currentDirection;
+            // Radian conversion for accurate travel bearing
             const distSq = (a.lat - t.currentLat) ** 2 + (a.lng - t.currentLng) ** 2;
+            let targetAngle = t.currentDirection;
+
             if (distSq > 1e-9) {
               const latRad = t.currentLat * 0.017453292519943295;
-              const geoAngle = ((Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * 57.29577951308232) % 360 + 360) % 360;
-              targetAngle = (a.dir != null && Number.isFinite(a.dir)) ? a.dir : geoAngle;
+              targetAngle = ((Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * 57.29577951308232) % 360 + 360) % 360;
+            } else if (a.dir != null && Number.isFinite(a.dir) && a.dir > 0) {
+              targetAngle = a.dir;
             }
 
             t.velocityDirection = shortestAngleDiff(targetAngle, t.currentDirection) / oMs;
@@ -2504,12 +2506,6 @@ export default function App() {
               // Only animate if this vehicle was actually updated in this poll
               if (!updatesMap[v.id]) return;
 
-              // Skip if this is the exact same animation event we already processed!
-              if (v.anim_key && marker._anim_key === v.anim_key) {
-                return;
-              }
-
-              marker._anim_key = v.anim_key;
               marker._lastUpdateTime = Date.now();
 
               const el = marker.getElement();
@@ -2536,6 +2532,7 @@ export default function App() {
                   velocityDirection: 0,
                   anim_key: v.anim_key,
                   lastAddedPoint: null,
+                  coastTime: 0,
                   idle: false
                 };
                 anims[v.id] = t;
@@ -2612,6 +2609,22 @@ export default function App() {
                   }
 
                   t.anim_key = v.anim_key;
+                  marker._anim_key = v.anim_key;
+                  t.idle = false;
+                  startGlobalAnimation();
+                }
+              } else if (v.lat != null && v.lng != null) {
+                // Direct coordinate interpolation when sub-trajectory is absent or vehicle moved
+                const dLat = Math.abs(v.lat - t.currentLat);
+                const dLng = Math.abs(v.lng - t.currentLng);
+                if (dLat > 0.00001 || dLng > 0.00001) {
+                  t.animationPoints = [{ lat: v.lat, lng: v.lng, dir: rotation, percent: 100 }];
+                  t.lastAddedPoint = { lat: v.lat, lng: v.lng, dir: rotation };
+                  t.idle = false;
+                  startGlobalAnimation();
+                } else if (rotation != null && Math.abs(shortestAngleDiff(rotation, t.currentDirection)) > 2) {
+                  t.velocityDirection = shortestAngleDiff(rotation, t.currentDirection) / 1000;
+                  t.directionTimeRemaining = 1000;
                   t.idle = false;
                   startGlobalAnimation();
                 }
