@@ -467,6 +467,75 @@ function closeAllStationPopups() {
   document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
 }
 
+// Web Audio Chime for Arrival Alarm
+function playArrivalChime() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const now = ctx.currentTime;
+
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(659.25, now); // E5
+    gain1.gain.setValueAtTime(0.3, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.35);
+
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(880.00, now + 0.16); // A5
+    gain2.gain.setValueAtTime(0.35, now + 0.16);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(now + 0.16);
+    osc2.stop(now + 0.55);
+  } catch (e) {
+    console.warn("Audio chime error:", e);
+  }
+}
+
+// Web Push / Service Worker Notification Trigger
+async function triggerArrivalPush(title, body, tag = 'arrival-alarm') {
+  playArrivalChime();
+  if ('vibrate' in navigator) {
+    try { navigator.vibrate([200, 100, 200, 100, 300]); } catch {}
+  }
+
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
+    return;
+  }
+
+  const options = {
+    body,
+    icon: '/apple-touch-icon.png',
+    badge: '/favicon.svg',
+    tag,
+    renotify: true,
+    vibrate: [200, 100, 200, 100, 300],
+    data: { url: '/' }
+  };
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      if (reg && reg.showNotification) {
+        await reg.showNotification(title, options);
+        return;
+      }
+    }
+    new Notification(title, options);
+  } catch (err) {
+    try { new Notification(title, options); } catch {}
+  }
+}
+
 function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = false, onToggleFavorite = null) {
   const isBus = props.type === "bus";
   const typeText = isBus ? "Автобус / Маршрутка" : "Трамвай";
@@ -572,9 +641,10 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
         if (data.forecasts && data.forecasts.length > 0) {
           let html = `
             <div style="display: flex; align-items: center; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid #cbd5e1; color: #94a3b8; font-size: 12px; font-weight: 600;">
-              <div style="width: 55px; flex-shrink: 0; text-align: center;">Маршрут</div>
-              <div style="width: 70px; flex-shrink: 0; text-align: center; margin-left: 8px;">Прогноз</div>
-              <div style="flex-grow: 1; padding-left: 12px;">Направление</div>
+              <div style="width: 50px; flex-shrink: 0; text-align: center;">Маршрут</div>
+              <div style="width: 62px; flex-shrink: 0; text-align: center; margin-left: 6px;">Прогноз</div>
+              <div style="flex-grow: 1; padding-left: 8px;">Направление</div>
+              <div style="width: 32px; flex-shrink: 0; text-align: center; margin-left: 6px;" title="Оповестить за 1 мин">🔔</div>
             </div>
             <ul class="station-forecast-list">
           `;
@@ -598,20 +668,43 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
               dest = dest.replace("Авиазаво", "Авиазавод");
             }
 
-            html += `<li style="display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f5f9;">
-              <div style="width: 55px; flex-shrink: 0; display: flex; justify-content: center;">
-                <div style="background-color: ${bgColor}; color: white; border-radius: 6px; width: 45px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold;">${escapeHtml(rnum)}</div>
+            const isRemActive = window.isArrivalReminderActive ? window.isArrivalReminderActive(safeId, f.rid) : false;
+
+            html += `<li style="display: flex; align-items: center; padding: 7px 0; border-bottom: 1px solid #f1f5f9;">
+              <div style="width: 50px; flex-shrink: 0; display: flex; justify-content: center;">
+                <div style="background-color: ${bgColor}; color: white; border-radius: 6px; width: 44px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: bold;">${escapeHtml(rnum)}</div>
               </div>
-              <div style="margin-left: 8px; flex-shrink: 0; width: 70px; display: flex; justify-content: center;">
-                <div style="background-color: #f1f5f9; border-radius: 6px; display: flex; align-items: center; justify-content: center; height: 28px; width: 62px; font-size: 13px; font-weight: 600; color: #0f172a;">${escapeHtml(f.time)} мин.</div>
+              <div style="margin-left: 6px; flex-shrink: 0; width: 62px; display: flex; justify-content: center;">
+                <div style="background-color: #f1f5f9; border-radius: 6px; display: flex; align-items: center; justify-content: center; height: 28px; width: 58px; font-size: 12px; font-weight: 600; color: #0f172a;">${escapeHtml(f.time)} мин.</div>
               </div>
-              <div class="dest-wrapper" style="margin-left: 12px; flex-grow: 1; overflow: hidden; white-space: nowrap; position: relative; text-overflow: ellipsis;">
-                <div class="dest-text" style="display: inline-block; font-size: 14px; color: #0f172a;">${escapeHtml(dest)}</div>
+              <div class="dest-wrapper" style="margin-left: 8px; flex-grow: 1; overflow: hidden; white-space: nowrap; position: relative; text-overflow: ellipsis;">
+                <div class="dest-text" style="display: inline-block; font-size: 13px; color: #0f172a;">${escapeHtml(dest)}</div>
               </div>
+              <button class="forecast-alarm-btn ${isRemActive ? 'active' : ''}" data-sid="${safeId}" data-stname="${safeName}" data-rid="${f.rid}" data-rnum="${escapeHtml(rnum)}" data-time="${escapeHtml(f.time)}" title="${isRemActive ? 'Отключить напоминание' : 'Напомнить за 1 мин до прибытия'}">
+                <span class="material-symbols-outlined" style="font-size: 18px;">${isRemActive ? 'notifications_active' : 'notifications'}</span>
+              </button>
             </li>`;
           });
           html += '</ul>';
           container.innerHTML = html;
+
+          container.querySelectorAll('.forecast-alarm-btn').forEach(btn => {
+            btn.onclick = async (e) => {
+              e.stopPropagation();
+              const sid = btn.dataset.sid;
+              const stname = btn.dataset.stname;
+              const rid = btn.dataset.rid;
+              const rnum = btn.dataset.rnum;
+              const time = btn.dataset.time;
+              if (window.toggleArrivalReminder) {
+                const nowActive = await window.toggleArrivalReminder(sid, stname, rid, rnum, time);
+                btn.classList.toggle('active', nowActive);
+                btn.title = nowActive ? 'Отключить напоминание' : 'Напомнить за 1 мин до прибытия';
+                const icon = btn.querySelector('.material-symbols-outlined');
+                if (icon) icon.textContent = nowActive ? 'notifications_active' : 'notifications';
+              }
+            };
+          });
 
           setTimeout(() => {
             container.querySelectorAll('.dest-wrapper').forEach(wrapper => {
@@ -808,6 +901,130 @@ export default function App() {
   const missedPollsRef = useRef(0);
   const hasInitialCenteredRef = useRef(!selectedVehicle);
   const debouncedForecastRefreshRef = useRef(null);
+
+  // Arrival Reminders & Push Notification Alarm System
+  const [reminders, setReminders] = useState(() => {
+    try {
+      const saved = localStorage.getItem("pref_arrival_reminders");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const remindersRef = useRef(reminders);
+  useEffect(() => {
+    remindersRef.current = reminders;
+    try {
+      localStorage.setItem("pref_arrival_reminders", JSON.stringify(reminders));
+    } catch {}
+  }, [reminders]);
+
+  const [alertToast, setAlertToast] = useState(null);
+
+  const toggleArrivalReminder = async (sid, stationName, rid, rnum, initialTime) => {
+    // 1. Request notification permission if needed
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      try {
+        await Notification.requestPermission();
+      } catch {}
+    }
+
+    const remId = `${sid}_${rid}`;
+    const exists = remindersRef.current.some(r => r.id === remId && !r.triggered);
+
+    if (exists) {
+      setReminders(prev => prev.filter(r => r.id !== remId));
+      setAlertToast({
+        title: "Уведомление отменено",
+        body: `Напоминание для маршрута ${rnum} снято.`
+      });
+      setTimeout(() => setAlertToast(null), 3000);
+      return false;
+    } else {
+      const newRem = {
+        id: remId,
+        sid: String(sid),
+        stationName: String(stationName),
+        rid: String(rid),
+        rnum: String(rnum),
+        createdAt: Date.now(),
+        triggered: false,
+        lastTime: initialTime || ""
+      };
+      setReminders(prev => [...prev.filter(r => r.id !== remId), newRem]);
+      playArrivalChime();
+      setAlertToast({
+        title: `🔔 Напоминание установлено!`,
+        body: `Оповестим, когда маршрут ${rnum} будет за 1 мин до ост. «${stationName}».`
+      });
+      setTimeout(() => setAlertToast(null), 4000);
+      return true;
+    }
+  };
+
+  useEffect(() => {
+    window.toggleArrivalReminder = toggleArrivalReminder;
+    window.isArrivalReminderActive = (sid, rid) => {
+      const remId = `${sid}_${rid}`;
+      return remindersRef.current.some(r => r.id === remId && !r.triggered);
+    };
+    return () => {
+      delete window.toggleArrivalReminder;
+      delete window.isArrivalReminderActive;
+    };
+  }, []);
+
+  // Background arrival checker for active reminders
+  useEffect(() => {
+    if (reminders.length === 0) return;
+
+    const checkReminders = async () => {
+      const activeList = remindersRef.current.filter(r => !r.triggered);
+      if (activeList.length === 0) return;
+
+      const sids = Array.from(new Set(activeList.map(r => r.sid)));
+      for (const sid of sids) {
+        try {
+          const res = await apiFetch(`/api/station_forecasts?sid=${encodeURIComponent(sid)}`);
+          if (!res.ok) continue;
+          const data = await res.json();
+          const forecasts = data.forecasts || [];
+
+          activeList.filter(r => r.sid === sid).forEach(rem => {
+            const match = forecasts.find(f => String(f.rid) === String(rem.rid));
+            if (match) {
+              const timeNum = parseInt(match.time, 10);
+              const timeStr = String(match.time).toLowerCase();
+
+              // Update last known arrival time
+              rem.lastTime = match.time;
+
+              if (timeNum <= 1 || timeStr === "0" || timeStr === "1" || timeStr.includes("прибыв")) {
+                triggerArrivalPush(
+                  `🚌 Маршрут ${rem.rnum} прибывает!`,
+                  `Остановка «${rem.stationName}» — прибытие через ~1 мин!`,
+                  rem.id
+                );
+                setAlertToast({
+                  title: `🚌 Маршрут ${rem.rnum} прибывает!`,
+                  body: `Остановка «${rem.stationName}» — осталось ~1 мин!`
+                });
+                setTimeout(() => setAlertToast(null), 8000);
+
+                setReminders(prev => prev.filter(r => r.id !== rem.id));
+              }
+            }
+          });
+        } catch (err) {
+          console.warn("Failed to check station forecast reminder:", err);
+        }
+      }
+    };
+
+    const timer = setInterval(checkReminders, 7000);
+    checkReminders();
+    return () => clearInterval(timer);
+  }, [reminders.length]);
 
   // Calculate percentage of vehicle progress along route strictly by bus stops passed vs remaining (excluding coords)
   const routeProgressPercent = useMemo(() => {
@@ -3427,6 +3644,33 @@ export default function App() {
               {!isOnline ? "cloud_off" : "sync"}
             </span>
             <span>{!isOnline ? "Нет подключения к сети" : "Переподключение к серверу..."}</span>
+          </div>
+        )}
+
+        {/* Active Arrival Reminder Bar */}
+        {reminders.filter(r => !r.triggered).length > 0 && (
+          <div className="arrival-reminder-bar">
+            <span className="material-symbols-outlined" style={{ color: "#fbbf24", fontSize: "18px", animation: "pulse-bell 1.5s infinite ease-in-out" }}>notifications_active</span>
+            <span>
+              Напоминание: <strong>{reminders.filter(r => !r.triggered)[0].rnum}</strong> → {reminders.filter(r => !r.triggered)[0].stationName} {reminders.filter(r => !r.triggered)[0].lastTime ? `(~${reminders.filter(r => !r.triggered)[0].lastTime} мин)` : ''}
+            </span>
+            <button className="arrival-reminder-cancel-btn" onClick={() => setReminders(prev => prev.filter(r => r.id !== reminders.filter(r => !r.triggered)[0].id))} title="Отменить напоминание">
+              <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>close</span>
+            </button>
+          </div>
+        )}
+
+        {/* Arrival Notification Alert Toast */}
+        {alertToast && (
+          <div className="arrival-alert-toast" onClick={() => setAlertToast(null)}>
+            <span className="material-symbols-outlined" style={{ fontSize: "28px", color: "#fbbf24", animation: "pulse-bell 1s infinite ease-in-out" }}>notifications_active</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: "14px", color: "#fef3c7" }}>{alertToast.title}</div>
+              <div style={{ fontSize: "12px", color: "#cbd5e1", marginTop: "2px" }}>{alertToast.body}</div>
+            </div>
+            <button style={{ background: "transparent", border: "none", color: "#94a3b8", cursor: "pointer", padding: "4px" }}>
+              <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>close</span>
+            </button>
           </div>
         )}
 
