@@ -633,8 +633,6 @@ class PushReminderManager:
             except Exception as e:
                 logger.error("Error in push reminders loop: %s", e)
                 await asyncio.sleep(5.0)
-                logger.error("Error in push reminders loop: %s", e)
-                await asyncio.sleep(5.0)
 
     def stop(self):
         self._running = False
