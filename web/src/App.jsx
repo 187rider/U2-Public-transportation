@@ -1649,9 +1649,9 @@ export default function App() {
             t.velocityLat = (a.lat - t.currentLat) / rMs;
             t.velocityLng = (a.lng - t.currentLng) / rMs;
 
-            // Calculate real forward road travel vector towards target waypoint
+            // Calculate exact screen road azimuth matching original bus62 Leaflet coordinate math
             const dLat = a.lat - t.currentLat;
-            const dLng = (a.lng - t.currentLng) * Math.cos(t.currentLat * 0.017453292519943295);
+            const dLng = a.lng - t.currentLng;
             let targetAngle = t.currentDirection;
 
             if (dLat * dLat + dLng * dLng > 1e-11) {
@@ -2610,7 +2610,7 @@ export default function App() {
                 for (let i = 0; i < v.animPoints.length; i++) {
                   const pt = v.animPoints[i];
                   const dLat = pt.lat - v.lat;
-                  const dLng = (pt.lng - v.lng) * Math.cos(v.lat * 0.017453292519943295);
+                  const dLng = pt.lng - v.lng;
                   if (dLat * dLat + dLng * dLng > 1e-11) {
                     initialDirection = ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
                     break;
