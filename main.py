@@ -12,6 +12,7 @@ import binascii
 from datetime import datetime, timezone
 import os
 import json
+import base64
 import sqlite3
 from dotenv import load_dotenv
 import hashlib
