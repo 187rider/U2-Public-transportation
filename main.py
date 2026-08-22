@@ -402,6 +402,16 @@ class PushReminderManager:
         }
         try:
             from pywebpush import webpush
+            from urllib.parse import urlparse
+
+            endpoint = sub.get("endpoint", "")
+            parsed_url = urlparse(endpoint)
+            aud = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            fresh_claims = {
+                "sub": "mailto:support@ridertech.online",
+                "aud": aud
+            }
+
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
@@ -409,11 +419,11 @@ class PushReminderManager:
                     subscription_info=sub,
                     data=json.dumps(payload),
                     vapid_private_key=VAPID_KEY_FILE,
-                    vapid_claims=VAPID_CLAIMS,
+                    vapid_claims=fresh_claims,
                     ttl=120
                 )
             )
-            logger.info("Sent background WebPush: %s - %s", title, body)
+            logger.info("Sent background WebPush: %s - %s to %s", title, body, aud)
             return True
         except Exception as e:
             logger.warning("WebPush send error (%s): %s", type(e).__name__, e)
