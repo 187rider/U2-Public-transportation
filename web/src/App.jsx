@@ -1649,15 +1649,15 @@ export default function App() {
             t.velocityLat = (a.lat - t.currentLat) / rMs;
             t.velocityLng = (a.lng - t.currentLng) / rMs;
 
-            // Prioritize official upstream road heading if present, otherwise calculate exact travel vector
-            const distSq = (a.lat - t.currentLat) ** 2 + (a.lng - t.currentLng) ** 2;
+            // Calculate real forward road travel vector towards target waypoint
+            const dLat = a.lat - t.currentLat;
+            const dLng = (a.lng - t.currentLng) * Math.cos(t.currentLat * 0.017453292519943295);
             let targetAngle = t.currentDirection;
 
-            if (a.dir != null && Number.isFinite(a.dir) && a.dir > 0) {
+            if (dLat * dLat + dLng * dLng > 1e-11) {
+              targetAngle = ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
+            } else if (a.dir != null && Number.isFinite(a.dir) && a.dir > 0) {
               targetAngle = a.dir;
-            } else if (distSq > 1e-9) {
-              const latRad = t.currentLat * 0.017453292519943295;
-              targetAngle = ((Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * 57.29577951308232) % 360 + 360) % 360;
             }
 
             t.velocityDirection = shortestAngleDiff(targetAngle, t.currentDirection) / oMs;
@@ -2604,14 +2604,17 @@ export default function App() {
               wrapper.style.setProperty("z-index", "2000", "important");
               wrapper.style.willChange = "transform";
 
-              // Compute initial arrow direction targeting the upcoming arrival station / road waypoint
+              // Compute initial arrow direction targeting the upcoming arrival station / forward road waypoint
               let initialDirection = rotation;
               if (v.animPoints && v.animPoints.length > 0) {
-                const p0 = v.animPoints[0];
-                const dSq = (p0.lat - v.lat) ** 2 + (p0.lng - v.lng) ** 2;
-                if (dSq > 1e-10) {
-                  const latRad = v.lat * 0.017453292519943295;
-                  initialDirection = ((Math.atan2((p0.lng - v.lng) * Math.cos(latRad), p0.lat - v.lat) * 57.29577951308232) % 360 + 360) % 360;
+                for (let i = 0; i < v.animPoints.length; i++) {
+                  const pt = v.animPoints[i];
+                  const dLat = pt.lat - v.lat;
+                  const dLng = (pt.lng - v.lng) * Math.cos(v.lat * 0.017453292519943295);
+                  if (dLat * dLat + dLng * dLng > 1e-11) {
+                    initialDirection = ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
+                    break;
+                  }
                 }
               }
 
