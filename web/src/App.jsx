@@ -4,7 +4,7 @@ import { Map as MapLibreMap, NavigationControl, GeolocateControl, Popup, Marker 
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./App.css";
 
-const API_SECRET = import.meta.env.VITE_API_SECRET || "REDACTED_SECRET";
+const API_SECRET = import.meta.env.VITE_API_SECRET || "";
 let rawBase = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 if (typeof window !== "undefined" && window.location.protocol === "https:" && rawBase.startsWith("http://")) {
   rawBase = "";
@@ -514,6 +514,7 @@ async function triggerArrivalPush(title, body, tag = 'arrival-alarm') {
 
   const options = {
     body: body,
+    tag: tag || 'arrival-alarm',
     data: { url: '/' }
   };
 
@@ -915,7 +916,51 @@ export default function App() {
 
   const [alertToast, setAlertToast] = useState(null);
 
+  const cancelArrivalReminder = async (remId, rnum = "") => {
+    const existing = remindersRef.current.find(r => r.id === remId && !r.triggered);
+    setReminders(prev => prev.filter(r => r.id !== remId));
+
+    try {
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.ready;
+        if (reg && reg.pushManager) {
+          const sub = await reg.pushManager.getSubscription();
+          if (sub) {
+            const sid = existing ? existing.sid : remId.split('_')[0];
+            const rid = existing ? existing.rid : remId.split('_')[1];
+            apiFetch('/api/reminders/unsubscribe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                endpoint: sub.endpoint,
+                sid: String(sid),
+                rid: String(rid)
+              })
+            }).catch(() => {});
+          }
+        }
+      }
+    } catch {}
+
+    const displayRnum = rnum || (existing ? existing.rnum : "");
+    setAlertToast({
+      title: "Уведомление отменено",
+      body: displayRnum ? `Напоминание для маршрута ${displayRnum} снято.` : "Напоминание снято."
+    });
+    setTimeout(() => setAlertToast(null), 3000);
+  };
+
   const toggleArrivalReminder = async (sid, stationName, rid, rnum, initialTime) => {
+    const remId = `${sid}_${rid}`;
+    const exists = remindersRef.current.some(r => r.id === remId && !r.triggered);
+
+    // 1. If reminder is already active, cancel/unsubscribe immediately without running subscribe flow
+    if (exists) {
+      await cancelArrivalReminder(remId, rnum);
+      return false;
+    }
+
+    // 2. Setting a new reminder -> check permissions & subscribe
     let pushSub = null;
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 
@@ -993,10 +1038,11 @@ export default function App() {
               pushSub = existingSub;
             }
 
-            // Immediately test local notification dispatch to verify device display engine
+            // Local confirmation notification upon tapping bell
             if (reg.showNotification) {
               reg.showNotification(`🔔 Маршрут ${rnum}: напоминание включено`, {
                 body: `Остановка «${stationName}». Пришлем уведомления по графику!`,
+                tag: `arrival_${sid}_${rid}`,
                 data: { url: '/' }
               }).catch((e) => console.warn("Local notification error:", e));
             }
@@ -1007,87 +1053,53 @@ export default function App() {
       }
     }
 
-    const remId = `${sid}_${rid}`;
-    const exists = remindersRef.current.some(r => r.id === remId && !r.triggered);
+    const initialNum = parseInt(initialTime, 10);
+    const newRem = {
+      id: remId,
+      sid: String(sid),
+      stationName: String(stationName),
+      rid: String(rid),
+      rnum: String(rnum),
+      createdAt: Date.now(),
+      triggered: false,
+      lastTime: initialTime || "",
+      lastNotifiedTime: !isNaN(initialNum) ? initialNum : null
+    };
+    setReminders(prev => [...prev.filter(r => r.id !== remId), newRem]);
 
-    if (exists) {
-      setReminders(prev => prev.filter(r => r.id !== remId));
-      if (pushSub) {
-        apiFetch('/api/reminders/unsubscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            endpoint: pushSub.endpoint,
-            sid: String(sid),
-            rid: String(rid)
-          })
-        }).catch(() => {});
-      }
-      setAlertToast({
-        title: "Уведомление отменено",
-        body: `Напоминание для маршрута ${rnum} снято.`
-      });
-      setTimeout(() => setAlertToast(null), 3000);
-      return false;
-    } else {
-      const initialNum = parseInt(initialTime, 10);
-      const newRem = {
-        id: remId,
-        sid: String(sid),
-        stationName: String(stationName),
-        rid: String(rid),
-        rnum: String(rnum),
-        createdAt: Date.now(),
-        triggered: false,
-        lastTime: initialTime || "",
-        lastNotifiedTime: !isNaN(initialNum) ? initialNum : null
-      };
-      setReminders(prev => [...prev.filter(r => r.id !== remId), newRem]);
-
-      // Register with server to wake device when locked/asleep
-      if (pushSub) {
-        apiFetch('/api/reminders/subscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            subscription: pushSub.toJSON(),
-            sid: String(sid),
-            stationName: String(stationName),
-            rid: String(rid),
-            rnum: String(rnum),
-            initialTime: String(initialTime || "")
-          })
-        }).catch((e) => console.warn("Server push subscribe error:", e));
-
-        apiFetch('/api/reminders/test_push', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            subscription: pushSub.toJSON(),
-            delay: 3
-          })
-        }).catch(() => {});
-      }
-
-      playArrivalChime();
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-      const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
-
-      if (isIOS && !isStandalone) {
-        setAlertToast({
-          title: `🔔 Напоминание включено!`,
-          body: `💡 На iPhone для показа на заблокированном экране добавьте на экран «Домой» (Поделиться ➔ На экран «Домой»).`
-        });
-        setTimeout(() => setAlertToast(null), 6000);
-      } else {
-        setAlertToast({
-          title: `🔔 Напоминание установлено!`,
-          body: `Оповестим даже при заблокированном экране!`
-        });
-        setTimeout(() => setAlertToast(null), 4000);
-      }
-      return true;
+    // Register with server to wake device when locked/asleep
+    if (pushSub) {
+      apiFetch('/api/reminders/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscription: pushSub.toJSON(),
+          sid: String(sid),
+          stationName: String(stationName),
+          rid: String(rid),
+          rnum: String(rnum),
+          initialTime: String(initialTime || "")
+        })
+      }).catch((e) => console.warn("Server push subscribe error:", e));
     }
+
+    playArrivalChime();
+    const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+
+    if (isIOS && !isStandalone) {
+      setAlertToast({
+        title: `🔔 Напоминание включено!`,
+        body: `💡 На iPhone для показа на заблокированном экране добавьте на экран «Домой» (Поделиться ➔ На экран «Домой»).`
+      });
+      setTimeout(() => setAlertToast(null), 6000);
+    } else {
+      setAlertToast({
+        title: `🔔 Напоминание установлено!`,
+        body: `Оповестим даже при заблокированном экране!`
+      });
+      setTimeout(() => setAlertToast(null), 4000);
+    }
+    return true;
   };
 
   useEffect(() => {
@@ -1162,7 +1174,7 @@ export default function App() {
                   triggerArrivalPush(
                     `🚌 Маршрут ${rem.rnum} прибыл!`,
                     `Остановка «${rem.stationName}»`,
-                    rem.id
+                    `arrival_${rem.sid}_${rem.rid}`
                   );
                   setAlertToast({
                     title: `🚌 Маршрут ${rem.rnum} прибыл!`,
@@ -1177,7 +1189,7 @@ export default function App() {
                   triggerArrivalPush(
                     `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
                     `Остановка «${rem.stationName}» (прибытие через ~${curTime} мин)`,
-                    rem.id
+                    `arrival_${rem.sid}_${rem.rid}`
                   );
                   setAlertToast({
                     title: `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
@@ -3830,7 +3842,7 @@ export default function App() {
             <span>
               Напоминание: <strong>{reminders.filter(r => !r.triggered)[0].rnum}</strong> → {reminders.filter(r => !r.triggered)[0].stationName} {reminders.filter(r => !r.triggered)[0].lastTime ? `(~${reminders.filter(r => !r.triggered)[0].lastTime} мин)` : ''}
             </span>
-            <button className="arrival-reminder-cancel-btn" onClick={() => setReminders(prev => prev.filter(r => r.id !== reminders.filter(r => !r.triggered)[0].id))} title="Отменить напоминание">
+            <button className="arrival-reminder-cancel-btn" onClick={() => cancelArrivalReminder(reminders.filter(r => !r.triggered)[0].id)} title="Отменить напоминание">
               <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>close</span>
             </button>
           </div>
