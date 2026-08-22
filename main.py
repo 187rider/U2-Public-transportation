@@ -412,6 +412,13 @@ class PushReminderManager:
                 "aud": aud
             }
 
+            push_headers = {
+                "Urgency": "high",
+                "urgency": "high",
+                "apns-push-type": "alert",
+                "apns-priority": "10"
+            }
+
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
@@ -420,7 +427,7 @@ class PushReminderManager:
                     data=json.dumps(payload),
                     vapid_private_key=VAPID_KEY_FILE,
                     vapid_claims=fresh_claims,
-                    headers={"Urgency": "high"},
+                    headers=push_headers,
                     ttl=120
                 )
             )
