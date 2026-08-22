@@ -985,10 +985,10 @@ export default function App() {
       if (activeList.length === 0) return;
 
       const sids = Array.from(new Set(activeList.map(r => r.sid)));
-      for (const sid of sids) {
+      await Promise.all(sids.map(async (sid) => {
         try {
           const res = await apiFetch(`/api/station_forecasts?sid=${encodeURIComponent(sid)}`);
-          if (!res.ok) continue;
+          if (!res.ok) return;
           const data = await res.json();
           const forecasts = data.forecasts || [];
 
@@ -1068,7 +1068,7 @@ export default function App() {
         } catch (err) {
           console.warn("Failed to check station forecast reminder:", err);
         }
-      }
+      }));
     };
 
     const timer = setInterval(checkReminders, 7000);
