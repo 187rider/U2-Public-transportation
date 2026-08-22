@@ -513,12 +513,7 @@ async function triggerArrivalPush(title, body, tag = 'arrival-alarm') {
   }
 
   const options = {
-    body,
-    icon: '/apple-touch-icon.png',
-    badge: '/favicon.svg',
-    tag,
-    renotify: true,
-    vibrate: [200, 100, 200, 100, 300],
+    body: body,
     data: { url: '/' }
   };
 
@@ -530,9 +525,8 @@ async function triggerArrivalPush(title, body, tag = 'arrival-alarm') {
         return;
       }
     }
-    new Notification(title, options);
   } catch (err) {
-    try { new Notification(title, options); } catch {}
+    console.warn("showNotification error:", err);
   }
 }
 
