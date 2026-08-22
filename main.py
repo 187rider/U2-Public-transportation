@@ -326,13 +326,29 @@ class ServerVehiclePoller:
 # ---------------------------------------------------------
 # Web Push Background Notification Manager (Wakes up locked devices)
 # ---------------------------------------------------------
-VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "BCtpQGP1j_AWcUfMfWS7btcOfQ5eBFvvY5eXroWcuGRinUwARdWtyQZGQayceaJn_Q_CHRX0-cyGsrlq2q7j7yE")
-VAPID_PRIVATE_KEY_PEM = os.getenv("VAPID_PRIVATE_KEY_PEM", """-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgc5Pavqsdo1IIZ9Lm
-etgXoVN6q1NU0PCbIyenW111bQOhRANCAAQraUBj9Y/wFnFHzH1ku27bDn0OXgRb
-72OXl66FnLhkYp1MAEXVrbkGRkGsnHmiZ/0Pwh0V9PnPhrK5atqu4+8h
------END PRIVATE KEY-----
-""")
+VAPID_KEY_FILE = os.getenv("VAPID_KEY_FILE", "vapid_private.pem")
+if not os.path.exists(VAPID_KEY_FILE):
+    try:
+        from py_vapid import Vapid
+        v = Vapid()
+        v.generate_keys()
+        v.save_key(VAPID_KEY_FILE)
+    except Exception as e:
+        logger.error("Failed to generate VAPID key file: %s", e)
+
+try:
+    from py_vapid import Vapid
+    from cryptography.hazmat.primitives import serialization
+    vapid_instance = Vapid.from_file(VAPID_KEY_FILE)
+    pub_bytes = vapid_instance.public_key.public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint
+    )
+    VAPID_PUBLIC_KEY = base64.urlsafe_b64encode(pub_bytes).decode().rstrip('=')
+except Exception as e:
+    logger.error("Failed to load VAPID key from file %s: %s", VAPID_KEY_FILE, e)
+    VAPID_PUBLIC_KEY = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE"
+
 VAPID_CLAIMS = {"sub": "mailto:support@ridertech.online"}
 
 
@@ -391,7 +407,7 @@ class PushReminderManager:
                 lambda: webpush(
                     subscription_info=sub,
                     data=json.dumps(payload),
-                    vapid_private_key=VAPID_PRIVATE_KEY_PEM,
+                    vapid_private_key=VAPID_KEY_FILE,
                     vapid_claims=VAPID_CLAIMS,
                     ttl=120
                 )
