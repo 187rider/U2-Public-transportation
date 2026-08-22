@@ -122,12 +122,13 @@ async def verify_signature(request: Request):
 
 # ---------------------------------------------------------
 # Server-Side Background Vehicle Poller
-# Merges all client requests into 1 single upstream poll / 10s
+# Merges all client requests with instant on-demand fetch for new routes
 # ---------------------------------------------------------
 class ServerVehiclePoller:
     def __init__(self):
         self.vehicles: dict[str, dict] = {}
         self.veh_last_seen: dict[str, float] = {}
+        self.polled_rids: set[str] = set()
         self.version: int = 1
         self.curk: str = "0"
         self.last_poll_time: float = 0.0
@@ -136,20 +137,26 @@ class ServerVehiclePoller:
         self.poll_event: asyncio.Event = asyncio.Event()
         self._running: bool = False
 
-    def register_client_request(self, rids: str) -> None:
+    def register_client_request(self, rids: str) -> bool:
         now = time.time()
         was_idle = (now - self.last_client_activity) > 60.0
         self.last_client_activity = now
         
+        has_new_rids = False
         if rids:
             for r in rids.split(","):
                 r_clean = r.strip()
                 if r_clean:
+                    if r_clean not in self.polled_rids:
+                        has_new_rids = True
                     self.rid_last_seen[r_clean] = now
 
-        # Wake up poller immediately ONLY if waking from idle
-        if was_idle:
+        # If waking from idle or client switched to new routes, reset curk to 0 for full initial sync
+        if was_idle or has_new_rids:
+            self.curk = "0"
             self.poll_event.set()
+
+        return has_new_rids
 
     def get_active_rids(self, max_age: float = 300.0) -> str:
         now = time.time()
@@ -174,10 +181,11 @@ class ServerVehiclePoller:
             "next_curk": str(self.version)
         }
 
-    async def poll_once(self):
+    async def poll_once(self, force: bool = False):
         now = time.time()
-        # Hard floor: never hit upstream more often than every 10s, regardless of caller
-        if now - self.last_poll_time < 10.0:
+        # In normal background loop, limit to 10s. If force=True (new route selected), allow immediate fetch if > 0.8s
+        min_gap = 0.8 if force else 10.0
+        if now - self.last_poll_time < min_gap:
             return
         self.last_poll_time = now  # Set at start: attempt = poll
 
@@ -268,6 +276,7 @@ class ServerVehiclePoller:
 
             self.curk = str(max_curk)
             self.version += 1
+            self.polled_rids.update(r.strip() for r in active_rids.split(",") if r.strip())
 
         except httpx.HTTPError as e:
             logger.warning("Background vehicle poll upstream error (%s): %s", type(e).__name__, e or repr(e))
@@ -574,11 +583,11 @@ async def get_vehicles(rids: str = "", curk: str = "0"):
     if not rids:
         return {"vehicles": []}
         
-    vehicle_poller.register_client_request(rids)
+    has_new_rids = vehicle_poller.register_client_request(rids)
     
-    # Cold-start warmup: safe because poll_once self-gates on last_poll_time
-    if vehicle_poller.last_poll_time == 0:
-        await vehicle_poller.poll_once()
+    # If new routes were requested or initial start, poll upstream immediately
+    if has_new_rids or vehicle_poller.last_poll_time == 0:
+        await vehicle_poller.poll_once(force=True)
 
     return vehicle_poller.get_snapshot(rids)
 
