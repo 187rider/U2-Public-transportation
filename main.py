@@ -139,7 +139,7 @@ class ServerVehiclePoller:
 
     def register_client_request(self, rids: str) -> bool:
         now = time.time()
-        was_idle = (now - self.last_client_activity) > 60.0
+        was_idle = (now - self.last_client_activity) > 600.0
         self.last_client_activity = now
         
         has_new_rids = False
@@ -158,7 +158,7 @@ class ServerVehiclePoller:
 
         return has_new_rids
 
-    def get_active_rids(self, max_age: float = 300.0) -> str:
+    def get_active_rids(self, max_age: float = 600.0) -> str:
         now = time.time()
         active = [rid for rid, ts in self.rid_last_seen.items() if now - ts < max_age]
         # Prune expired rids
@@ -293,8 +293,8 @@ class ServerVehiclePoller:
         while self._running:
             try:
                 now = time.time()
-                # Idle backoff if no clients have requested vehicles in > 60s
-                if now - self.last_client_activity > 60.0:
+                # Idle backoff if no clients have requested vehicles in > 10 minutes
+                if now - self.last_client_activity > 600.0:
                     self.poll_event.clear()
                     try:
                         await asyncio.wait_for(self.poll_event.wait(), timeout=60.0)
