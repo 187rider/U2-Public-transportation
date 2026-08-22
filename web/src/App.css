@@ -27,11 +27,11 @@ body {
 
 
 
-/* Ensure map controls (zoom, 3D, compass) render above high z-index markers */
+/* Ensure map controls (zoom, 3D, compass, location) render above all map markers and pills */
 .maplibregl-control-container,
 .maplibregl-ctrl-top-right,
 .maplibregl-ctrl-group {
-  z-index: 3500 !important;
+  z-index: 8500 !important;
 }
 
 /* MUI Top Search Bar Container */
@@ -2020,7 +2020,7 @@ body {
   flex-direction: column !important;
   align-items: center !important;
   gap: 10px !important;
-  z-index: 10 !important;
+  z-index: 8500 !important;
 }
 
 .maplibregl-ctrl-top-right .maplibregl-ctrl {
