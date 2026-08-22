@@ -12,8 +12,9 @@ createRoot(document.getElementById('root')).render(
 // Register Service Worker for PWA App Shell & Background Web Push
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').then((reg) => {
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((reg) => {
       console.log('Service Worker registered:', reg.scope);
+      reg.update().catch(() => {});
     }).catch((err) => {
       console.warn('Service Worker registration failed:', err);
     });

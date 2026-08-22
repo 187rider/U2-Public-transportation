@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v3';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v4';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -158,12 +158,10 @@ self.addEventListener('push', (event) => {
   const title = data.title || '🚌 Транспорт Улан-Удэ';
   const options = {
     body: data.body || 'Обновление прибытия транспорта',
-    icon: data.icon || '/apple-touch-icon.png',
-    badge: data.badge || '/favicon.svg',
+    icon: '/apple-touch-icon.png',
+    badge: '/favicon.svg',
     tag: data.tag || 'arrival-alarm',
     renotify: true,
-    requireInteraction: true,
-    vibrate: [200, 100, 200, 100, 300],
     data: { url: data.url || '/' }
   };
 
