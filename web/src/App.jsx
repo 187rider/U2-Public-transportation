@@ -917,14 +917,32 @@ export default function App() {
 
   const toggleArrivalReminder = async (sid, stationName, rid, rnum, initialTime) => {
     let pushSub = null;
-    if (typeof Notification !== 'undefined') {
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+    if (typeof Notification === 'undefined') {
+      if (isIOS) {
+        setAlertToast({
+          title: "⚠️ Откройте с экрана «Домой»",
+          body: "На iPhone пуш-уведомления работают только если запустить приложение с иконки на экране «Домой»."
+        });
+        setTimeout(() => setAlertToast(null), 7000);
+      }
+    } else {
       if (Notification.permission === 'default') {
         try {
           await Notification.requestPermission();
         } catch {}
       }
 
-      if ('serviceWorker' in navigator && Notification.permission === 'granted') {
+      if (Notification.permission === 'denied') {
+        setAlertToast({
+          title: "⚠️ Уведомления заблокированы",
+          body: isIOS 
+            ? "Разрешите уведомления: Настройки iPhone ➔ Уведомления ➔ «Транспорт У-У»"
+            : "Разрешите уведомления в настройках браузера."
+        });
+        setTimeout(() => setAlertToast(null), 7000);
+      } else if (Notification.permission === 'granted' && 'serviceWorker' in navigator) {
         try {
           const reg = await navigator.serviceWorker.ready;
           if (reg && reg.pushManager) {
@@ -948,7 +966,6 @@ export default function App() {
             let existingSub = await reg.pushManager.getSubscription();
             if (existingSub) {
               try {
-                // If existing key doesn't match current server VAPID key, renew subscription
                 const existingKey = existingSub.options && existingSub.options.applicationServerKey;
                 let matches = false;
                 if (existingKey) {
@@ -974,6 +991,14 @@ export default function App() {
               });
             } else {
               pushSub = existingSub;
+            }
+
+            // Immediately test local notification dispatch to verify device display engine
+            if (reg.showNotification) {
+              reg.showNotification(`🔔 Маршрут ${rnum}: напоминание включено`, {
+                body: `Остановка «${stationName}». Пришлем уведомления по графику!`,
+                data: { url: '/' }
+              }).catch((e) => console.warn("Local notification error:", e));
             }
           }
         } catch (subErr) {
