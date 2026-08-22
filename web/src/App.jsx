@@ -2552,55 +2552,11 @@ export default function App() {
 
               if (v.animPoints && v.animPoints.length > 0) {
                 if (v.anim_key !== t.anim_key) {
-                  let matchIdx = -1;
-
-                  // Find the robust overlap point from our last appended trajectory
-                  if (t.lastAddedPoint) {
-                    let closestIdx = -1;
-                    let minDist = Infinity;
-                    for (let i = 0; i < v.animPoints.length; i++) {
-                      const pt = v.animPoints[i];
-                      const dist = Math.pow(pt.lat - t.lastAddedPoint.lat, 2) + Math.pow(pt.lng - t.lastAddedPoint.lng, 2);
-                      if (dist < minDist) {
-                        minDist = dist;
-                        closestIdx = i;
-                      }
-                    }
-                    if (minDist < 0.0000005) {
-                      matchIdx = closestIdx;
-                    }
+                  // Direct trajectory queue concatenation matching official bus62 pipeline (P)
+                  t.animationPoints = t.animationPoints.concat(v.animPoints);
+                  if (t.animationPoints.length > 8) {
+                    t.animationPoints = t.animationPoints.slice(-5);
                   }
-
-                  if (matchIdx !== -1) {
-                    // Seam found! Append forward points seamlessly.
-                    const newPoints = v.animPoints.slice(matchIdx + 1);
-                    if (newPoints.length > 0) {
-                      t.animationPoints = t.animationPoints.concat(newPoints);
-                      if (t.animationPoints.length > 5) {
-                        t.animationPoints = t.animationPoints.slice(-4);
-                      }
-                      t.lastAddedPoint = newPoints[newPoints.length - 1];
-                    }
-                  } else {
-                    // Find forward point from current location without rolling back
-                    let closestToCurrent = -1;
-                    let minCurrentDist = Infinity;
-                    for (let i = 0; i < v.animPoints.length; i++) {
-                      const pt = v.animPoints[i];
-                      const dist = Math.pow(pt.lat - t.currentLat, 2) + Math.pow(pt.lng - t.currentLng, 2);
-                      if (dist < minCurrentDist) {
-                        minCurrentDist = dist;
-                        closestToCurrent = i;
-                      }
-                    }
-
-                    const forwardPoints = v.animPoints.slice(Math.max(0, closestToCurrent + 1));
-                    t.animationPoints = forwardPoints.length > 0 ? forwardPoints : v.animPoints.slice(-1);
-                    t.lastAddedPoint = t.animationPoints[t.animationPoints.length - 1];
-                    t.timeRemaining = 0;
-                    t.directionTimeRemaining = 0;
-                  }
-
                   t.anim_key = v.anim_key;
                   marker._anim_key = v.anim_key;
                   t.idle = false;
