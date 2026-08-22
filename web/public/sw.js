@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v4';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v5';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -151,7 +151,11 @@ self.addEventListener('push', (event) => {
     try {
       data = event.data.json();
     } catch {
-      data = { title: 'Транспорт Улан-Удэ', body: event.data.text() };
+      try {
+        data = { title: 'Транспорт Улан-Удэ', body: event.data.text() };
+      } catch {
+        data = {};
+      }
     }
   }
 
@@ -159,9 +163,6 @@ self.addEventListener('push', (event) => {
   const options = {
     body: data.body || 'Обновление прибытия транспорта',
     icon: '/apple-touch-icon.png',
-    badge: '/favicon.svg',
-    tag: data.tag || 'arrival-alarm',
-    renotify: true,
     data: { url: data.url || '/' }
   };
 
