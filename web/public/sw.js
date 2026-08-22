@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v5';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v6';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -146,24 +146,27 @@ self.addEventListener('fetch', (event) => {
 
 // Push Message & Notification Handlers
 self.addEventListener('push', (event) => {
-  let data = {};
+  let title = '🚌 Транспорт Улан-Удэ';
+  let body = 'Обновление прибытия транспорта';
+  let url = '/';
+
   if (event.data) {
     try {
-      data = event.data.json();
+      const data = event.data.json();
+      if (data && data.title) title = String(data.title);
+      if (data && data.body) body = String(data.body);
+      if (data && data.url) url = String(data.url);
     } catch {
       try {
-        data = { title: 'Транспорт Улан-Удэ', body: event.data.text() };
-      } catch {
-        data = {};
-      }
+        const text = event.data.text();
+        if (text) body = text;
+      } catch {}
     }
   }
 
-  const title = data.title || '🚌 Транспорт Улан-Удэ';
   const options = {
-    body: data.body || 'Обновление прибытия транспорта',
-    icon: '/apple-touch-icon.png',
-    data: { url: data.url || '/' }
+    body: body,
+    data: { url: url }
   };
 
   event.waitUntil(
