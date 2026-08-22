@@ -267,6 +267,24 @@ class YandexLocationHeadingControl {
         });
       }
     }
+
+    // Live GPS course and movement heading tracking (Real-time 0ms cache)
+    this._geoWatchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (!this._map || !pos.coords) return;
+        // Follow movement direction when user is in motion (> 0.4 m/s)
+        if (pos.coords.heading != null && Number.isFinite(pos.coords.heading) && (pos.coords.speed || 0) > 0.4) {
+          const target = ((pos.coords.heading % 360) + 360) % 360;
+          const current = ((this._map.getBearing() % 360) + 360) % 360;
+          let diff = (target - current) % 360;
+          if (diff > 180) diff -= 360;
+          if (diff < -180) diff += 360;
+          this._map.setBearing(((current + diff * 0.4) % 360 + 360) % 360);
+        }
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+    );
   }
 
   _deactivateHeadingTracking() {
@@ -1966,12 +1984,13 @@ export default function App() {
     const geolocateControl = new GeolocateControl({
       positionOptions: {
         enableHighAccuracy: true,
-        timeout: 12000,
-        maximumAge: 5000
+        timeout: 10000,
+        maximumAge: 0
       },
       trackUserLocation: true,
       showUserLocation: true,
-      showAccuracyCircle: true
+      showAccuracyCircle: true,
+      showUserHeading: true
     });
 
     geolocateControl.on("error", (err) => {
