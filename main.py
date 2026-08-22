@@ -137,7 +137,7 @@ class ServerVehiclePoller:
         self.poll_event: asyncio.Event = asyncio.Event()
         self._running: bool = False
 
-    def register_client_request(self, rids: str) -> None:
+    def register_client_request(self, rids: str) -> bool:
         now = time.time()
         was_idle = (now - self.last_client_activity) > 60.0
         self.last_client_activity = now
@@ -151,10 +151,12 @@ class ServerVehiclePoller:
                         has_new_rids = True
                     self.rid_last_seen[r_clean] = now
 
-        # If waking from idle or new routes requested, reset curk to 0 for next scheduled poll
+        # If waking from idle or new routes requested, reset curk to 0 for initial snapshot
         if was_idle or has_new_rids:
             self.curk = "0"
             self.poll_event.set()
+
+        return has_new_rids
 
     def get_active_rids(self, max_age: float = 300.0) -> str:
         now = time.time()
@@ -179,10 +181,10 @@ class ServerVehiclePoller:
             "next_curk": str(self.version)
         }
 
-    async def poll_once(self):
+    async def poll_once(self, force: bool = False):
         now = time.time()
-        # Strictly poll once every 10 seconds
-        if now - self.last_poll_time < 10.0:
+        min_gap = 0.5 if force else 9.5
+        if now - self.last_poll_time < min_gap:
             return
         self.last_poll_time = now  # Set at start: attempt = poll
 
@@ -580,11 +582,11 @@ async def get_vehicles(rids: str = "", curk: str = "0"):
     if not rids:
         return {"vehicles": []}
         
-    vehicle_poller.register_client_request(rids)
+    has_new = vehicle_poller.register_client_request(rids)
     
-    # Cold-start warmup on initial server boot only
-    if vehicle_poller.last_poll_time == 0:
-        await vehicle_poller.poll_once()
+    # If new routes were requested or initial server start, poll upstream immediately
+    if has_new or vehicle_poller.last_poll_time == 0:
+        await vehicle_poller.poll_once(force=True)
 
     return vehicle_poller.get_snapshot(rids)
 
