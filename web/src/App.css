@@ -1007,7 +1007,7 @@ body {
 /* Selected Vehicle Live Tracking HUD */
 .selected-vehicle-hud {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  top: max(calc(env(safe-area-inset-top, 0px) + 12px), 54px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 9995;
@@ -1290,7 +1290,7 @@ body {
 
 /* Compact 1-line Top Pill when any bottom drawer tab is open */
 .selected-vehicle-hud.compact {
-  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  top: max(calc(env(safe-area-inset-top, 0px) + 8px), 48px);
   padding: 4px 8px;
   gap: 0;
   border-radius: 20px;
@@ -1612,7 +1612,7 @@ body {
 /* Connectivity / Offline Floating Banner */
 .connectivity-banner {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  top: max(calc(env(safe-area-inset-top, 0px) + 12px), 54px);
   left: 50%;
   transform: translateX(-50%);
   background: rgba(30, 41, 59, 0.88);

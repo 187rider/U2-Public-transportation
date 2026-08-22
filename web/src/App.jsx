@@ -2540,8 +2540,8 @@ export default function App() {
                 anims[v.id] = t;
               }
 
-              // Handle Teleportation / Background Resume / Bad GPS fix (if jump is > 1km or full poll reset)
-              if (isFullPoll || Math.abs(v.lat - t.currentLat) > 0.01 || Math.abs(v.lng - t.currentLng) > 0.01) {
+              // Only handle true teleportation / bad GPS fix (jump > 1km)
+              if (Math.abs(v.lat - t.currentLat) > 0.01 || Math.abs(v.lng - t.currentLng) > 0.01) {
                 t.animationPoints = [];
                 t.timeRemaining = 0;
                 t.directionTimeRemaining = 0;
@@ -2553,7 +2553,7 @@ export default function App() {
               }
 
               if (v.animPoints && v.animPoints.length > 0) {
-                if (v.anim_key !== t.anim_key) {
+                if (v.anim_key !== t.anim_key || t.animationPoints.length === 0) {
                   // Direct trajectory queue concatenation matching official bus62 pipeline (P)
                   t.animationPoints = t.animationPoints.concat(v.animPoints);
                   if (t.animationPoints.length > 8) {
