@@ -1643,20 +1643,21 @@ export default function App() {
             const percent = rawPercent > 0 ? rawPercent : (100 / Math.max(1, queueLen + 1));
             const baseMs = Math.max((10000 * percent) / 100, 50);
             const rMs = Math.max(baseMs / catchUpFactor, 50);
-            const oMs = rMs; // Match rotation duration to movement duration for continuous curvature
+            // Snappy turn alignment matching official bus62 o parameter (completes turn in ~400-800ms)
+            const oMs = Math.min(rMs, Math.max(350, Math.min(800, rMs * 0.2)));
 
             t.velocityLat = (a.lat - t.currentLat) / rMs;
             t.velocityLng = (a.lng - t.currentLng) / rMs;
 
-            // Radian conversion for accurate travel bearing
+            // Prioritize official upstream road heading if present, otherwise calculate exact travel vector
             const distSq = (a.lat - t.currentLat) ** 2 + (a.lng - t.currentLng) ** 2;
             let targetAngle = t.currentDirection;
 
-            if (distSq > 1e-9) {
+            if (a.dir != null && Number.isFinite(a.dir) && a.dir > 0) {
+              targetAngle = a.dir;
+            } else if (distSq > 1e-9) {
               const latRad = t.currentLat * 0.017453292519943295;
               targetAngle = ((Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * 57.29577951308232) % 360 + 360) % 360;
-            } else if (a.dir != null && Number.isFinite(a.dir) && a.dir > 0) {
-              targetAngle = a.dir;
             }
 
             t.velocityDirection = shortestAngleDiff(targetAngle, t.currentDirection) / oMs;
