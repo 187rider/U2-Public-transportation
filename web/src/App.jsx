@@ -1710,12 +1710,13 @@ export default function App() {
 
             if (dLat * dLat + dLng * dLng > 1e-11) {
               const computedAngle = ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
-              // Guard: never flip 180 deg backwards if vehicle is already oriented along road
-              if (!t.currentDirection || Math.abs(shortestAngleDiff(computedAngle, t.currentDirection)) < 100) {
-                targetAngle = computedAngle;
-              }
+              targetAngle = computedAngle;
             } else if (a.dir != null && Number.isFinite(a.dir) && a.dir > 0) {
               targetAngle = a.dir;
+            } else {
+              // Fallback to next stop bearing prediction along route vector path
+              const nextBearing = getNextStopBearing(t.veh || knownVehiclesRef.current[id], t.currentLat, t.currentLng);
+              if (nextBearing != null) targetAngle = nextBearing;
             }
 
             t.velocityDirection = shortestAngleDiff(targetAngle, t.currentDirection) / oMs;
@@ -2597,9 +2598,12 @@ export default function App() {
                   anim_key: v.anim_key,
                   lastAddedPoint: null,
                   coastTime: 0,
-                  idle: false
+                  idle: false,
+                  veh: v
                 };
                 anims[v.id] = t;
+              } else {
+                t.veh = v;
               }
 
               // Only handle true teleportation / bad GPS fix (jump > 1km)
