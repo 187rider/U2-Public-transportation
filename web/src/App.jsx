@@ -1604,8 +1604,10 @@ export default function App() {
 
       for (const id in anims) {
         const t = anims[id];
-        const busy = t.timeRemaining > 0 || (t.animationPoints && t.animationPoints.length > 0);
-        if (busy) {
+        const hasPoints = (t.timeRemaining > 0) || (t.animationPoints && t.animationPoints.length > 0);
+        const isCoasting = !hasPoints && (t.coastTime < 3500) && (Math.abs(t.velocityLat || 0) > 1e-9 || Math.abs(t.velocityLng || 0) > 1e-9);
+
+        if (hasPoints || isCoasting) {
           hasActive = true;
           t.idle = false;
         } else {
@@ -1617,6 +1619,7 @@ export default function App() {
         let dtLeft = dt;
         while (dtLeft > 0) {
           if (t.timeRemaining > 0) {
+            t.coastTime = 0;
             const step = Math.min(dtLeft, t.timeRemaining);
             t.currentLat += t.velocityLat * step;
             t.currentLng += t.velocityLng * step;
@@ -1630,30 +1633,40 @@ export default function App() {
 
             dtLeft -= step;
           } else if (t.animationPoints && t.animationPoints.length > 0) {
+            t.coastTime = 0;
             const a = t.animationPoints.shift();
 
             // 10s baseline aligned with server polling interval; dynamic catch-up when queue accumulates
             const queueLen = t.animationPoints.length;
             const catchUpFactor = queueLen > 1 ? Math.min(2.5, 1.0 + (queueLen - 1) * 0.35) : 1.0;
-            const baseMs = Math.max((10000 * a.percent) / 100, 1);
-            const rMs = Math.max(baseMs / catchUpFactor, 1);
-            const oMs = Math.max(rMs / 10, 1); // Turn completes 10x faster than movement
+            const rawPercent = a.percent || 0;
+            const percent = rawPercent > 0 ? rawPercent : (100 / Math.max(1, queueLen + 1));
+            const baseMs = Math.max((10000 * percent) / 100, 50);
+            const rMs = Math.max(baseMs / catchUpFactor, 50);
+            const oMs = Math.max(rMs / 6, 40); // Turn completes smoothly
 
             t.velocityLat = (a.lat - t.currentLat) / rMs;
             t.velocityLng = (a.lng - t.currentLng) / rMs;
 
-            // Pre-calculated PI/180 and 180/PI for instant zero-overhead radian conversion
+            // Radian conversion for heading angle
             const latRad = t.currentLat * 0.017453292519943295;
             let targetAngle = Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * 57.29577951308232;
 
             const distSq = (a.lat - t.currentLat) ** 2 + (a.lng - t.currentLng) ** 2;
             if (distSq < 1e-12) {
-              targetAngle = t.currentDirection;
+              targetAngle = a.dir != null ? a.dir : t.currentDirection;
             }
 
             t.velocityDirection = shortestAngleDiff(targetAngle, t.currentDirection) / oMs;
             t.timeRemaining = rMs;
             t.directionTimeRemaining = oMs;
+          } else if (isCoasting && dtLeft > 0) {
+            // Smooth coasting buffer between 10s poll cycles to prevent freeze
+            const coastDamping = Math.max(0, 1 - (t.coastTime / 3500));
+            t.currentLat += (t.velocityLat || 0) * coastDamping * dtLeft;
+            t.currentLng += (t.velocityLng || 0) * coastDamping * dtLeft;
+            t.coastTime = (t.coastTime || 0) + dtLeft;
+            dtLeft = 0;
           } else {
             break;
           }
@@ -2725,6 +2738,7 @@ export default function App() {
               marker._anim_key = v.anim_key;
               vehicleMarkersRef.current[v.id] = marker;
 
+              const initialPoints = (v.animPoints && v.animPoints.length > 0) ? v.animPoints.slice() : [];
               activeAnimationsRef.current[v.id] = {
                 marker,
                 mDiv: markerDiv,
@@ -2732,14 +2746,15 @@ export default function App() {
                 currentLat: v.lat,
                 currentLng: v.lng,
                 currentDirection: rotation,
-                animationPoints: [],
+                animationPoints: initialPoints,
                 timeRemaining: 0,
                 directionTimeRemaining: 0,
                 velocityLat: 0,
                 velocityLng: 0,
                 velocityDirection: 0,
                 anim_key: v.anim_key,
-                lastAddedPoint: null,
+                lastAddedPoint: initialPoints.length > 0 ? initialPoints[initialPoints.length - 1] : null,
+                coastTime: 0,
                 idle: false
               };
 
