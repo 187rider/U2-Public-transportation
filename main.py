@@ -390,7 +390,7 @@ class PushReminderManager:
         rem_key = f"{endpoint}_{sid}_{rid}"
         self.reminders.pop(rem_key, None)
 
-    async def send_webpush(self, sub: dict, title: str, body: str, tag: str = "arrival-alarm"):
+    async def send_webpush(self, sub: dict, title: str, body: str, tag: str = "arrival-alarm") -> bool:
         payload = {
             "title": title,
             "body": body,
@@ -413,8 +413,10 @@ class PushReminderManager:
                 )
             )
             logger.info("Sent background WebPush: %s - %s", title, body)
+            return True
         except Exception as e:
             logger.warning("WebPush send error (%s): %s", type(e).__name__, e)
+            return False
 
     async def run_loop(self):
         self._running = True

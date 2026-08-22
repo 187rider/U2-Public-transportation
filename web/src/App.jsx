@@ -934,28 +934,52 @@ export default function App() {
         try {
           const reg = await navigator.serviceWorker.ready;
           if (reg && reg.pushManager) {
-            pushSub = await reg.pushManager.getSubscription();
-            if (!pushSub) {
-              let vapidKey = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
-              try {
-                const kRes = await apiFetch('/api/vapid_public_key');
-                if (kRes.ok) {
-                  const kData = await kRes.json();
-                  if (kData && kData.publicKey) vapidKey = kData.publicKey;
-                }
-              } catch {}
-
-              const padding = '='.repeat((4 - (vapidKey.length % 4)) % 4);
-              const base64 = (vapidKey + padding).replace(/-/g, '+').replace(/_/g, '/');
-              const rawData = window.atob(base64);
-              const outputArray = new Uint8Array(rawData.length);
-              for (let i = 0; i < rawData.length; ++i) {
-                outputArray[i] = rawData.charCodeAt(i);
+            let vapidKey = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
+            try {
+              const kRes = await apiFetch('/api/vapid_public_key');
+              if (kRes.ok) {
+                const kData = await kRes.json();
+                if (kData && kData.publicKey) vapidKey = kData.publicKey;
               }
+            } catch {}
+
+            const padding = '='.repeat((4 - (vapidKey.length % 4)) % 4);
+            const base64 = (vapidKey + padding).replace(/-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) {
+              outputArray[i] = rawData.charCodeAt(i);
+            }
+
+            let existingSub = await reg.pushManager.getSubscription();
+            if (existingSub) {
+              try {
+                // If existing key doesn't match current server VAPID key, renew subscription
+                const existingKey = existingSub.options && existingSub.options.applicationServerKey;
+                let matches = false;
+                if (existingKey) {
+                  const existingArr = new Uint8Array(existingKey);
+                  if (existingArr.length === outputArray.length) {
+                    matches = existingArr.every((val, i) => val === outputArray[i]);
+                  }
+                }
+                if (!matches) {
+                  await existingSub.unsubscribe();
+                  existingSub = null;
+                }
+              } catch {
+                await existingSub.unsubscribe().catch(() => {});
+                existingSub = null;
+              }
+            }
+
+            if (!existingSub) {
               pushSub = await reg.pushManager.subscribe({
                 userVisibleOnly: true,
                 applicationServerKey: outputArray
               });
+            } else {
+              pushSub = existingSub;
             }
           }
         } catch (subErr) {
