@@ -2647,11 +2647,8 @@ export default function App() {
 
               if (v.animPoints && v.animPoints.length > 0) {
                 if (v.anim_key !== t.anim_key) {
-                  // Direct trajectory queue concatenation matching official bus62 pipeline (P)
-                  t.animationPoints = t.animationPoints.concat(v.animPoints);
-                  if (t.animationPoints.length > 8) {
-                    t.animationPoints = t.animationPoints.slice(-5);
-                  }
+                  // Only store the last 2 trajectory points max
+                  t.animationPoints = v.animPoints.slice(-2);
                   t.anim_key = v.anim_key;
                   marker._anim_key = v.anim_key;
                   t.idle = false;
@@ -2794,7 +2791,7 @@ export default function App() {
               marker._anim_key = v.anim_key;
               vehicleMarkersRef.current[v.id] = marker;
 
-              const initialPoints = (v.animPoints && v.animPoints.length > 0) ? v.animPoints.slice() : [];
+              const initialPoints = (v.animPoints && v.animPoints.length > 0) ? v.animPoints.slice(-2) : [];
               activeAnimationsRef.current[v.id] = {
                 marker,
                 mDiv: markerDiv,

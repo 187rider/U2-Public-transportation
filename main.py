@@ -251,6 +251,9 @@ class ServerVehiclePoller:
                         except (TypeError, ValueError):
                             continue
 
+                if len(anim_points) > 2:
+                    anim_points = anim_points[-2:]
+
                 veh_id = str(item.get("vehid") or item.get("id") or "")
                 if not veh_id:
                     continue
