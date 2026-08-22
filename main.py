@@ -1005,5 +1005,30 @@ async def unsubscribe_reminder(request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/api/reminders/test_push", dependencies=[Depends(verify_signature)])
+async def test_push_endpoint(request: Request):
+    try:
+        body = await request.json()
+        sub = body.get("subscription")
+        delay = int(body.get("delay", 3))
+        if not sub or not isinstance(sub, dict):
+            raise HTTPException(status_code=400, detail="Missing subscription")
+
+        async def send_delayed():
+            await asyncio.sleep(delay)
+            await push_reminder_manager.send_webpush(
+                sub=sub,
+                title="🔔 Тестовое уведомление",
+                body="Фоновые уведомления на экране блокировки работают!",
+                tag="test-alert"
+            )
+
+        asyncio.create_task(send_delayed())
+        return {"status": "ok", "message": f"Test push scheduled in {delay}s"}
+    except Exception as e:
+        logger.error("Failed to schedule test push: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

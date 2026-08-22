@@ -1039,6 +1039,15 @@ export default function App() {
             initialTime: String(initialTime || "")
           })
         }).catch((e) => console.warn("Server push subscribe error:", e));
+
+        apiFetch('/api/reminders/test_push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscription: pushSub.toJSON(),
+            delay: 3
+          })
+        }).catch(() => {});
       }
 
       playArrivalChime();
