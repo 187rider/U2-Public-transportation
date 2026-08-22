@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v6';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v7';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -16,9 +16,11 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(SHELL_CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS).catch((err) => {
-        console.warn('SW pre-cache warning:', err);
-      });
+      return Promise.allSettled(
+        STATIC_ASSETS.map((asset) => cache.add(asset).catch((err) => {
+          console.warn('SW pre-cache item warning:', asset, err);
+        }))
+      );
     })
   );
 });
@@ -94,7 +96,11 @@ self.addEventListener('fetch', (event) => {
             })
             .catch(() => cachedData);
 
-          return cachedData || fetchPromise;
+          if (cachedData) {
+            event.waitUntil(fetchPromise);
+            return cachedData;
+          }
+          return fetchPromise;
         });
       })
     );
@@ -119,7 +125,9 @@ self.addEventListener('fetch', (event) => {
           }
           return response;
         })
-        .catch(() => caches.match('/index.html') || caches.match(event.request))
+        .catch(() =>
+          caches.match('/index.html').then((r) => r || caches.match(event.request))
+        )
     );
     return;
   }
@@ -139,7 +147,11 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(() => cachedResponse);
 
-      return cachedResponse || fetchPromise;
+      if (cachedResponse) {
+        event.waitUntil(fetchPromise);
+        return cachedResponse;
+      }
+      return fetchPromise;
     })
   );
 });
@@ -148,14 +160,22 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('push', (event) => {
   let title = '🚌 Транспорт Улан-Удэ';
   let body = 'Обновление прибытия транспорта';
+  let tag = 'arrival-alarm';
+  let icon = '/apple-touch-icon.png';
+  let badge = '/favicon.svg';
   let url = '/';
 
   if (event.data) {
     try {
       const data = event.data.json();
-      if (data && data.title) title = String(data.title);
-      if (data && data.body) body = String(data.body);
-      if (data && data.url) url = String(data.url);
+      if (data) {
+        if (data.title) title = String(data.title);
+        if (data.body) body = String(data.body);
+        if (data.tag) tag = String(data.tag);
+        if (data.icon) icon = String(data.icon);
+        if (data.badge) badge = String(data.badge);
+        if (data.url) url = String(data.url);
+      }
     } catch {
       try {
         const text = event.data.text();
@@ -166,6 +186,9 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: body,
+    tag: tag,
+    icon: icon,
+    badge: badge,
     data: { url: url }
   };
 
@@ -176,15 +199,19 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) || '/';
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
         if (client.url && 'focus' in client) {
+          if ('navigate' in client && targetUrl !== '/') {
+            client.navigate(targetUrl);
+          }
           return client.focus();
         }
       }
       if (self.clients.openWindow) {
-        return self.clients.openWindow('/');
+        return self.clients.openWindow(targetUrl);
       }
     })
   );
