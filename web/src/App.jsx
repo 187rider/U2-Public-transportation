@@ -1562,9 +1562,9 @@ export default function App() {
   };
 
   const shortestAngleDiff = (targetAngle, currentAngle) => {
-    let t = (targetAngle - currentAngle) % 360;
-    if (t > 180) t -= 360;
-    if (t < -180) t += 360;
+    let t = targetAngle - currentAngle;
+    while (t > 180) t -= 360;
+    while (t < -180) t += 360;
     return t;
   };
 
@@ -1649,13 +1649,17 @@ export default function App() {
             t.velocityLat = (a.lat - t.currentLat) / rMs;
             t.velocityLng = (a.lng - t.currentLng) / rMs;
 
-            // Calculate real forward road travel vector towards target waypoint
+            // Calculate exact forward road azimuth
             const dLat = a.lat - t.currentLat;
-            const dLng = (a.lng - t.currentLng) * Math.cos(t.currentLat * 0.017453292519943295);
+            const dLng = a.lng - t.currentLng;
             let targetAngle = t.currentDirection;
 
             if (dLat * dLat + dLng * dLng > 1e-11) {
-              targetAngle = ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
+              const computedAngle = ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
+              // Guard: never flip 180 deg backwards if vehicle is already oriented along road
+              if (!t.currentDirection || Math.abs(shortestAngleDiff(computedAngle, t.currentDirection)) < 100) {
+                targetAngle = computedAngle;
+              }
             } else if (a.dir != null && Number.isFinite(a.dir) && a.dir > 0) {
               targetAngle = a.dir;
             }
