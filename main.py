@@ -140,7 +140,7 @@ class ServerVehiclePoller:
 
     def register_client_request(self, rids: str) -> bool:
         now = time.time()
-        was_idle = (now - self.last_client_activity) > 600.0
+        was_idle = (now - self.last_client_activity) > 60.0
         self.last_client_activity = now
         
         has_new_rids = False
@@ -159,7 +159,7 @@ class ServerVehiclePoller:
 
         return has_new_rids
 
-    def get_active_rids(self, max_age: float = 600.0) -> str:
+    def get_active_rids(self, max_age: float = 60.0) -> str:
         now = time.time()
         active = [rid for rid, ts in self.rid_last_seen.items() if now - ts < max_age]
         # Prune expired rids
@@ -182,10 +182,9 @@ class ServerVehiclePoller:
             "next_curk": str(self.version)
         }
 
-    async def poll_once(self, force: bool = False):
+    async def poll_once(self):
         now = time.time()
-        min_gap = 0.5 if force else 9.5
-        if now - self.last_poll_time < min_gap:
+        if now - self.last_poll_time < 10.0:  # Hard floor, max 1 request per 10s
             return
         self.last_poll_time = now  # Set at start: attempt = poll
 
@@ -297,8 +296,8 @@ class ServerVehiclePoller:
         while self._running:
             try:
                 now = time.time()
-                # Idle backoff if no clients have requested vehicles in > 10 minutes
-                if now - self.last_client_activity > 600.0:
+                # Idle backoff if no clients have requested vehicles in > 60 seconds
+                if now - self.last_client_activity > 60.0:
                     self.poll_event.clear()
                     try:
                         await asyncio.wait_for(self.poll_event.wait(), timeout=60.0)
@@ -335,7 +334,8 @@ if not os.path.exists(VAPID_KEY_FILE):
         v.generate_keys()
         v.save_key(VAPID_KEY_FILE)
     except Exception as e:
-        logger.error("Failed to generate VAPID key file: %s", e)
+        logger.critical("Failed to generate VAPID key file %s: %s", VAPID_KEY_FILE, e)
+        raise RuntimeError(f"VAPID key generation failed: {e}")
 
 try:
     from py_vapid import Vapid
@@ -347,8 +347,8 @@ try:
     )
     VAPID_PUBLIC_KEY = base64.urlsafe_b64encode(pub_bytes).decode().rstrip('=')
 except Exception as e:
-    logger.error("Failed to load VAPID key from file %s: %s", VAPID_KEY_FILE, e)
-    VAPID_PUBLIC_KEY = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE"
+    logger.critical("CRITICAL: Failed to load VAPID key from file %s: %s", VAPID_KEY_FILE, e)
+    raise RuntimeError(f"VAPID private key is required for Web Push but failed to load: {e}")
 
 VAPID_CLAIMS = {"sub": "mailto:support@ridertech.online"}
 
@@ -512,7 +512,7 @@ class PushReminderManager:
         self._running = True
         while self._running:
             try:
-                await asyncio.sleep(6.0)
+                await asyncio.sleep(10.0)
                 reminders_map = self.get_all_reminders()
                 if not reminders_map:
                     continue
@@ -568,13 +568,12 @@ class PushReminderManager:
                             elif cur_time > last:
                                 # If bus was delayed by traffic, update baseline
                                 self.update_last_notified(rem_key, cur_time)
-                            elif last >= 10 and cur_time >= 10:
+                            elif last > 10 and cur_time <= 10:
+                                should_fire = True
+                            elif last > 10 and cur_time > 10:
                                 if cur_time <= last - 5:
                                     should_fire = True
-                            elif last >= 10 and cur_time < 10:
-                                if cur_time <= last - 5 or cur_time <= 9:
-                                    should_fire = True
-                            elif cur_time < 10:
+                            elif cur_time <= 10:
                                 if cur_time <= last - 1:
                                     should_fire = True
 
@@ -880,12 +879,11 @@ async def get_vehicles(rids: str = "", curk: str = "0"):
     if not rids:
         return {"vehicles": []}
         
-    has_new = vehicle_poller.register_client_request(rids)
+    vehicle_poller.register_client_request(rids)
     
-    # If client requested full sync (curk == 0), new routes requested, or cache older than 4s, fetch fresh telemetry immediately
-    now = time.time()
-    if curk == "0" or has_new or (now - vehicle_poller.last_poll_time > 4.0):
-        await vehicle_poller.poll_once(force=True)
+    # Cold start only: if never polled before, perform initial poll
+    if vehicle_poller.last_poll_time == 0:
+        await vehicle_poller.poll_once()
 
     return vehicle_poller.get_snapshot(rids)
 
@@ -1097,7 +1095,7 @@ async def test_push_endpoint(request: Request):
     try:
         body = await request.json()
         sub = body.get("subscription")
-        delay = int(body.get("delay", 3))
+        delay = max(0, min(int(body.get("delay", 3)), 30))
         if not sub or not isinstance(sub, dict):
             raise HTTPException(status_code=400, detail="Missing subscription")
 
@@ -1118,4 +1116,4 @@ async def test_push_endpoint(request: Request):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
