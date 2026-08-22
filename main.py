@@ -137,7 +137,7 @@ class ServerVehiclePoller:
         self.poll_event: asyncio.Event = asyncio.Event()
         self._running: bool = False
 
-    def register_client_request(self, rids: str) -> bool:
+    def register_client_request(self, rids: str) -> None:
         now = time.time()
         was_idle = (now - self.last_client_activity) > 60.0
         self.last_client_activity = now
@@ -151,12 +151,10 @@ class ServerVehiclePoller:
                         has_new_rids = True
                     self.rid_last_seen[r_clean] = now
 
-        # If waking from idle or client switched to new routes, reset curk to 0 for full initial sync
+        # If waking from idle or new routes requested, reset curk to 0 for next scheduled poll
         if was_idle or has_new_rids:
             self.curk = "0"
             self.poll_event.set()
-
-        return has_new_rids
 
     def get_active_rids(self, max_age: float = 300.0) -> str:
         now = time.time()
@@ -181,11 +179,10 @@ class ServerVehiclePoller:
             "next_curk": str(self.version)
         }
 
-    async def poll_once(self, force: bool = False):
+    async def poll_once(self):
         now = time.time()
-        # In normal background loop, limit to 10s. If force=True (new route selected), allow immediate fetch if > 0.8s
-        min_gap = 0.8 if force else 10.0
-        if now - self.last_poll_time < min_gap:
+        # Strictly poll once every 10 seconds
+        if now - self.last_poll_time < 10.0:
             return
         self.last_poll_time = now  # Set at start: attempt = poll
 
@@ -583,11 +580,11 @@ async def get_vehicles(rids: str = "", curk: str = "0"):
     if not rids:
         return {"vehicles": []}
         
-    has_new_rids = vehicle_poller.register_client_request(rids)
+    vehicle_poller.register_client_request(rids)
     
-    # If new routes were requested or initial start, poll upstream immediately
-    if has_new_rids or vehicle_poller.last_poll_time == 0:
-        await vehicle_poller.poll_once(force=True)
+    # Cold-start warmup on initial server boot only
+    if vehicle_poller.last_poll_time == 0:
+        await vehicle_poller.poll_once()
 
     return vehicle_poller.get_snapshot(rids)
 
