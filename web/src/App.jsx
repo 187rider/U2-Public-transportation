@@ -1264,10 +1264,18 @@ export default function App() {
   const stationsById = useMemo(() => {
     const map = new Map();
     (stations || []).forEach(st => {
-      if (st.properties?.id) map.set(st.properties.id, st);
+      if (st.properties?.id != null) {
+        map.set(String(st.properties.id), st);
+        map.set(Number(st.properties.id), st);
+      }
     });
     return map;
   }, [stations]);
+
+  const stationsByIdRef = useRef(stationsById);
+  useEffect(() => {
+    stationsByIdRef.current = stationsById;
+  }, [stationsById]);
 
   const routeTerminalsMap = useMemo(() => {
     const norm = (s) => String(s || "")
@@ -1574,7 +1582,7 @@ export default function App() {
     const lng = curLng != null ? curLng : veh.lng;
     if (lat == null || lng == null) return null;
 
-    // 1. Check forward waypoints along the road graph
+    // 1. First priority: forward waypoints along the road graph
     if (veh.animPoints && veh.animPoints.length > 0) {
       for (let i = 0; i < veh.animPoints.length; i++) {
         const pt = veh.animPoints[i];
@@ -1586,31 +1594,47 @@ export default function App() {
       }
     }
 
-    // 2. Check next arrival stop position along the route
+    // 2. Next Stop Prediction: strictly follow route station sequence order (S_k -> S_{k+1})
     const rids = veh.rid ? String(veh.rid).split(",") : [];
     for (const rawRid of rids) {
       const rid = rawRid.trim();
       const sIds = routeStationsCacheRef.current?.[rid];
-      if (Array.isArray(sIds) && sIds.length > 0 && stationsByIdRef.current) {
-        let bestDist = Infinity;
-        let targetSt = null;
-        for (const sid of sIds) {
+      if (Array.isArray(sIds) && sIds.length > 1 && stationsByIdRef.current) {
+        let closestIdx = -1;
+        let closestDist = Infinity;
+        for (let i = 0; i < sIds.length; i++) {
+          const sid = sIds[i];
           const st = stationsByIdRef.current.get(String(sid)) || stationsByIdRef.current.get(Number(sid));
-          if (st && st.geometry && st.geometry.coordinates) {
+          if (st?.geometry?.coordinates) {
             const [sLng, sLat] = st.geometry.coordinates;
-            const dLat = sLat - lat;
-            const dLng = sLng - lng;
-            const distSq = dLat * dLat + dLng * dLng;
-            if (distSq > 1e-9 && distSq < bestDist) {
-              bestDist = distSq;
-              targetSt = { sLat, sLng };
+            const distSq = (sLat - lat) ** 2 + (sLng - lng) ** 2;
+            if (distSq < closestDist) {
+              closestDist = distSq;
+              closestIdx = i;
             }
           }
         }
-        if (targetSt) {
-          const dLat = targetSt.sLat - lat;
-          const dLng = targetSt.sLng - lng;
-          return ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
+
+        if (closestIdx !== -1) {
+          // Always target the upcoming stop S_{k+1} in the forward direction of travel
+          const nextIdx = closestIdx < sIds.length - 1 ? closestIdx + 1 : closestIdx;
+          const prevIdx = nextIdx > 0 ? nextIdx - 1 : 0;
+          const nextSt = stationsByIdRef.current.get(String(sIds[nextIdx])) || stationsByIdRef.current.get(Number(sIds[nextIdx]));
+          const prevSt = stationsByIdRef.current.get(String(sIds[prevIdx])) || stationsByIdRef.current.get(Number(sIds[prevIdx]));
+
+          if (nextSt?.geometry?.coordinates) {
+            const [nLng, nLat] = nextSt.geometry.coordinates;
+            let dLat = nLat - lat;
+            let dLng = nLng - lng;
+            if (dLat * dLat + dLng * dLng < 1e-10 && prevSt?.geometry?.coordinates) {
+              const [pLng, pLat] = prevSt.geometry.coordinates;
+              dLat = nLat - pLat;
+              dLng = nLng - pLng;
+            }
+            if (dLat * dLat + dLng * dLng > 1e-11) {
+              return ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
+            }
+          }
         }
       }
     }
@@ -2915,10 +2939,7 @@ export default function App() {
     }
   }, [selectedVehicle?.id]);
 
-  const stationsByIdRef = useRef(stationsById);
-  useEffect(() => {
-    stationsByIdRef.current = stationsById;
-  }, [stationsById]);
+
 
   const isNearTerminalStopRef = useRef(isNearTerminalStop);
   useEffect(() => {
