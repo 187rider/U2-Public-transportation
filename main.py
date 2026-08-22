@@ -353,10 +353,57 @@ except Exception as e:
 VAPID_CLAIMS = {"sub": "mailto:support@ridertech.online"}
 
 
+DB_REMINDERS_FILE = os.getenv("DB_REMINDERS_FILE", "reminders.db")
+
+
+def init_reminders_db():
+    with sqlite3.connect(DB_REMINDERS_FILE) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS push_reminders (
+                rem_key TEXT PRIMARY KEY,
+                subscription_json TEXT,
+                sid TEXT,
+                station_name TEXT,
+                rid TEXT,
+                rnum TEXT,
+                last_notified_time INTEGER,
+                created_at REAL
+            )
+        """)
+        conn.commit()
+
+
+init_reminders_db()
+
+
 class PushReminderManager:
     def __init__(self):
-        self.reminders: dict[str, dict] = {}
         self._running = False
+
+    def get_all_reminders(self) -> dict[str, dict]:
+        try:
+            with sqlite3.connect(DB_REMINDERS_FILE) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT * FROM push_reminders").fetchall()
+                res = {}
+                for r in rows:
+                    try:
+                        sub = json.loads(r["subscription_json"])
+                    except Exception:
+                        continue
+                    res[r["rem_key"]] = {
+                        "subscription": sub,
+                        "sid": str(r["sid"]),
+                        "stationName": str(r["station_name"]),
+                        "rid": str(r["rid"]),
+                        "rnum": str(r["rnum"]),
+                        "lastNotifiedTime": r["last_notified_time"],
+                        "created_at": float(r["created_at"] or 0)
+                    }
+                return res
+        except Exception as e:
+            logger.error("Failed to read reminders DB: %s", e)
+            return {}
 
     def add_reminder(self, data: dict) -> bool:
         sub = data.get("subscription")
@@ -375,21 +422,45 @@ class PushReminderManager:
             if m:
                 init_num = int(m.group())
 
-        self.reminders[rem_key] = {
-            "subscription": sub,
-            "sid": sid,
-            "stationName": str(data.get("stationName", "Остановка")),
-            "rid": rid,
-            "rnum": str(data.get("rnum", "Транспорт")),
-            "lastNotifiedTime": init_num,
-            "created_at": time.time()
-        }
-        logger.info("Added push reminder: %s for %s (%s) initial: %s", rem_key, data.get("rnum"), data.get("stationName"), init_num)
-        return True
+        try:
+            with sqlite3.connect(DB_REMINDERS_FILE) as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO push_reminders 
+                    (rem_key, subscription_json, sid, station_name, rid, rnum, last_notified_time, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    rem_key,
+                    json.dumps(sub),
+                    sid,
+                    str(data.get("stationName", "Остановка")),
+                    rid,
+                    str(data.get("rnum", "Транспорт")),
+                    init_num,
+                    time.time()
+                ))
+                conn.commit()
+            logger.info("Saved persistent push reminder: %s for %s (%s) initial: %s", rem_key, data.get("rnum"), data.get("stationName"), init_num)
+            return True
+        except Exception as e:
+            logger.error("Failed to save reminder to DB: %s", e)
+            return False
 
     def remove_reminder(self, endpoint: str, sid: str, rid: str):
         rem_key = f"{endpoint}_{sid}_{rid}"
-        self.reminders.pop(rem_key, None)
+        try:
+            with sqlite3.connect(DB_REMINDERS_FILE) as conn:
+                conn.execute("DELETE FROM push_reminders WHERE rem_key = ?", (rem_key,))
+                conn.commit()
+        except Exception as e:
+            logger.error("Failed to remove reminder from DB: %s", e)
+
+    def update_last_notified(self, rem_key: str, last_time: int):
+        try:
+            with sqlite3.connect(DB_REMINDERS_FILE) as conn:
+                conn.execute("UPDATE push_reminders SET last_notified_time = ? WHERE rem_key = ?", (last_time, rem_key))
+                conn.commit()
+        except Exception as e:
+            logger.error("Failed to update reminder in DB: %s", e)
 
     async def send_webpush(self, sub: dict, title: str, body: str, tag: str = "arrival-alarm") -> bool:
         payload = {
@@ -442,11 +513,12 @@ class PushReminderManager:
         while self._running:
             try:
                 await asyncio.sleep(6.0)
-                if not self.reminders:
+                reminders_map = self.get_all_reminders()
+                if not reminders_map:
                     continue
 
                 now = time.time()
-                active_items = list(self.reminders.items())
+                active_items = list(reminders_map.items())
                 sids = set(r["sid"] for _, r in active_items)
 
                 for sid in sids:
@@ -458,9 +530,9 @@ class PushReminderManager:
                             if rem.get("sid") != sid:
                                 continue
 
-                            # Evict reminders older than 2 hours to prevent memory leaks
+                            # Evict reminders older than 2 hours to prevent table growth
                             if now - rem.get("created_at", 0) > 7200:
-                                self.reminders.pop(rem_key, None)
+                                self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
                                 continue
 
                             rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
@@ -477,7 +549,7 @@ class PushReminderManager:
                                         body=f"Остановка «{stname}»",
                                         tag=f"arrival_{rem['sid']}_{rem['rid']}"
                                     )
-                                    self.reminders.pop(rem_key, None)
+                                    self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
                                 continue
 
                             raw_t = matching_fc.get("time")
@@ -492,10 +564,10 @@ class PushReminderManager:
                             if cur_time <= 0:
                                 should_fire = True
                             elif last is None:
-                                rem["lastNotifiedTime"] = cur_time
+                                self.update_last_notified(rem_key, cur_time)
                             elif cur_time > last:
                                 # If bus was delayed by traffic, update baseline
-                                rem["lastNotifiedTime"] = cur_time
+                                self.update_last_notified(rem_key, cur_time)
                             elif last >= 10 and cur_time >= 10:
                                 if cur_time <= last - 5:
                                     should_fire = True
@@ -507,20 +579,20 @@ class PushReminderManager:
                                     should_fire = True
 
                             if should_fire:
-                                rem["lastNotifiedTime"] = cur_time
+                                self.update_last_notified(rem_key, cur_time)
                                 rnum = rem.get("rnum", "")
                                 stname = rem.get("stationName", "")
                                 sub = rem.get("subscription")
 
                                 if cur_time <= 0:
-                                    # Final arrival push & reset from memory
+                                    # Final arrival push & reset from database
                                     await self.send_webpush(
                                         sub=sub,
                                         title=f"🚌 Маршрут {rnum} прибыл!",
                                         body=f"Остановка «{stname}»",
                                         tag=f"arrival_{rem['sid']}_{rem['rid']}"
                                     )
-                                    self.reminders.pop(rem_key, None)
+                                    self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
                                 else:
                                     # Step countdown push
                                     await self.send_webpush(
