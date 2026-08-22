@@ -1568,6 +1568,60 @@ export default function App() {
     return t;
   };
 
+  const getNextStopBearing = (veh, curLat, curLng) => {
+    if (!veh) return null;
+    const lat = curLat != null ? curLat : veh.lat;
+    const lng = curLng != null ? curLng : veh.lng;
+    if (lat == null || lng == null) return null;
+
+    // 1. Check forward waypoints along the road graph
+    if (veh.animPoints && veh.animPoints.length > 0) {
+      for (let i = 0; i < veh.animPoints.length; i++) {
+        const pt = veh.animPoints[i];
+        const dLat = pt.lat - lat;
+        const dLng = pt.lng - lng;
+        if (dLat * dLat + dLng * dLng > 1e-10) {
+          return ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
+        }
+      }
+    }
+
+    // 2. Check next arrival stop position along the route
+    const rids = veh.rid ? String(veh.rid).split(",") : [];
+    for (const rawRid of rids) {
+      const rid = rawRid.trim();
+      const sIds = routeStationsCacheRef.current?.[rid];
+      if (Array.isArray(sIds) && sIds.length > 0 && stationsByIdRef.current) {
+        let bestDist = Infinity;
+        let targetSt = null;
+        for (const sid of sIds) {
+          const st = stationsByIdRef.current.get(String(sid)) || stationsByIdRef.current.get(Number(sid));
+          if (st && st.geometry && st.geometry.coordinates) {
+            const [sLng, sLat] = st.geometry.coordinates;
+            const dLat = sLat - lat;
+            const dLng = sLng - lng;
+            const distSq = dLat * dLat + dLng * dLng;
+            if (distSq > 1e-9 && distSq < bestDist) {
+              bestDist = distSq;
+              targetSt = { sLat, sLng };
+            }
+          }
+        }
+        if (targetSt) {
+          const dLat = targetSt.sLat - lat;
+          const dLng = targetSt.sLng - lng;
+          return ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
+        }
+      }
+    }
+
+    if (veh.dir != null && Number.isFinite(veh.dir) && veh.dir > 0) {
+      return veh.dir;
+    }
+
+    return null;
+  };
+
   const startGlobalAnimation = () => {
     if (globalAnimationId.current) return;
 
@@ -2523,13 +2577,17 @@ export default function App() {
 
               if (!t) {
                 const mPos = marker.getLngLat();
+                const curLat = mPos ? mPos.lat : v.lat;
+                const curLng = mPos ? mPos.lng : v.lng;
+                const predictedHeading = getNextStopBearing(v, curLat, curLng);
+                const initDir = marker._currentRot !== undefined ? marker._currentRot : (predictedHeading != null ? predictedHeading : (validDir || 0));
                 t = {
                   marker,
                   mDiv,
                   tSpan,
-                  currentLat: mPos ? mPos.lat : v.lat,
-                  currentLng: mPos ? mPos.lng : v.lng,
-                  currentDirection: marker._currentRot !== undefined ? marker._currentRot : (validDir || 0),
+                  currentLat: curLat,
+                  currentLng: curLng,
+                  currentDirection: initDir,
                   animationPoints: [],
                   timeRemaining: 0,
                   directionTimeRemaining: 0,
@@ -2609,18 +2667,8 @@ export default function App() {
               wrapper.style.willChange = "transform";
 
               // Compute initial arrow direction targeting the upcoming arrival station / forward road waypoint
-              let initialDirection = rotation;
-              if (v.animPoints && v.animPoints.length > 0) {
-                for (let i = 0; i < v.animPoints.length; i++) {
-                  const pt = v.animPoints[i];
-                  const dLat = pt.lat - v.lat;
-                  const dLng = (pt.lng - v.lng) * Math.cos(v.lat * 0.017453292519943295);
-                  if (dLat * dLat + dLng * dLng > 1e-11) {
-                    initialDirection = ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
-                    break;
-                  }
-                }
-              }
+              const predictedHeading = getNextStopBearing(v, v.lat, v.lng);
+              const initialDirection = predictedHeading != null ? predictedHeading : rotation;
 
               const mapBearing = map.current ? map.current.getBearing() : 0;
               const initialVisualRot = initialDirection - mapBearing;
