@@ -2564,13 +2564,14 @@ export default function App() {
                   t.idle = false;
                   startGlobalAnimation();
                 }
-              } else if (!v.anim_key && v.lat != null && v.lng != null) {
-                // Direct coordinate interpolation only for static vehicles without anim_key
-                const dLat = Math.abs(v.lat - t.currentLat);
-                const dLng = Math.abs(v.lng - t.currentLng);
-                if (dLat > 0.00001 || dLng > 0.00001) {
-                  t.animationPoints = [{ lat: v.lat, lng: v.lng, dir: rotation, percent: 100 }];
-                  t.lastAddedPoint = { lat: v.lat, lng: v.lng, dir: rotation };
+              } else if (v.lat != null && v.lng != null) {
+                // Direct coordinate movement heading calculation when animPoints is absent
+                const dLat = v.lat - t.currentLat;
+                const dLng = v.lng - t.currentLng;
+                if (dLat * dLat + dLng * dLng > 1e-10) {
+                  const moveHeading = ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
+                  t.animationPoints = [{ lat: v.lat, lng: v.lng, dir: moveHeading, percent: 100 }];
+                  t.lastAddedPoint = { lat: v.lat, lng: v.lng, dir: moveHeading };
                   t.idle = false;
                   startGlobalAnimation();
                 }
@@ -2614,6 +2615,15 @@ export default function App() {
                   if (dLat * dLat + dLng * dLng > 1e-11) {
                     initialDirection = ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
                     break;
+                  }
+                }
+              } else if (knownVehiclesRef.current[v.id]) {
+                const prev = knownVehiclesRef.current[v.id];
+                if (prev.lat != null && prev.lng != null) {
+                  const dLat = v.lat - prev.lat;
+                  const dLng = v.lng - prev.lng;
+                  if (dLat * dLat + dLng * dLng > 1e-11) {
+                    initialDirection = ((Math.atan2(dLng, dLat) * 57.29577951308232) % 360 + 360) % 360;
                   }
                 }
               }
