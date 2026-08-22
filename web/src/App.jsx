@@ -267,24 +267,6 @@ class YandexLocationHeadingControl {
         });
       }
     }
-
-    // Live GPS course and movement heading tracking (Real-time 0ms cache)
-    this._geoWatchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        if (!this._map || !pos.coords) return;
-        // Follow movement direction when user is in motion (> 0.4 m/s)
-        if (pos.coords.heading != null && Number.isFinite(pos.coords.heading) && (pos.coords.speed || 0) > 0.4) {
-          const target = ((pos.coords.heading % 360) + 360) % 360;
-          const current = ((this._map.getBearing() % 360) + 360) % 360;
-          let diff = (target - current) % 360;
-          if (diff > 180) diff -= 360;
-          if (diff < -180) diff += 360;
-          this._map.setBearing(((current + diff * 0.4) % 360 + 360) % 360);
-        }
-      },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
-    );
   }
 
   _deactivateHeadingTracking() {
@@ -1645,7 +1627,7 @@ export default function App() {
 
             if (t.directionTimeRemaining > 0) {
               const dirStep = Math.min(dtLeft, t.directionTimeRemaining);
-              t.currentDirection += t.velocityDirection * dirStep;
+              t.currentDirection = ((t.currentDirection + t.velocityDirection * dirStep) % 360 + 360) % 360;
               t.directionTimeRemaining -= dirStep;
             }
 
@@ -1661,18 +1643,18 @@ export default function App() {
             const percent = rawPercent > 0 ? rawPercent : (100 / Math.max(1, queueLen + 1));
             const baseMs = Math.max((10000 * percent) / 100, 50);
             const rMs = Math.max(baseMs / catchUpFactor, 50);
-            const oMs = Math.max(rMs / 6, 40); // Turn completes smoothly
+            const oMs = rMs; // Match rotation duration to movement duration for continuous curvature
 
             t.velocityLat = (a.lat - t.currentLat) / rMs;
             t.velocityLng = (a.lng - t.currentLng) / rMs;
 
             // Radian conversion for heading angle
-            const latRad = t.currentLat * 0.017453292519943295;
-            let targetAngle = Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * 57.29577951308232;
-
+            let targetAngle = (a.dir != null && Number.isFinite(a.dir)) ? a.dir : t.currentDirection;
             const distSq = (a.lat - t.currentLat) ** 2 + (a.lng - t.currentLng) ** 2;
-            if (distSq < 1e-12) {
-              targetAngle = a.dir != null ? a.dir : t.currentDirection;
+            if (distSq > 1e-9) {
+              const latRad = t.currentLat * 0.017453292519943295;
+              const geoAngle = ((Math.atan2((a.lng - t.currentLng) * Math.cos(latRad), a.lat - t.currentLat) * 57.29577951308232) % 360 + 360) % 360;
+              targetAngle = (a.dir != null && Number.isFinite(a.dir)) ? a.dir : geoAngle;
             }
 
             t.velocityDirection = shortestAngleDiff(targetAngle, t.currentDirection) / oMs;
@@ -1713,8 +1695,8 @@ export default function App() {
           t.marker.setLngLat([t.currentLng, t.currentLat]);
 
           // Adjust visual rotation by subtracting map bearing so arrows point strictly in real physical road direction
-          const visualAngle = t.currentDirection - mapBearing;
-          if (t.marker._lastRot === undefined || Math.abs(t.marker._lastRot - visualAngle) > 0.05) {
+          const visualAngle = ((t.currentDirection - mapBearing) % 360 + 360) % 360;
+          if (t.marker._lastRot === undefined || Math.abs(t.marker._lastRot - visualAngle) > 0.01) {
             const rot = visualAngle.toFixed(2);
             if (t.mDiv) {
               t.mDiv.style.transform = `rotate(${rot}deg)`;
@@ -1984,13 +1966,12 @@ export default function App() {
     const geolocateControl = new GeolocateControl({
       positionOptions: {
         enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0
+        timeout: 12000,
+        maximumAge: 5000
       },
       trackUserLocation: true,
       showUserLocation: true,
-      showAccuracyCircle: true,
-      showUserHeading: true
+      showAccuracyCircle: true
     });
 
     geolocateControl.on("error", (err) => {
