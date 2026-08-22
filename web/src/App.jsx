@@ -2602,8 +2602,19 @@ export default function App() {
               wrapper.style.setProperty("z-index", "2000", "important");
               wrapper.style.willChange = "transform";
 
+              // Compute initial arrow direction targeting the upcoming arrival station / road waypoint
+              let initialDirection = rotation;
+              if (v.animPoints && v.animPoints.length > 0) {
+                const p0 = v.animPoints[0];
+                const dSq = (p0.lat - v.lat) ** 2 + (p0.lng - v.lng) ** 2;
+                if (dSq > 1e-10) {
+                  const latRad = v.lat * 0.017453292519943295;
+                  initialDirection = ((Math.atan2((p0.lng - v.lng) * Math.cos(latRad), p0.lat - v.lat) * 57.29577951308232) % 360 + 360) % 360;
+                }
+              }
+
               const mapBearing = map.current ? map.current.getBearing() : 0;
-              const initialVisualRot = rotation - mapBearing;
+              const initialVisualRot = initialDirection - mapBearing;
 
               const markerDiv = document.createElement("div");
               markerDiv.className = `vehicle-marker vehicle-${vType}`;
@@ -2690,7 +2701,7 @@ export default function App() {
                 .addTo(map.current);
 
               marker._lastUpdateTime = Date.now();
-              marker._currentRot = rotation;
+              marker._currentRot = initialDirection;
               marker._lastRot = initialVisualRot;
               marker._anim_key = v.anim_key;
               vehicleMarkersRef.current[v.id] = marker;
@@ -2702,7 +2713,7 @@ export default function App() {
                 tSpan: textSpan,
                 currentLat: v.lat,
                 currentLng: v.lng,
-                currentDirection: rotation,
+                currentDirection: initialDirection,
                 animationPoints: initialPoints,
                 timeRemaining: 0,
                 directionTimeRemaining: 0,
