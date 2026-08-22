@@ -349,20 +349,21 @@ body {
   position: absolute;
   bottom: 24px; /* Safari default: 100dvh handles the resizing automatically */
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateZ(0);
+  will-change: transform, backdrop-filter;
   width: calc(100% - 32px);
   max-width: 440px;
   height: 56px;
-  background: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.85);
   border-radius: 20px;
   display: flex;
   align-items: center;
   justify-content: space-around;
   z-index: 9995;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.05);
 }
 
 @media all and (display-mode: standalone) {
