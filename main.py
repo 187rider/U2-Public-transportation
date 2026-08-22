@@ -532,7 +532,7 @@ class PushReminderManager:
                             return sid_str, fc.get("forecasts", [])
                         except Exception as err:
                             logger.warning("Error fetching forecasts for sid %s: %s", sid_str, err)
-                            return sid_str, []
+                            return sid_str, None
 
                 fetched_results = await asyncio.gather(*[fetch_station(sid) for sid in sids], return_exceptions=True)
                 station_forecasts_map = {}
@@ -550,7 +550,11 @@ class PushReminderManager:
                         self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
                         continue
 
-                    forecasts = station_forecasts_map.get(sid, [])
+                    forecasts = station_forecasts_map.get(sid)
+                    if forecasts is None:
+                        # Upstream fetch failed for this station; retry next cycle without false arrival
+                        continue
+
                     rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
                     matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
 
@@ -629,10 +633,6 @@ class PushReminderManager:
             except Exception as e:
                 logger.error("Error in push reminders loop: %s", e)
                 await asyncio.sleep(5.0)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
                 logger.error("Error in push reminders loop: %s", e)
                 await asyncio.sleep(5.0)
 
