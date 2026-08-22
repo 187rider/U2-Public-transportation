@@ -510,6 +510,9 @@ class PushReminderManager:
 
     async def run_loop(self):
         self._running = True
+        fetch_sem = asyncio.Semaphore(4)    # Bound concurrent upstream station forecast calls to 4
+        push_sem = asyncio.Semaphore(15)    # Bound concurrent push HTTPS sends to 15
+
         while self._running:
             try:
                 await asyncio.sleep(10.0)
@@ -519,89 +522,113 @@ class PushReminderManager:
 
                 now = time.time()
                 active_items = list(reminders_map.items())
-                sids = set(r["sid"] for _, r in active_items)
+                sids = list(set(r["sid"] for _, r in active_items if r.get("sid")))
 
-                for sid in sids:
+                # 1. Bounded parallel forecast fetch for all distinct active stations
+                async def fetch_station(sid_str: str):
+                    async with fetch_sem:
+                        try:
+                            fc = await get_station_forecasts(sid=sid_str)
+                            return sid_str, fc.get("forecasts", [])
+                        except Exception as err:
+                            logger.warning("Error fetching forecasts for sid %s: %s", sid_str, err)
+                            return sid_str, []
+
+                fetched_results = await asyncio.gather(*[fetch_station(sid) for sid in sids], return_exceptions=True)
+                station_forecasts_map = {}
+                for item in fetched_results:
+                    if isinstance(item, tuple) and len(item) == 2:
+                        station_forecasts_map[item[0]] = item[1]
+
+                pending_pushes = []
+
+                # 2. Evaluate all active reminders in memory
+                for rem_key, rem in active_items:
+                    sid = rem.get("sid")
+                    # Evict reminders older than 2 hours to prevent table growth
+                    if now - rem.get("created_at", 0) > 7200:
+                        self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                        continue
+
+                    forecasts = station_forecasts_map.get(sid, [])
+                    rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
+                    matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
+
+                    if not matching_fc:
+                        # If the bus was close (<= 2 min) and now disappeared from forecast list, it has arrived!
+                        if rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 2:
+                            rnum = rem.get("rnum", "")
+                            stname = rem.get("stationName", "")
+                            sub = rem.get("subscription")
+                            pending_pushes.append({
+                                "sub": sub,
+                                "title": f"🚌 Маршрут {rnum} прибыл!",
+                                "body": f"Остановка «{stname}»",
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}"
+                            })
+                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                        continue
+
+                    raw_t = matching_fc.get("time")
                     try:
-                        fc_data = await get_station_forecasts(sid=sid)
-                        forecasts = fc_data.get("forecasts", [])
+                        cur_time = int(raw_t) if raw_t is not None else 0
+                    except (ValueError, TypeError):
+                        cur_time = 0
 
-                        for rem_key, rem in active_items:
-                            if rem.get("sid") != sid:
-                                continue
+                    last = rem.get("lastNotifiedTime")
+                    should_fire = False
 
-                            # Evict reminders older than 2 hours to prevent table growth
-                            if now - rem.get("created_at", 0) > 7200:
-                                self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
-                                continue
+                    if cur_time <= 0:
+                        should_fire = True
+                    elif last is None:
+                        self.update_last_notified(rem_key, cur_time)
+                    elif cur_time > last:
+                        # If bus was delayed by traffic, update baseline
+                        self.update_last_notified(rem_key, cur_time)
+                    elif last > 10 and cur_time <= 10:
+                        should_fire = True
+                    elif last > 10 and cur_time > 10:
+                        if cur_time <= last - 5:
+                            should_fire = True
+                    elif cur_time <= 10:
+                        if cur_time <= last - 1:
+                            should_fire = True
 
-                            rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
-                            matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
-                            if not matching_fc:
-                                # If the bus was close (<= 2 min) and now disappeared from forecast list, it has arrived!
-                                if rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 2:
-                                    rnum = rem.get("rnum", "")
-                                    stname = rem.get("stationName", "")
-                                    sub = rem.get("subscription")
-                                    await self.send_webpush(
-                                        sub=sub,
-                                        title=f"🚌 Маршрут {rnum} прибыл!",
-                                        body=f"Остановка «{stname}»",
-                                        tag=f"arrival_{rem['sid']}_{rem['rid']}"
-                                    )
-                                    self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
-                                continue
+                    if should_fire:
+                        self.update_last_notified(rem_key, cur_time)
+                        rnum = rem.get("rnum", "")
+                        stname = rem.get("stationName", "")
+                        sub = rem.get("subscription")
 
-                            raw_t = matching_fc.get("time")
-                            try:
-                                cur_time = int(raw_t) if raw_t is not None else 0
-                            except (ValueError, TypeError):
-                                cur_time = 0
+                        if cur_time <= 0:
+                            pending_pushes.append({
+                                "sub": sub,
+                                "title": f"🚌 Маршрут {rnum} прибыл!",
+                                "body": f"Остановка «{stname}»",
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}"
+                            })
+                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                        else:
+                            pending_pushes.append({
+                                "sub": sub,
+                                "title": f"🚌 Маршрут {rnum} — {cur_time} мин",
+                                "body": f"Остановка «{stname}» (прибытие через ~{cur_time} мин)",
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}"
+                            })
 
-                            last = rem.get("lastNotifiedTime")
-                            should_fire = False
+                # 3. Bounded parallel WebPush dispatch
+                if pending_pushes:
+                    async def _send_bounded(args):
+                        async with push_sem:
+                            await self.send_webpush(**args)
 
-                            if cur_time <= 0:
-                                should_fire = True
-                            elif last is None:
-                                self.update_last_notified(rem_key, cur_time)
-                            elif cur_time > last:
-                                # If bus was delayed by traffic, update baseline
-                                self.update_last_notified(rem_key, cur_time)
-                            elif last > 10 and cur_time <= 10:
-                                should_fire = True
-                            elif last > 10 and cur_time > 10:
-                                if cur_time <= last - 5:
-                                    should_fire = True
-                            elif cur_time <= 10:
-                                if cur_time <= last - 1:
-                                    should_fire = True
+                    await asyncio.gather(*[_send_bounded(p) for p in pending_pushes], return_exceptions=True)
 
-                            if should_fire:
-                                self.update_last_notified(rem_key, cur_time)
-                                rnum = rem.get("rnum", "")
-                                stname = rem.get("stationName", "")
-                                sub = rem.get("subscription")
-
-                                if cur_time <= 0:
-                                    # Final arrival push & reset from database
-                                    await self.send_webpush(
-                                        sub=sub,
-                                        title=f"🚌 Маршрут {rnum} прибыл!",
-                                        body=f"Остановка «{stname}»",
-                                        tag=f"arrival_{rem['sid']}_{rem['rid']}"
-                                    )
-                                    self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
-                                else:
-                                    # Step countdown push
-                                    await self.send_webpush(
-                                        sub=sub,
-                                        title=f"🚌 Маршрут {rnum} — {cur_time} мин",
-                                        body=f"Остановка «{stname}» (прибытие через ~{cur_time} мин)",
-                                        tag=f"arrival_{rem['sid']}_{rem['rid']}"
-                                    )
-                    except Exception as sid_err:
-                        logger.warning("Error processing station reminders for sid %s: %s", sid, sid_err)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Error in push reminders loop: %s", e)
+                await asyncio.sleep(5.0)
 
             except asyncio.CancelledError:
                 break
