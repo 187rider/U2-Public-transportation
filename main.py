@@ -32,7 +32,7 @@ async_client = httpx.AsyncClient(
 )
 
 CACHE = {}
-CACHE_TTL_FORECASTS = 5.0
+CACHE_TTL_FORECASTS = 10.0
 CACHE_TTL_STATIC = 6200.0
 
 
@@ -522,7 +522,7 @@ class PushReminderManager:
 
         while self._running:
             try:
-                await asyncio.sleep(5.0)
+                await asyncio.sleep(10.0)
                 reminders_map = self.get_all_reminders()
                 if not reminders_map:
                     continue
