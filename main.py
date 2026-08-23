@@ -113,7 +113,7 @@ async def verify_signature(request: Request):
         raise HTTPException(status_code=403, detail="Invalid timestamp format")
     
     current_ts = int(time.time())
-    if abs(current_ts - ts) > 180:
+    if abs(current_ts - ts) > 60:
         raise HTTPException(status_code=403, detail="Timestamp expired or invalid")
         
     expected = hashlib.sha256(f"{ts}{API_SECRET}".encode('utf-8')).hexdigest()
@@ -353,65 +353,10 @@ except Exception as e:
 VAPID_CLAIMS = {"sub": "mailto:support@ridertech.online"}
 
 
-DB_REMINDERS_FILE = os.getenv("DB_REMINDERS_FILE", "reminders.db")
-
-
-def init_reminders_db():
-    with sqlite3.connect(DB_REMINDERS_FILE) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS push_reminders (
-                rem_key TEXT PRIMARY KEY,
-                subscription_json TEXT,
-                sid TEXT,
-                station_name TEXT,
-                rid TEXT,
-                rnum TEXT,
-                last_notified_time INTEGER,
-                created_at REAL
-            )
-        """)
-        conn.commit()
-
-
-init_reminders_db()
-
-
 class PushReminderManager:
     def __init__(self):
+        self.reminders: dict[str, dict] = {}
         self._running = False
-        # Clear all persisted reminders on startup — reminders must be re-set by the client
-        try:
-            with sqlite3.connect(DB_REMINDERS_FILE) as conn:
-                conn.execute("DELETE FROM push_reminders")
-                conn.commit()
-            logger.info("Cleared all push reminders on startup")
-        except Exception as e:
-            logger.warning("Could not clear reminders DB on startup: %s", e)
-
-    def get_all_reminders(self) -> dict[str, dict]:
-        try:
-            with sqlite3.connect(DB_REMINDERS_FILE) as conn:
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute("SELECT * FROM push_reminders").fetchall()
-                res = {}
-                for r in rows:
-                    try:
-                        sub = json.loads(r["subscription_json"])
-                    except Exception:
-                        continue
-                    res[r["rem_key"]] = {
-                        "subscription": sub,
-                        "sid": str(r["sid"]),
-                        "stationName": str(r["station_name"]),
-                        "rid": str(r["rid"]),
-                        "rnum": str(r["rnum"]),
-                        "lastNotifiedTime": r["last_notified_time"],
-                        "created_at": float(r["created_at"] or 0)
-                    }
-                return res
-        except Exception as e:
-            logger.error("Failed to read reminders DB: %s", e)
-            return {}
 
     def add_reminder(self, data: dict) -> bool:
         sub = data.get("subscription")
@@ -430,45 +375,21 @@ class PushReminderManager:
             if m:
                 init_num = int(m.group())
 
-        try:
-            with sqlite3.connect(DB_REMINDERS_FILE) as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO push_reminders 
-                    (rem_key, subscription_json, sid, station_name, rid, rnum, last_notified_time, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    rem_key,
-                    json.dumps(sub),
-                    sid,
-                    str(data.get("stationName", "Остановка")),
-                    rid,
-                    str(data.get("rnum", "Транспорт")),
-                    init_num,
-                    time.time()
-                ))
-                conn.commit()
-            logger.info("Saved persistent push reminder: %s for %s (%s) initial: %s", rem_key, data.get("rnum"), data.get("stationName"), init_num)
-            return True
-        except Exception as e:
-            logger.error("Failed to save reminder to DB: %s", e)
-            return False
+        self.reminders[rem_key] = {
+            "subscription": sub,
+            "sid": sid,
+            "stationName": str(data.get("stationName", "Остановка")),
+            "rid": rid,
+            "rnum": str(data.get("rnum", "Транспорт")),
+            "lastNotifiedTime": init_num,
+            "created_at": time.time()
+        }
+        logger.info("Added push reminder: %s for %s (%s) initial: %s", rem_key, data.get("rnum"), data.get("stationName"), init_num)
+        return True
 
     def remove_reminder(self, endpoint: str, sid: str, rid: str):
         rem_key = f"{endpoint}_{sid}_{rid}"
-        try:
-            with sqlite3.connect(DB_REMINDERS_FILE) as conn:
-                conn.execute("DELETE FROM push_reminders WHERE rem_key = ?", (rem_key,))
-                conn.commit()
-        except Exception as e:
-            logger.error("Failed to remove reminder from DB: %s", e)
-
-    def update_last_notified(self, rem_key: str, last_time: int):
-        try:
-            with sqlite3.connect(DB_REMINDERS_FILE) as conn:
-                conn.execute("UPDATE push_reminders SET last_notified_time = ? WHERE rem_key = ?", (last_time, rem_key))
-                conn.commit()
-        except Exception as e:
-            logger.error("Failed to update reminder in DB: %s", e)
+        self.reminders.pop(rem_key, None)
 
     async def send_webpush(self, sub: dict, title: str, body: str, tag: str = "arrival-alarm") -> bool:
         payload = {
@@ -491,8 +412,6 @@ class PushReminderManager:
                 "aud": aud
             }
 
-            # DO NOT use apns-collapse-id — it silently replaces the stored notification
-            # WITHOUT waking the screen. Each push must be independent to trigger a banner.
             push_headers = {
                 "Urgency": "high",
                 "urgency": "high",
@@ -501,7 +420,7 @@ class PushReminderManager:
             }
 
             loop = asyncio.get_running_loop()
-            resp = await loop.run_in_executor(
+            await loop.run_in_executor(
                 None,
                 lambda: webpush(
                     subscription_info=sub,
@@ -512,11 +431,8 @@ class PushReminderManager:
                     ttl=120
                 )
             )
-            status = getattr(resp, "status_code", 201)
-            logger.info("Sent background WebPush (HTTP %s): %s - %s to %s", status, title, body, aud)
-            if status == 410:
-                logger.warning("APNs subscription expired (410) — endpoint: %s", endpoint[:60])
-            return status < 300
+            logger.info("Sent background WebPush: %s - %s to %s", title, body, aud)
+            return True
         except Exception as e:
             logger.warning("WebPush send error (%s): %s", type(e).__name__, e)
             return False
@@ -526,12 +442,11 @@ class PushReminderManager:
         while self._running:
             try:
                 await asyncio.sleep(6.0)
-                reminders_map = self.get_all_reminders()
-                if not reminders_map:
+                if not self.reminders:
                     continue
 
                 now = time.time()
-                active_items = list(reminders_map.items())
+                active_items = list(self.reminders.items())
                 sids = set(r["sid"] for _, r in active_items)
 
                 for sid in sids:
@@ -543,9 +458,9 @@ class PushReminderManager:
                             if rem.get("sid") != sid:
                                 continue
 
-                            # Evict reminders older than 2 hours to prevent table growth
+                            # Evict reminders older than 2 hours to prevent memory leaks
                             if now - rem.get("created_at", 0) > 7200:
-                                self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                                self.reminders.pop(rem_key, None)
                                 continue
 
                             rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
@@ -562,7 +477,7 @@ class PushReminderManager:
                                         body=f"Остановка «{stname}»",
                                         tag=f"arrival_{rem['sid']}_{rem['rid']}"
                                     )
-                                    self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                                    self.reminders.pop(rem_key, None)
                                 continue
 
                             raw_t = matching_fc.get("time")
@@ -574,41 +489,38 @@ class PushReminderManager:
                             last = rem.get("lastNotifiedTime")
                             should_fire = False
 
-                            # Milestone-based firing: iOS budget allows ~3-4 pushes per session.
-                            # Only fire at specific thresholds to avoid budget exhaustion.
-                            # Milestones: initial, 10 min, 5 min, 2 min, 1 min, arrival
-                            MILESTONES = [10, 5, 2, 1]
-
                             if cur_time <= 0:
                                 should_fire = True
                             elif last is None:
-                                # Initial push — always fire once
-                                should_fire = True
+                                rem["lastNotifiedTime"] = cur_time
                             elif cur_time > last:
-                                # Bus delayed by traffic — update baseline silently
-                                self.update_last_notified(rem_key, cur_time)
-                            else:
-                                # Fire only when crossing a milestone
-                                for milestone in MILESTONES:
-                                    if last > milestone >= cur_time:
-                                        should_fire = True
-                                        break
+                                # If bus was delayed by traffic, update baseline
+                                rem["lastNotifiedTime"] = cur_time
+                            elif last >= 10 and cur_time >= 10:
+                                if cur_time <= last - 5:
+                                    should_fire = True
+                            elif last >= 10 and cur_time < 10:
+                                if cur_time <= last - 5 or cur_time <= 9:
+                                    should_fire = True
+                            elif cur_time < 10:
+                                if cur_time <= last - 1:
+                                    should_fire = True
 
                             if should_fire:
-                                self.update_last_notified(rem_key, cur_time)
+                                rem["lastNotifiedTime"] = cur_time
                                 rnum = rem.get("rnum", "")
                                 stname = rem.get("stationName", "")
                                 sub = rem.get("subscription")
 
                                 if cur_time <= 0:
-                                    # Final arrival push & reset from database
+                                    # Final arrival push & reset from memory
                                     await self.send_webpush(
                                         sub=sub,
                                         title=f"🚌 Маршрут {rnum} прибыл!",
                                         body=f"Остановка «{stname}»",
                                         tag=f"arrival_{rem['sid']}_{rem['rid']}"
                                     )
-                                    self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                                    self.reminders.pop(rem_key, None)
                                 else:
                                     # Step countdown push
                                     await self.send_webpush(
