@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v15';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v16';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -184,6 +184,22 @@ self.addEventListener('push', (event) => {
     }
   }
 
+  const isIOS = /iPad|iPhone|iPod/.test(self.navigator.userAgent) ||
+    (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
+
+  if (isIOS) {
+    // iOS WebKit: direct synchronous event.waitUntil with pure { body, data } options
+    event.waitUntil(
+      self.registration.showNotification(title, {
+        body: body,
+        data: { url: url }
+      }).catch((err) => {
+        console.error('iOS WebKit showNotification error:', err);
+      })
+    );
+    return;
+  }
+
   const baseOptions = {
     body: body,
     tag: tag,
@@ -191,23 +207,7 @@ self.addEventListener('push', (event) => {
     data: { url: url }
   };
 
-  async function handlePush() {
-    const isIOS = /iPad|iPhone|iPod/.test(self.navigator.userAgent) ||
-      (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
-
-    if (isIOS) {
-      // iOS WebKit (PWA): strictly standard { body, data } options so WebKit never throws
-      try {
-        await self.registration.showNotification(title, {
-          body: body,
-          data: { url: url }
-        });
-      } catch (err) {
-        console.error('iOS WebKit showNotification error:', err);
-      }
-      return;
-    }
-
+  async function handleAndroidPush() {
     // Android / Chrome: Clean up previous route cards and use rich options
     try {
       if (sid && rid && typeof self.registration.getNotifications === 'function') {
@@ -240,7 +240,7 @@ self.addEventListener('push', (event) => {
     }
   }
 
-  event.waitUntil(handlePush());
+  event.waitUntil(handleAndroidPush());
 });
 
 self.addEventListener('notificationclick', (event) => {

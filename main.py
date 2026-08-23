@@ -487,15 +487,17 @@ class PushReminderManager:
             is_apple = "apple.com" in endpoint.lower()
             clean_collapse = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
 
-            push_headers = {
-                "Urgency": "high"
-            }
             if is_apple:
-                push_headers["apns-push-type"] = "alert"
-                push_headers["apns-priority"] = "10"
+                push_headers = {
+                    "apns-push-type": "alert",
+                    "apns-priority": "10"
+                }
                 if clean_collapse:
                     push_headers["apns-collapse-id"] = clean_collapse
             else:
+                push_headers = {
+                    "Urgency": "high"
+                }
                 if clean_collapse:
                     push_headers["Topic"] = clean_collapse
 
