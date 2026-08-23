@@ -483,14 +483,16 @@ class PushReminderManager:
                 "aud": aud
             }
 
-            # Standard WebPush Urgency header — web.push.apple.com translates this
-            # to apns-priority:10 internally. Do NOT add raw apns-* headers;
-            # Apple's gateway ignores them and may mis-classify the push as background.
+            # apns-collapse-id causes iOS to REPLACE the previous notification and
+            # show a fresh alert banner each time — critical for countdown delivery.
+            # Without it, iOS silently groups multiple unread pushes and the screen never wakes.
+            clean_collapse = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:64]
             push_headers = {
                 "Urgency": "high",
                 "urgency": "high",
                 "apns-push-type": "alert",
-                "apns-priority": "10"
+                "apns-priority": "10",
+                "apns-collapse-id": clean_collapse
             }
 
             loop = asyncio.get_running_loop()
