@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v13';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v14';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -195,9 +195,12 @@ self.addEventListener('push', (event) => {
     const isWebKit = typeof self.registration.getNotifications !== 'function';
 
     if (isWebKit) {
-      // iOS WebKit / Safari PWA: strictly safe standard options
+      // iOS WebKit: use pure { body, data } options so WebKit never throws
       try {
-        await self.registration.showNotification(title, baseOptions);
+        await self.registration.showNotification(title, {
+          body: body,
+          data: { url: url }
+        });
       } catch (err) {
         console.error('iOS WebKit showNotification error:', err);
       }
