@@ -578,7 +578,7 @@ class PushReminderManager:
                                 "sub": sub,
                                 "title": f"🚌 Маршрут {rnum} прибыл!",
                                 "body": f"Остановка «{stname}»",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}_arr",
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],
                                 "rid": rem["rid"]
                             })
@@ -601,12 +601,13 @@ class PushReminderManager:
                     elif cur_time > last:
                         # If bus was delayed by traffic, update baseline
                         self.update_last_notified(rem_key, cur_time)
-                    elif last > 10 and cur_time <= 10:
-                        should_fire = True
-                    elif last > 10 and cur_time > 10:
+                    elif last >= 10 and cur_time >= 10:
                         if cur_time <= last - 5:
                             should_fire = True
-                    elif cur_time <= 10:
+                    elif last >= 10 and cur_time < 10:
+                        if cur_time <= last - 5 or cur_time <= 9:
+                            should_fire = True
+                    elif cur_time < 10:
                         if cur_time <= last - 1:
                             should_fire = True
 
@@ -621,7 +622,7 @@ class PushReminderManager:
                                 "sub": sub,
                                 "title": f"🚌 Маршрут {rnum} прибыл!",
                                 "body": f"Остановка «{stname}»",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}_arr",
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],
                                 "rid": rem["rid"]
                             })
@@ -631,7 +632,7 @@ class PushReminderManager:
                                 "sub": sub,
                                 "title": f"🚌 Маршрут {rnum} — {cur_time} мин",
                                 "body": f"Остановка «{stname}» (прибытие через ~{cur_time} мин)",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}_{cur_time}m",
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],
                                 "rid": rem["rid"]
                             })
