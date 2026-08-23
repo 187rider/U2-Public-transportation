@@ -1494,6 +1494,71 @@ body {
   }
 }
 
+/* Reminder Dropdown Toggle Bar */
+.reminder-drop-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 0 0 14px 14px;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-top: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #b45309;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 0.15s;
+  margin-top: -2px;
+}
+
+.reminder-drop-toggle:active {
+  background: rgba(254, 243, 199, 0.9);
+}
+
+/* Dropdown Panel for extra reminders */
+.reminder-drop-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 0 0 14px 14px;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-top: none;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+  margin-top: -2px;
+  animation: dropSlideIn 0.2s ease-out;
+}
+
+@keyframes dropSlideIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Compact single-row reminder item */
+.reminder-drop-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(254, 243, 199, 0.35);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.reminder-drop-item:active {
+  background: rgba(254, 243, 199, 0.7);
+}
+
 /* History Drawer Tab Styles */
 .history-tab-content {
   display: flex;

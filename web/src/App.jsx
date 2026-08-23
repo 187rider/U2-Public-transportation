@@ -877,6 +877,7 @@ export default function App() {
     }
   })();
   const [isFollowingVehicle, setIsFollowingVehicle] = useState(initialIsFollowing);
+  const [reminderDropOpen, setReminderDropOpen] = useState(false);
   const isFollowingVehicleRef = useRef(initialIsFollowing);
   const prevSelectedVehicleIdRef = useRef(selectedVehicle ? selectedVehicle.id : null);
   const isInitialFlyingRef = useRef(false);
@@ -4006,116 +4007,167 @@ export default function App() {
           </div>
         )}
 
-        {/* Active Arrival Reminder Topbar HUD (up to 3, when no manual vehicle tracking is selected) */}
+        {/* Active Arrival Reminder Topbar HUD (max 3, dropdown for 2+) */}
         {!selectedVehicle && (() => {
           const activeRems = reminders.filter(r => !r.triggered).slice(0, 3);
           if (activeRems.length === 0) return null;
 
-          return (
-            <div className="reminder-topbar-stack" style={{ position: "fixed", top: "max(calc(env(safe-area-inset-top, 0px) + 8px), 48px)", left: "50%", transform: "translateX(-50%)", zIndex: 9998, display: "flex", flexDirection: "column", gap: "6px", width: "calc(100% - 24px)", maxWidth: "420px", pointerEvents: "auto" }}>
-              {activeRems.map((activeRem, idx) => {
-                const remPlate = formatGosNum(activeRem.gosNum).toLowerCase();
-                const remRoute = String(activeRem.rnum || '').trim().toLowerCase();
+          const renderReminderCard = (activeRem, isCompact = false) => {
+            const remPlate = formatGosNum(activeRem.gosNum).toLowerCase();
+            const remRoute = String(activeRem.rnum || '').trim().toLowerCase();
+            const liveVeh = (activeRem.vehid && knownVehiclesRef.current[activeRem.vehid]) ||
+              Object.values(knownVehiclesRef.current).find(v => {
+                const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+                if (remRoute && vRoute && remRoute !== vRoute) return false;
+                if (remPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === remPlate) return true;
+                if (activeRem.vehid && v.id && String(v.id) === String(activeRem.vehid)) return true;
+                if (activeRem.rid && v.rid && String(activeRem.rid) === String(v.rid)) return true;
+                return false;
+              });
+            const currentVehType = normalizeVehicleType(liveVeh?.type, activeRem.rnum);
+            const currentVehIcon = currentVehType === 'tram' ? 'tram' : (currentVehType === 'minibus' ? 'airport_shuttle' : 'directions_bus');
+            const displayPlate = activeRem.gosNum || liveVeh?.gosNum || "";
+            const remTime = activeRem.lastTime != null ? String(activeRem.lastTime) : "";
 
-                const liveVeh = (activeRem.vehid && knownVehiclesRef.current[activeRem.vehid]) ||
-                  Object.values(knownVehiclesRef.current).find(v => {
-                    const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
-                    if (remRoute && vRoute && remRoute !== vRoute) return false;
-                    if (remPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === remPlate) return true;
-                    if (activeRem.vehid && v.id && String(v.id) === String(activeRem.vehid)) return true;
-                    if (activeRem.rid && v.rid && String(activeRem.rid) === String(v.rid)) return true;
-                    return false;
-                  });
-
-                const currentVehType = normalizeVehicleType(liveVeh?.type, activeRem.rnum);
-                const currentVehIcon = currentVehType === 'tram' ? 'tram' : (currentVehType === 'minibus' ? 'airport_shuttle' : 'directions_bus');
-                const displayPlate = activeRem.gosNum || liveVeh?.gosNum || "";
-                const remTime = activeRem.lastTime != null ? String(activeRem.lastTime) : "";
-
-                return (
-                  <div
-                    key={activeRem.id}
-                    className={`selected-vehicle-hud reminder-topbar-hud ${activeTab !== 0 ? 'compact' : ''}`}
-                    style={{ position: "relative", top: "auto", left: "auto", transform: "none", width: "100%" }}
-                    onClick={() => {
-                      if (liveVeh) {
-                        const targetRouteId = activeRem.rid || liveVeh.rid;
-                        if (targetRouteId) {
-                          setSelectedRoutes(prev => new Set(prev).add(targetRouteId));
-                        }
-                        closeAllStationPopups();
-                        setIsFollowingVehicle(true);
-                        isFollowingVehicleRef.current = true;
-                        setSelectedVehicle({
-                          rid: activeRem.rid || liveVeh.rid,
-                          id: liveVeh.id,
-                          gosNum: liveVeh.gosNum || activeRem.gosNum,
-                          route: activeRem.rnum || liveVeh.route,
-                          type: currentVehType,
-                          lat: liveVeh.lat,
-                          lng: liveVeh.lng
-                        });
-                        setActiveTab(0);
-                      }
-                    }}
-                  >
-                    <div className="hud-top-row">
-                      <div className="hud-vehicle-info">
-                        <div className={`hud-badge hud-badge-${currentVehType}`}>
-                          <span className="material-symbols-outlined" style={{ fontSize: "15px" }}>
-                            {currentVehIcon}
-                          </span>
-                          <span className="hud-route-num">{activeRem.rnum || 'Маршрут'}</span>
-                        </div>
-                        {displayPlate && (
-                          <span className="hud-gos-num">{formatGosNum(displayPlate)}</span>
-                        )}
-                      </div>
-
-                      <div className="hud-actions" onClick={e => e.stopPropagation()}>
-                        <button
-                          className="hud-notify-status-btn"
-                          onClick={() => cancelArrivalReminder(activeRem.id, activeRem.rnum)}
-                          title="Отключить напоминание"
-                        >
-                          <span className="material-symbols-outlined hud-btn-icon" style={{ fontSize: "15px", animation: "pulse-bell 1.5s infinite ease-in-out" }}>
-                            notifications_active
-                          </span>
-                          <span>Напоминание</span>
-                        </button>
-
-                        <button
-                          className="hud-close-btn"
-                          onClick={() => cancelArrivalReminder(activeRem.id, activeRem.rnum)}
-                          title="Отключить напоминание"
-                          aria-label="Отключить напоминание"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="hud-next-station-row">
-                      <span className="material-symbols-outlined hud-next-icon" style={{ color: "#d97706" }}>
-                        place
-                      </span>
-                      <span className="hud-next-label">
-                        Остановка:
-                      </span>
-                      <div className="hud-next-name-wrapper" title={activeRem.stationName}>
-                        <span className={`hud-next-name ${activeRem.stationName && activeRem.stationName.length > 14 ? 'running-text' : ''}`}>
-                          {activeRem.stationName}
-                        </span>
-                      </div>
-                      {remTime !== "" && (
-                        <span className={`hud-next-time ${parseInt(remTime, 10) <= 0 ? 'arriving' : ''}`} style={{ background: "#fef3c7", color: "#b45309", borderColor: "#fde68a" }}>
-                          {parseInt(remTime, 10) <= 0 ? 'прибывает' : `~${remTime} мин`}
-                        </span>
-                      )}
-                    </div>
+            if (isCompact) {
+              // Compact single-row card for dropdown items
+              return (
+                <div
+                  key={activeRem.id}
+                  className="reminder-drop-item"
+                  onClick={() => {
+                    if (liveVeh) {
+                      const targetRouteId = activeRem.rid || liveVeh.rid;
+                      if (targetRouteId) setSelectedRoutes(prev => new Set(prev).add(targetRouteId));
+                      closeAllStationPopups();
+                      setIsFollowingVehicle(true);
+                      isFollowingVehicleRef.current = true;
+                      setSelectedVehicle({
+                        rid: activeRem.rid || liveVeh.rid, id: liveVeh.id,
+                        gosNum: liveVeh.gosNum || activeRem.gosNum,
+                        route: activeRem.rnum || liveVeh.route, type: currentVehType,
+                        lat: liveVeh.lat, lng: liveVeh.lng
+                      });
+                      setActiveTab(0);
+                      setReminderDropOpen(false);
+                    }
+                  }}
+                >
+                  <div className={`hud-badge hud-badge-${currentVehType}`} style={{ padding: "2px 8px", fontSize: "12px" }}>
+                    <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>{currentVehIcon}</span>
+                    <span className="hud-route-num">{activeRem.rnum || '?'}</span>
                   </div>
-                );
-              })}
+                  {displayPlate && <span className="hud-gos-num" style={{ fontSize: "11px" }}>{formatGosNum(displayPlate)}</span>}
+                  <span style={{ color: "#64748b", fontSize: "11px", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    → {activeRem.stationName || ''}
+                  </span>
+                  {remTime !== "" && (
+                    <span style={{ fontSize: "11px", fontWeight: 600, color: parseInt(remTime, 10) <= 0 ? "#dc2626" : "#b45309", whiteSpace: "nowrap" }}>
+                      {parseInt(remTime, 10) <= 0 ? 'прибывает' : `~${remTime} мин`}
+                    </span>
+                  )}
+                  <button
+                    className="hud-close-btn"
+                    style={{ padding: "2px", fontSize: "12px", width: "20px", height: "20px", minWidth: "20px" }}
+                    onClick={e => { e.stopPropagation(); cancelArrivalReminder(activeRem.id, activeRem.rnum); }}
+                    title="Отключить"
+                  >✕</button>
+                </div>
+              );
+            }
+
+            // Full card for the primary (first) reminder
+            return (
+              <div
+                key={activeRem.id}
+                className={`selected-vehicle-hud reminder-topbar-hud ${activeTab !== 0 ? 'compact' : ''}`}
+                style={{ position: "relative", top: "auto", left: "auto", transform: "none", width: "100%" }}
+                onClick={() => {
+                  if (liveVeh) {
+                    const targetRouteId = activeRem.rid || liveVeh.rid;
+                    if (targetRouteId) setSelectedRoutes(prev => new Set(prev).add(targetRouteId));
+                    closeAllStationPopups();
+                    setIsFollowingVehicle(true);
+                    isFollowingVehicleRef.current = true;
+                    setSelectedVehicle({
+                      rid: activeRem.rid || liveVeh.rid, id: liveVeh.id,
+                      gosNum: liveVeh.gosNum || activeRem.gosNum,
+                      route: activeRem.rnum || liveVeh.route, type: currentVehType,
+                      lat: liveVeh.lat, lng: liveVeh.lng
+                    });
+                    setActiveTab(0);
+                  }
+                }}
+              >
+                <div className="hud-top-row">
+                  <div className="hud-vehicle-info">
+                    <div className={`hud-badge hud-badge-${currentVehType}`}>
+                      <span className="material-symbols-outlined" style={{ fontSize: "15px" }}>{currentVehIcon}</span>
+                      <span className="hud-route-num">{activeRem.rnum || 'Маршрут'}</span>
+                    </div>
+                    {displayPlate && <span className="hud-gos-num">{formatGosNum(displayPlate)}</span>}
+                  </div>
+                  <div className="hud-actions" onClick={e => e.stopPropagation()}>
+                    <button className="hud-notify-status-btn" onClick={() => cancelArrivalReminder(activeRem.id, activeRem.rnum)} title="Отключить напоминание">
+                      <span className="material-symbols-outlined hud-btn-icon" style={{ fontSize: "15px", animation: "pulse-bell 1.5s infinite ease-in-out" }}>notifications_active</span>
+                      <span>Напоминание</span>
+                    </button>
+                    <button className="hud-close-btn" onClick={() => cancelArrivalReminder(activeRem.id, activeRem.rnum)} title="Отключить" aria-label="Отключить">✕</button>
+                  </div>
+                </div>
+                <div className="hud-next-station-row">
+                  <span className="material-symbols-outlined hud-next-icon" style={{ color: "#d97706" }}>place</span>
+                  <span className="hud-next-label">Остановка:</span>
+                  <div className="hud-next-name-wrapper" title={activeRem.stationName}>
+                    <span className={`hud-next-name ${activeRem.stationName && activeRem.stationName.length > 14 ? 'running-text' : ''}`}>
+                      {activeRem.stationName}
+                    </span>
+                  </div>
+                  {remTime !== "" && (
+                    <span className={`hud-next-time ${parseInt(remTime, 10) <= 0 ? 'arriving' : ''}`} style={{ background: "#fef3c7", color: "#b45309", borderColor: "#fde68a" }}>
+                      {parseInt(remTime, 10) <= 0 ? 'прибывает' : `~${remTime} мин`}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          };
+
+          const extraRems = activeRems.slice(1);
+
+          return (
+            <div className="reminder-topbar-stack" style={{ position: "fixed", top: "max(calc(env(safe-area-inset-top, 0px) + 8px), 48px)", left: "50%", transform: "translateX(-50%)", zIndex: 9998, display: "flex", flexDirection: "column", gap: "0px", width: "calc(100% - 24px)", maxWidth: "420px", pointerEvents: "auto" }}>
+              {/* Always show primary reminder */}
+              {renderReminderCard(activeRems[0], false)}
+
+              {/* "+N ещё" toggle row when 2+ reminders */}
+              {extraRems.length > 0 && (
+                <div
+                  className="reminder-drop-toggle"
+                  onClick={e => { e.stopPropagation(); setReminderDropOpen(prev => !prev); }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: "16px", transition: "transform 0.2s", transform: reminderDropOpen ? "rotate(180deg)" : "rotate(0deg)" }}>
+                    expand_more
+                  </span>
+                  <span>ещё {extraRems.length}</span>
+                  {/* Mini route badges preview */}
+                  {!reminderDropOpen && extraRems.map(r => {
+                    const vt = normalizeVehicleType(null, r.rnum);
+                    return (
+                      <div key={r.id} className={`hud-badge hud-badge-${vt}`} style={{ padding: "1px 6px", fontSize: "11px", marginLeft: "4px" }}>
+                        <span className="hud-route-num" style={{ fontSize: "11px" }}>{r.rnum || '?'}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Dropdown panel with compact cards */}
+              {extraRems.length > 0 && reminderDropOpen && (
+                <div className="reminder-drop-panel">
+                  {extraRems.map(r => renderReminderCard(r, true))}
+                </div>
+              )}
             </div>
           );
         })()}
