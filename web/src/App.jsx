@@ -675,7 +675,7 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
                 <div style="background-color: #f1f5f9; border-radius: 6px; display: flex; align-items: center; justify-content: center; height: 28px; width: 58px; font-size: 12px; font-weight: 600; color: #0f172a;">${escapeHtml(f.time)} мин.</div>
               </div>
               <div class="dest-wrapper" style="margin-left: 8px; flex-grow: 1; overflow: hidden; white-space: nowrap; position: relative; text-overflow: ellipsis;">
-                <div class="dest-text" style="display: inline-block; font-size: 13px; color: #0f172a;">${escapeHtml(dest)}${f.gosNum ? ` <span style="font-size: 11px; color: #64748b; font-weight: 500;">(${escapeHtml(f.gosNum)})</span>` : ''}</div>
+                <div class="dest-text" style="display: inline-block; font-size: 13px; color: #0f172a;">${escapeHtml(dest)}</div>
               </div>
               <button class="forecast-alarm-btn ${isRemActive ? 'active' : ''}" data-sid="${safeId}" data-stname="${safeName}" data-rid="${f.rid}" data-rnum="${escapeHtml(rnum)}" data-time="${escapeHtml(f.time)}" data-vehid="${f.vehid || ''}" data-gosnum="${escapeHtml(f.gosNum || '')}" title="${isRemActive ? 'Отключить напоминание' : 'Напомнить за 1 мин до прибытия'}">
                 <span class="material-symbols-outlined" style="font-size: 18px;">${isRemActive ? 'notifications_active' : 'notifications'}</span>
