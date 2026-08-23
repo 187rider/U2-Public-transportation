@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v14';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v15';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -192,10 +192,11 @@ self.addEventListener('push', (event) => {
   };
 
   async function handlePush() {
-    const isWebKit = typeof self.registration.getNotifications !== 'function';
+    const isIOS = /iPad|iPhone|iPod/.test(self.navigator.userAgent) ||
+      (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
 
-    if (isWebKit) {
-      // iOS WebKit: use pure { body, data } options so WebKit never throws
+    if (isIOS) {
+      // iOS WebKit (PWA): strictly standard { body, data } options so WebKit never throws
       try {
         await self.registration.showNotification(title, {
           body: body,
@@ -209,7 +210,7 @@ self.addEventListener('push', (event) => {
 
     // Android / Chrome: Clean up previous route cards and use rich options
     try {
-      if (sid && rid) {
+      if (sid && rid && typeof self.registration.getNotifications === 'function') {
         const existing = await self.registration.getNotifications();
         const prefix = `arrival_${sid}_${rid}`;
         for (const notif of existing) {
