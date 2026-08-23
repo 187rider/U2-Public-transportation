@@ -32,7 +32,7 @@ async_client = httpx.AsyncClient(
 )
 
 CACHE = {}
-CACHE_TTL_FORECASTS = 20.0
+CACHE_TTL_FORECASTS = 10.0
 CACHE_TTL_STATIC = 6200.0
 
 
@@ -113,7 +113,7 @@ async def verify_signature(request: Request):
         raise HTTPException(status_code=403, detail="Invalid timestamp format")
     
     current_ts = int(time.time())
-    if abs(current_ts - ts) > 60:
+    if abs(current_ts - ts) > 180:
         raise HTTPException(status_code=403, detail="Timestamp expired or invalid")
         
     expected = hashlib.sha256(f"{ts}{API_SECRET}".encode('utf-8')).hexdigest()
@@ -515,7 +515,7 @@ class PushReminderManager:
 
         while self._running:
             try:
-                await asyncio.sleep(20.0)
+                await asyncio.sleep(10.0)
                 reminders_map = self.get_all_reminders()
                 if not reminders_map:
                     continue
