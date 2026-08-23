@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v24';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v25';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -195,8 +195,23 @@ self.addEventListener('push', (event) => {
     const isIOS = /iPad|iPhone|iPod/.test(self.navigator.userAgent) ||
       (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
 
+    // Universal: Explicitly close any previous notification card for this route (iOS + Android)
+    try {
+      if (typeof self.registration.getNotifications === 'function') {
+        const existing = await self.registration.getNotifications();
+        const prefix = sid && rid ? `arrival_${sid}_${rid}` : tag;
+        for (const notif of existing) {
+          if (notif.tag && (notif.tag === tag || notif.tag.startsWith(prefix))) {
+            try { notif.close(); } catch {}
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('getNotifications cleanup error:', e);
+    }
+
     if (isIOS) {
-      // iOS WebKit (PWA): standard { body, tag, data } options so iOS collapses to a single card
+      // iOS WebKit (PWA): standard options
       try {
         await self.registration.showNotification(title, {
           body: body,
@@ -207,21 +222,6 @@ self.addEventListener('push', (event) => {
         console.error('iOS WebKit showNotification error:', err);
       }
       return;
-    }
-
-    // Android / Chrome: Clean up previous route cards and use rich options
-    try {
-      if (sid && rid && typeof self.registration.getNotifications === 'function') {
-        const existing = await self.registration.getNotifications();
-        const prefix = `arrival_${sid}_${rid}`;
-        for (const notif of existing) {
-          if (notif.tag && notif.tag.startsWith(prefix) && notif.tag !== tag) {
-            try { notif.close(); } catch {}
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('Android getNotifications cleanup error:', e);
     }
 
     try {
