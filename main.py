@@ -484,22 +484,12 @@ class PushReminderManager:
                 "aud": aud
             }
 
-            is_apple = "apple.com" in endpoint.lower()
-            clean_collapse = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
-
-            if is_apple:
-                push_headers = {
-                    "apns-push-type": "alert",
-                    "apns-priority": "10"
-                }
-                if clean_collapse:
-                    push_headers["apns-collapse-id"] = clean_collapse
-            else:
-                push_headers = {
-                    "Urgency": "high"
-                }
-                if clean_collapse:
-                    push_headers["Topic"] = clean_collapse
+            push_headers = {
+                "Urgency": "high",
+                "urgency": "high",
+                "apns-push-type": "alert",
+                "apns-priority": "10"
+            }
 
             ttl_val = 120
 
@@ -582,7 +572,7 @@ class PushReminderManager:
                                 "sub": sub,
                                 "title": f"🚌 Маршрут {rnum} прибыл!",
                                 "body": f"Остановка «{stname}»",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}_arr",
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],
                                 "rid": rem["rid"]
                             })
@@ -625,7 +615,7 @@ class PushReminderManager:
                                 "sub": sub,
                                 "title": f"🚌 Маршрут {rnum} прибыл!",
                                 "body": f"Остановка «{stname}»",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}_arr",
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],
                                 "rid": rem["rid"]
                             })
@@ -635,7 +625,7 @@ class PushReminderManager:
                                 "sub": sub,
                                 "title": f"🚌 Маршрут {rnum} — {cur_time} мин",
                                 "body": f"Остановка «{stname}» (прибытие через ~{cur_time} мин)",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}_{cur_time}m",
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],
                                 "rid": rem["rid"]
                             })
