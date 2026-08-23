@@ -742,36 +742,7 @@ body {
 }
 
 /* Alert Notification Toast Banner */
-.arrival-alert-toast {
-  position: fixed;
-  top: max(calc(env(safe-area-inset-top, 0px) + 14px), 64px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: linear-gradient(135deg, #1e293b, #0f172a);
-  border: 1px solid #fbbf24;
-  color: #ffffff;
-  padding: 12px 18px;
-  border-radius: 16px;
-  box-shadow: 0 20px 35px -10px rgba(0, 0, 0, 0.5), 0 0 20px rgba(251, 191, 36, 0.3);
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  max-width: 92vw;
-  width: 380px;
-  animation: pop-toast 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
 
-@keyframes pop-toast {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -30px) scale(0.9);
-  }
-  100% {
-    opacity: 1;
-    transform: translate(-50%, 0) scale(1);
-  }
-}
 
 .badge {
   display: inline-flex;

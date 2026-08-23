@@ -919,7 +919,8 @@ export default function App() {
     } catch {}
   }, [reminders]);
 
-  const [alertToast, setAlertToast] = useState(null);
+  const alertToast = null;
+  const setAlertToast = () => {}; // disabled – no black info messages
 
   const cancelArrivalReminder = async (remId, rnum = "") => {
     const existing = remindersRef.current.find(r => r.id === remId && !r.triggered);
@@ -1073,15 +1074,6 @@ export default function App() {
               pushSub = existingSub;
             }
 
-            // Local confirmation notification upon tapping bell
-            if (reg.showNotification) {
-              const gosLabel = gosNum ? ` (${gosNum})` : "";
-              reg.showNotification(`🔔 Маршрут ${rnum}${gosLabel}: напоминание включено`, {
-                body: `Остановка «${stationName}». Пришлем уведомления по графику!`,
-                tag: `arrival_${sid}_${rid}`,
-                data: { url: '/' }
-              }).catch((e) => console.warn("Local notification error:", e));
-            }
           }
         } catch (subErr) {
           console.warn("Push subscription failed:", subErr);
@@ -3993,19 +3985,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Arrival Notification Alert Toast */}
-        {alertToast && (
-          <div className="arrival-alert-toast" onClick={() => setAlertToast(null)}>
-            <span className="material-symbols-outlined" style={{ fontSize: "28px", color: "#fbbf24", animation: "pulse-bell 1s infinite ease-in-out" }}>notifications_active</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: "14px", color: "#fef3c7" }}>{alertToast.title}</div>
-              <div style={{ fontSize: "12px", color: "#cbd5e1", marginTop: "2px" }}>{alertToast.body}</div>
-            </div>
-            <button style={{ background: "transparent", border: "none", color: "#94a3b8", cursor: "pointer", padding: "4px" }}>
-              <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>close</span>
-            </button>
-          </div>
-        )}
 
         {/* Active Arrival Reminder Topbar HUD (max 3, dropdown for 2+) */}
         {!selectedVehicle && (() => {
