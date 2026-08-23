@@ -491,16 +491,13 @@ class PushReminderManager:
                 "aud": aud
             }
 
-            # apns-collapse-id causes iOS to REPLACE the previous notification and
-            # show a fresh alert banner each time — critical for countdown delivery.
-            # Without it, iOS silently groups multiple unread pushes and the screen never wakes.
-            clean_collapse = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:64]
+            # DO NOT use apns-collapse-id — it silently replaces the stored notification
+            # WITHOUT waking the screen. Each push must be independent to trigger a banner.
             push_headers = {
                 "Urgency": "high",
                 "urgency": "high",
                 "apns-push-type": "alert",
-                "apns-priority": "10",
-                "apns-collapse-id": clean_collapse
+                "apns-priority": "10"
             }
 
             loop = asyncio.get_running_loop()
@@ -577,22 +574,25 @@ class PushReminderManager:
                             last = rem.get("lastNotifiedTime")
                             should_fire = False
 
+                            # Milestone-based firing: iOS budget allows ~3-4 pushes per session.
+                            # Only fire at specific thresholds to avoid budget exhaustion.
+                            # Milestones: initial, 10 min, 5 min, 2 min, 1 min, arrival
+                            MILESTONES = [10, 5, 2, 1]
+
                             if cur_time <= 0:
                                 should_fire = True
                             elif last is None:
-                                self.update_last_notified(rem_key, cur_time)
+                                # Initial push — always fire once
+                                should_fire = True
                             elif cur_time > last:
-                                # If bus was delayed by traffic, update baseline
+                                # Bus delayed by traffic — update baseline silently
                                 self.update_last_notified(rem_key, cur_time)
-                            elif last >= 10 and cur_time >= 10:
-                                if cur_time <= last - 5:
-                                    should_fire = True
-                            elif last >= 10 and cur_time < 10:
-                                if cur_time <= last - 5 or cur_time <= 9:
-                                    should_fire = True
-                            elif cur_time < 10:
-                                if cur_time <= last - 1:
-                                    should_fire = True
+                            else:
+                                # Fire only when crossing a milestone
+                                for milestone in MILESTONES:
+                                    if last > milestone >= cur_time:
+                                        should_fire = True
+                                        break
 
                             if should_fire:
                                 self.update_last_notified(rem_key, cur_time)
