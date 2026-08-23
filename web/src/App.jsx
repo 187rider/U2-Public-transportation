@@ -516,6 +516,7 @@ async function triggerArrivalPush(title, body, tag = 'arrival-alarm') {
     body: body,
     tag: tag || 'arrival-alarm',
     renotify: true,
+    requireInteraction: true,
     data: { url: '/' }
   };
 

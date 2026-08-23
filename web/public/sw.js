@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v9';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v10';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -185,7 +185,8 @@ self.addEventListener('push', (event) => {
     tag: tag,
     icon: '/apple-touch-icon.png',
     renotify: true,
-    vibrate: [200, 100, 200],
+    requireInteraction: true,
+    vibrate: [300, 100, 300, 100, 400],
     data: { url: url }
   };
 
