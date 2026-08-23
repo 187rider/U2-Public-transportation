@@ -485,11 +485,7 @@ class PushReminderManager:
             }
 
             is_apple = "apple.com" in endpoint.lower()
-            if is_apple and sid and rid:
-                route_collapse_id = f"arrival_{sid}_{rid}"
-                clean_collapse = "".join(c for c in route_collapse_id if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
-            else:
-                clean_collapse = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
+            clean_collapse = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
 
             push_headers = {
                 "Urgency": "high"
