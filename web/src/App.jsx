@@ -1142,10 +1142,7 @@ export default function App() {
               if (curTime == null) return;
               rem.lastTime = match.time;
 
-              // Step notification logic:
-              // 1. If curTime <= 0 or arrives -> final push, reset/delete from memory
-              // 2. If curTime >= 10 -> push on every 5 min drop (e.g. 22 -> 17 -> 12 -> 7)
-              // 3. If curTime < 10 -> push on every 1 min drop (e.g. 7 -> 6 -> 5 -> 4 -> 3 -> 2 -> 1)
+              // Milestone notification logic (5m, 1m, arrival):
               let shouldFire = false;
               const last = rem.lastNotifiedTime;
 
@@ -1154,18 +1151,12 @@ export default function App() {
               } else if (last == null) {
                 // Initial baseline
                 rem.lastNotifiedTime = curTime;
-              } else if (last >= 10 && curTime >= 10) {
-                if (curTime <= last - 5) {
-                  shouldFire = true;
-                }
-              } else if (last >= 10 && curTime < 10) {
-                if (curTime <= last - 5 || curTime <= 9) {
-                  shouldFire = true;
-                }
-              } else if (curTime < 10) {
-                if (curTime <= last - 1) {
-                  shouldFire = true;
-                }
+              } else if (curTime > last) {
+                rem.lastNotifiedTime = curTime;
+              } else if (last > 5 && curTime <= 5) {
+                shouldFire = true;
+              } else if (last > 1 && curTime <= 1) {
+                shouldFire = true;
               }
 
               if (shouldFire) {
