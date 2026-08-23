@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v10';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v11';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -161,6 +161,8 @@ self.addEventListener('push', (event) => {
   let title = '🚌 Транспорт Улан-Удэ';
   let body = 'Обновление прибытия транспорта';
   let tag = 'arrival-alarm';
+  let sid = '';
+  let rid = '';
   let url = '/';
 
   if (event.data) {
@@ -170,6 +172,8 @@ self.addEventListener('push', (event) => {
         if (data.title) title = String(data.title);
         if (data.body) body = String(data.body);
         if (data.tag) tag = String(data.tag);
+        if (data.sid) sid = String(data.sid);
+        if (data.rid) rid = String(data.rid);
         if (data.url) url = String(data.url);
       }
     } catch {
@@ -191,8 +195,19 @@ self.addEventListener('push', (event) => {
   };
 
   event.waitUntil(
-    self.registration.showNotification(title, options).catch((err) => {
-      console.warn('showNotification with options failed, retrying minimal:', err);
+    self.registration.getNotifications().then((existingNotifications) => {
+      // Close previous notifications for the same route to prevent stacking
+      if (sid && rid) {
+        const prefix = `arrival_${sid}_${rid}`;
+        for (const notif of existingNotifications) {
+          if (notif.tag && notif.tag.startsWith(prefix) && notif.tag !== tag) {
+            try { notif.close(); } catch {}
+          }
+        }
+      }
+      return self.registration.showNotification(title, options);
+    }).catch((err) => {
+      console.warn('showNotification failed, retrying minimal:', err);
       return self.registration.showNotification(title, {
         body: body,
         tag: tag,

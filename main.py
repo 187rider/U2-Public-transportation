@@ -462,12 +462,14 @@ class PushReminderManager:
         except Exception as e:
             logger.error("Failed to update reminder in DB: %s", e)
 
-    async def send_webpush(self, sub: dict, title: str, body: str, tag: str = "arrival-alarm") -> bool:
+    async def send_webpush(self, sub: dict, title: str, body: str, tag: str = "arrival-alarm", sid: str = "", rid: str = "") -> bool:
         payload = {
             "title": title,
             "body": body,
             "icon": "/apple-touch-icon.png",
             "tag": tag,
+            "sid": sid,
+            "rid": rid,
             "url": "/"
         }
         try:
@@ -573,7 +575,9 @@ class PushReminderManager:
                                 "sub": sub,
                                 "title": f"🚌 Маршрут {rnum} прибыл!",
                                 "body": f"Остановка «{stname}»",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}"
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}_arr",
+                                "sid": rem["sid"],
+                                "rid": rem["rid"]
                             })
                             self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
                         continue
@@ -614,7 +618,9 @@ class PushReminderManager:
                                 "sub": sub,
                                 "title": f"🚌 Маршрут {rnum} прибыл!",
                                 "body": f"Остановка «{stname}»",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}"
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}_arr",
+                                "sid": rem["sid"],
+                                "rid": rem["rid"]
                             })
                             self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
                         else:
@@ -622,7 +628,9 @@ class PushReminderManager:
                                 "sub": sub,
                                 "title": f"🚌 Маршрут {rnum} — {cur_time} мин",
                                 "body": f"Остановка «{stname}» (прибытие через ~{cur_time} мин)",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}"
+                                "tag": f"arrival_{rem['sid']}_{rem['rid']}_{cur_time}m",
+                                "sid": rem["sid"],
+                                "rid": rem["rid"]
                             })
 
                 # 3. Bounded parallel WebPush dispatch
