@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v26';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v27';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -42,33 +42,52 @@ self.addEventListener('activate', (event) => {
 
 // Cache strategies and request routing
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
+  // Only handle GET requests (POST reminders/subscribe etc. must never be intercepted)
+  if (event.request.method !== 'GET') {
+    return;
+  }
 
-  // 1. Vector Map Tiles (.pbf): Cache-First
-  if (url.pathname.endsWith('.pbf') || url.pathname.includes('/tiles/')) {
+  let url;
+  try {
+    url = new URL(event.request.url);
+  } catch {
+    return;
+  }
+
+  // Strictly only cache own-origin HTTP/HTTPS requests
+  if (!url.protocol.startsWith('http') || url.origin !== self.location.origin) {
+    return;
+  }
+
+  // 1. Vector Map Tiles (.pbf): CACHE-FIRST (0ms load from disk, 204 offline fallback)
+  if (url.pathname.startsWith('/tiles/') || url.pathname.endsWith('.pbf')) {
     event.respondWith(
       caches.open(TILES_CACHE_NAME).then((cache) => {
-        return cache.match(event.request).then((cachedResponse) => {
-          if (cachedResponse) {
-            return cachedResponse;
+        return cache.match(event.request).then((cachedTile) => {
+          if (cachedTile) {
+            return cachedTile; // Return cached tile instantly
           }
-          return fetch(event.request).then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              cache.put(event.request, networkResponse.clone()).catch(() => {});
-            }
-            return networkResponse;
-          });
+          return fetch(event.request)
+            .then((networkTile) => {
+              if (networkTile && networkTile.status === 200) {
+                cache.put(event.request, networkTile.clone()).catch(() => {});
+              }
+              return networkTile;
+            })
+            .catch(() => {
+              return new Response(null, { status: 204, statusText: 'No Content' });
+            });
         });
       })
     );
     return;
   }
 
-  // 2. Static Transit Metadata (Stations, Routes): Stale-While-Revalidate
-  if (url.pathname.includes('/api/stations') || url.pathname.includes('/api/routes')) {
+  // 2. Static Transit Data (Stations & Routes): STALE-WHILE-REVALIDATE (Instant offline startup)
+  if (url.pathname === '/api/stations' || url.pathname === '/api/routes') {
     event.respondWith(
       caches.open(STATIC_API_CACHE_NAME).then((cache) => {
-        return cache.match(event.request).then((cachedResponse) => {
+        return cache.match(event.request).then((cachedData) => {
           const fetchPromise = fetch(event.request)
             .then((networkResponse) => {
               if (networkResponse && networkResponse.status === 200) {
@@ -76,11 +95,11 @@ self.addEventListener('fetch', (event) => {
               }
               return networkResponse;
             })
-            .catch(() => cachedResponse);
+            .catch(() => cachedData);
 
-          if (cachedResponse) {
+          if (cachedData) {
             event.waitUntil(fetchPromise);
-            return cachedResponse;
+            return cachedData;
           }
           return fetchPromise;
         });
@@ -89,20 +108,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Dynamic Realtime Telemetry (Vehicles, Forecasts): Network-Only (No cache)
-  if (
-    url.pathname.includes('/api/vehicles') ||
-    url.pathname.includes('/api/station_forecasts') ||
-    url.pathname.includes('/api/reminders')
-  ) {
-    event.respondWith(
-      fetch(event.request).catch(() => {
-        return new Response(JSON.stringify({ vehicles: [], forecasts: [], error: 'offline' }), {
-          status: 503,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      })
-    );
+  // 3. ALL Live / Dynamic Telemetry & API Endpoints: Strictly Network-Only (Never cached)
+  if (url.pathname.startsWith('/api/')) {
     return;
   }
 
