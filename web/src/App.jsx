@@ -957,13 +957,40 @@ export default function App() {
     setTimeout(() => setAlertToast(null), 3000);
   };
 
-  const toggleArrivalReminder = async (sid, stationName, rid, rnum, initialTime, vehid = "", gosNum = "") => {
+  const toggleArrivalReminder = async (sid, stationName, rid, rnum, initialTime, inVehid = "", inGosNum = "") => {
+    let vehid = inVehid || "";
+    let gosNum = inGosNum || "";
+    let vehType = "";
+
+    // Find live vehicle running on this route to bind exact vehicle ID and plate
+    const liveMatch = Object.values(knownVehiclesRef.current).find(v => {
+      const vRoute = String(v.route || v.rnum || "").trim().toLowerCase();
+      const targetRoute = String(rnum || "").trim().toLowerCase();
+      if (targetRoute && vRoute && targetRoute === vRoute) {
+        if (rid && v.rid && String(v.rid) === String(rid)) return true;
+        return true;
+      }
+      return false;
+    });
+
+    if (liveMatch) {
+      if (!vehid) vehid = String(liveMatch.id || "");
+      if (!gosNum) gosNum = String(liveMatch.gosNum || "");
+      vehType = liveMatch.type || "";
+    }
+
+    if (!vehType && routesRef.current) {
+      const rObj = routesRef.current.find(r => String(r.number).trim().toLowerCase() === String(rnum || "").trim().toLowerCase());
+      if (rObj) vehType = rObj.type;
+    }
+
     const remId = vehid ? `${sid}_${rid}_${vehid}` : `${sid}_${rid}`;
-    const exists = remindersRef.current.some(r => r.id === remId && !r.triggered);
+    const exists = remindersRef.current.some(r => (r.id === remId || (vehid && r.vehid === vehid)) && !r.triggered);
 
     // 1. If reminder is already active, cancel/unsubscribe immediately without running subscribe flow
     if (exists) {
-      await cancelArrivalReminder(remId, rnum);
+      const existingRem = remindersRef.current.find(r => (r.id === remId || (vehid && r.vehid === vehid)) && !r.triggered);
+      await cancelArrivalReminder(existingRem ? existingRem.id : remId, rnum);
       return false;
     }
 
@@ -1077,20 +1104,23 @@ export default function App() {
     };
     setReminders(prev => [...prev.filter(r => r.id !== remId), newRem]);
 
-    // Ensure reminded vehicle is placed into vehicleHistory so it is primary in History tab
+    // Ensure reminded vehicle is placed cleanly into vehicleHistory without duplicate cards
+    const targetVehId = vehid || (liveMatch ? String(liveMatch.id) : `${sid}_${rid}`);
     const historyEntry = {
-      id: vehid || `${sid}_${rid}`,
+      id: targetVehId,
       route: rnum,
-      gosNum: gosNum || "",
+      gosNum: gosNum || (liveMatch ? liveMatch.gosNum : ""),
+      type: vehType || (liveMatch ? liveMatch.type : "bus"),
       rid: rid,
       timestamp: Date.now()
     };
     setVehicleHistory(prev => {
       const existingList = Array.isArray(prev) ? prev : [];
+      // Clean up previous entries of the same vehicle, plate, or same route line
       const filtered = existingList.filter(v => {
-        if (vehid && String(v.id) === String(vehid)) return false;
+        if (targetVehId && String(v.id) === String(targetVehId)) return false;
         if (gosNum && formatGosNum(v.gosNum).toLowerCase() === formatGosNum(gosNum).toLowerCase()) return false;
-        if (!vehid && !gosNum && v.route === rnum && v.rid === rid) return false;
+        if (v.route && String(v.route).trim().toLowerCase() === String(rnum).trim().toLowerCase()) return false;
         return true;
       });
       const updated = [historyEntry, ...filtered].slice(0, 9);
