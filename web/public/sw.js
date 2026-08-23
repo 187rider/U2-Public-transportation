@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v23';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v24';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -196,10 +196,11 @@ self.addEventListener('push', (event) => {
       (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
 
     if (isIOS) {
-      // iOS WebKit (PWA): strictly standard { body, data } options so WebKit never throws
+      // iOS WebKit (PWA): standard { body, tag, data } options so iOS collapses to a single card
       try {
         await self.registration.showNotification(title, {
           body: body,
+          tag: tag,
           data: { url: url }
         });
       } catch (err) {
