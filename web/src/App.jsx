@@ -1077,6 +1077,27 @@ export default function App() {
     };
     setReminders(prev => [...prev.filter(r => r.id !== remId), newRem]);
 
+    // Ensure reminded vehicle is placed into vehicleHistory so it is primary in History tab
+    const historyEntry = {
+      id: vehid || `${sid}_${rid}`,
+      route: rnum,
+      gosNum: gosNum || "",
+      rid: rid,
+      timestamp: Date.now()
+    };
+    setVehicleHistory(prev => {
+      const existingList = Array.isArray(prev) ? prev : [];
+      const filtered = existingList.filter(v => {
+        if (vehid && String(v.id) === String(vehid)) return false;
+        if (gosNum && formatGosNum(v.gosNum).toLowerCase() === formatGosNum(gosNum).toLowerCase()) return false;
+        if (!vehid && !gosNum && v.route === rnum && v.rid === rid) return false;
+        return true;
+      });
+      const updated = [historyEntry, ...filtered].slice(0, 9);
+      try { localStorage.setItem("pref_vehicleHistory", JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+
     // Register with server to wake device when locked/asleep
     if (pushSub) {
       apiFetch('/api/reminders/subscribe', {
@@ -1846,6 +1867,25 @@ export default function App() {
     });
   }, [stations, showBus, showTram]);
 
+  const getActiveReminderForVehicle = useCallback((item, live = null) => {
+    if (!item || !Array.isArray(reminders) || reminders.length === 0) return null;
+    const activeRems = reminders.filter(r => !r.triggered);
+    if (activeRems.length === 0) return null;
+
+    const vId = String(item.id || (live && live.id) || "").trim();
+    const vPlate = formatGosNum(item.gosNum || (live && live.gosNum) || "").toLowerCase().trim();
+    const vRoute = String(item.route || (live && (live.route || live.rnum)) || "").trim().toLowerCase();
+    const vRid = String(item.rid || (live && live.rid) || "").trim();
+
+    return activeRems.find(r => {
+      if (r.vehid && vId && String(r.vehid).trim() === vId) return true;
+      if (r.gosNum && vPlate && formatGosNum(r.gosNum).toLowerCase().trim() === vPlate) return true;
+      if (r.rid && vRid && String(r.rid).trim() === vRid) return true;
+      if (r.rnum && vRoute && String(r.rnum).trim().toLowerCase() === vRoute) return true;
+      return false;
+    }) || null;
+  }, [reminders]);
+
   const sortedVehicleHistory = useMemo(() => {
     if (!Array.isArray(vehicleHistory) || vehicleHistory.length === 0) return [];
     const nowTime = Date.now();
@@ -1854,15 +1894,26 @@ export default function App() {
       const live = knownVehiclesRef.current[item.id] ||
         Object.values(knownVehiclesRef.current).find(v =>
           (plate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === plate));
-      return { item, isLive: !!live && (nowTime - (live._lastSeen || 0) < 60000) };
+      const activeRem = getActiveReminderForVehicle(item, live);
+      const isLive = !!live && (nowTime - (live._lastSeen || 0) < 60000);
+      return { item, hasNotify: !!activeRem, isLive };
     });
-    decorated.sort((a, b) =>
-      (a.isLive === b.isLive)
-        ? (b.item.timestamp || 0) - (a.item.timestamp || 0)
-        : (a.isLive ? -1 : 1)
-    );
+
+    decorated.sort((a, b) => {
+      // 1. Notified vehicles ALWAYS primary at the top
+      if (a.hasNotify !== b.hasNotify) {
+        return a.hasNotify ? -1 : 1;
+      }
+      // 2. Live vehicles next
+      if (a.isLive !== b.isLive) {
+        return a.isLive ? -1 : 1;
+      }
+      // 3. Most recent timestamp
+      return (b.item.timestamp || 0) - (a.item.timestamp || 0);
+    });
+
     return decorated.map(d => d.item);
-  }, [vehicleHistory, telemetryTick, activeTab]); // eslint-disable-line react-hooks/exhaustive-deps -- Sort order reacts to telemetry ticks and tab changes
+  }, [vehicleHistory, reminders, telemetryTick, activeTab, getActiveReminderForVehicle]);
 
   const toggleRouteGroup = (type) => {
     setExpandedGroups(prev => ({ ...prev, [type]: !prev[type] }));
@@ -3890,19 +3941,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Active Arrival Reminder Bar */}
-        {reminders.filter(r => !r.triggered).length > 0 && (
-          <div className="arrival-reminder-bar">
-            <span className="material-symbols-outlined" style={{ color: "#fbbf24", fontSize: "18px", animation: "pulse-bell 1.5s infinite ease-in-out" }}>notifications_active</span>
-            <span>
-              Напоминание: <strong>{reminders.filter(r => !r.triggered)[0].rnum}{reminders.filter(r => !r.triggered)[0].gosNum ? ` (${reminders.filter(r => !r.triggered)[0].gosNum})` : ''}</strong> → {reminders.filter(r => !r.triggered)[0].stationName} {reminders.filter(r => !r.triggered)[0].lastTime ? `(~${reminders.filter(r => !r.triggered)[0].lastTime} мин)` : ''}
-            </span>
-            <button className="arrival-reminder-cancel-btn" onClick={() => cancelArrivalReminder(reminders.filter(r => !r.triggered)[0].id)} title="Отменить напоминание">
-              <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>close</span>
-            </button>
-          </div>
-        )}
-
         {/* Arrival Notification Alert Toast */}
         {alertToast && (
           <div className="arrival-alert-toast" onClick={() => setAlertToast(null)}>
@@ -4271,6 +4309,7 @@ export default function App() {
                           );
                         const isLiveOnMap = !!live && (Date.now() - (live._lastSeen || 0) < 60000);
                         const isSelected = selectedVehicle?.id === item.id || (live && selectedVehicle?.id === live.id);
+                        const activeReminder = getActiveReminderForVehicle(item, live);
 
                         const vehType = normalizeVehicleType(item.type, item.route);
                         const iconName = vehType === "tram" ? "tram" : (vehType === "minibus" ? "airport_shuttle" : "directions_bus");
@@ -4419,6 +4458,21 @@ export default function App() {
                             </div>
 
                             <div className="history-card-right">
+                              {activeReminder && (
+                                <button
+                                  className="history-notify-bell-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    cancelArrivalReminder(activeReminder.id, activeReminder.rnum);
+                                  }}
+                                  title={`Отключить напоминание для маршрута ${item.route || ''} (${activeReminder.stationName || 'остановка'})`}
+                                  aria-label="Отключить напоминание"
+                                >
+                                  <span className="material-symbols-outlined" style={{ fontSize: "20px" }}>
+                                    notifications_active
+                                  </span>
+                                </button>
+                              )}
                               {isLiveOnMap ? (
                                 <>
                                   {itemProgress != null && (

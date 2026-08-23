@@ -1701,6 +1701,39 @@ body {
   flex-shrink: 0;
 }
 
+.history-notify-bell-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: #fef3c7;
+  border: 1.5px solid #f59e0b;
+  color: #d97706;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.25);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  animation: pulse-bell 2s infinite ease-in-out;
+}
+
+.history-notify-bell-btn:hover {
+  background: #fde68a;
+  border-color: #d97706;
+  color: #b45309;
+  transform: scale(1.08);
+}
+
+.history-notify-bell-btn:active {
+  transform: scale(0.92);
+}
+
+.history-notify-bell-btn .material-symbols-outlined {
+  font-variation-settings: 'FILL' 1;
+}
+
 .history-card:hover .history-select-btn,
 .history-select-btn.active {
   background: #1E75EC;
