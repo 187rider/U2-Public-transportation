@@ -32,7 +32,7 @@ async_client = httpx.AsyncClient(
 )
 
 CACHE = {}
-CACHE_TTL_FORECASTS = 3.0
+CACHE_TTL_FORECASTS = 10.0
 CACHE_TTL_STATIC = 6200.0
 
 
@@ -113,7 +113,7 @@ async def verify_signature(request: Request):
         raise HTTPException(status_code=403, detail="Invalid timestamp format")
     
     current_ts = int(time.time())
-    if abs(current_ts - ts) > 180:
+    if abs(current_ts - ts) > 60:
         raise HTTPException(status_code=403, detail="Timestamp expired or invalid")
         
     expected = hashlib.sha256(f"{ts}{API_SECRET}".encode('utf-8')).hexdigest()
@@ -140,7 +140,7 @@ class ServerVehiclePoller:
 
     def register_client_request(self, rids: str) -> bool:
         now = time.time()
-        was_idle = (now - self.last_client_activity) > 60.0
+        was_idle = (now - self.last_client_activity) > 600.0
         self.last_client_activity = now
         
         has_new_rids = False
@@ -159,7 +159,7 @@ class ServerVehiclePoller:
 
         return has_new_rids
 
-    def get_active_rids(self, max_age: float = 60.0) -> str:
+    def get_active_rids(self, max_age: float = 600.0) -> str:
         now = time.time()
         active = [rid for rid, ts in self.rid_last_seen.items() if now - ts < max_age]
         # Prune expired rids
@@ -182,9 +182,10 @@ class ServerVehiclePoller:
             "next_curk": str(self.version)
         }
 
-    async def poll_once(self):
+    async def poll_once(self, force: bool = False):
         now = time.time()
-        if now - self.last_poll_time < 10.0:  # Hard floor, max 1 request per 10s
+        min_gap = 0.5 if force else 9.5
+        if now - self.last_poll_time < min_gap:
             return
         self.last_poll_time = now  # Set at start: attempt = poll
 
@@ -296,8 +297,8 @@ class ServerVehiclePoller:
         while self._running:
             try:
                 now = time.time()
-                # Idle backoff if no clients have requested vehicles in > 60 seconds
-                if now - self.last_client_activity > 60.0:
+                # Idle backoff if no clients have requested vehicles in > 10 minutes
+                if now - self.last_client_activity > 600.0:
                     self.poll_event.clear()
                     try:
                         await asyncio.wait_for(self.poll_event.wait(), timeout=60.0)
@@ -334,8 +335,7 @@ if not os.path.exists(VAPID_KEY_FILE):
         v.generate_keys()
         v.save_key(VAPID_KEY_FILE)
     except Exception as e:
-        logger.critical("Failed to generate VAPID key file %s: %s", VAPID_KEY_FILE, e)
-        raise RuntimeError(f"VAPID key generation failed: {e}")
+        logger.error("Failed to generate VAPID key file: %s", e)
 
 try:
     from py_vapid import Vapid
@@ -347,8 +347,8 @@ try:
     )
     VAPID_PUBLIC_KEY = base64.urlsafe_b64encode(pub_bytes).decode().rstrip('=')
 except Exception as e:
-    logger.critical("CRITICAL: Failed to load VAPID key from file %s: %s", VAPID_KEY_FILE, e)
-    raise RuntimeError(f"VAPID private key is required for Web Push but failed to load: {e}")
+    logger.error("Failed to load VAPID key from file %s: %s", VAPID_KEY_FILE, e)
+    VAPID_PUBLIC_KEY = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE"
 
 VAPID_CLAIMS = {"sub": "mailto:support@ridertech.online"}
 
@@ -462,14 +462,13 @@ class PushReminderManager:
         except Exception as e:
             logger.error("Failed to update reminder in DB: %s", e)
 
-    async def send_webpush(self, sub: dict, title: str, body: str, tag: str = "arrival-alarm", sid: str = "", rid: str = "") -> bool:
+    async def send_webpush(self, sub: dict, title: str, body: str, tag: str = "arrival-alarm") -> bool:
         payload = {
             "title": title,
             "body": body,
             "icon": "/apple-touch-icon.png",
+            "badge": "/favicon.svg",
             "tag": tag,
-            "sid": sid,
-            "rid": rid,
             "url": "/"
         }
         try:
@@ -491,10 +490,8 @@ class PushReminderManager:
                 "apns-priority": "10"
             }
 
-            ttl_val = 120
-
             loop = asyncio.get_running_loop()
-            resp = await loop.run_in_executor(
+            await loop.run_in_executor(
                 None,
                 lambda: webpush(
                     subscription_info=sub,
@@ -502,11 +499,10 @@ class PushReminderManager:
                     vapid_private_key=VAPID_KEY_FILE,
                     vapid_claims=fresh_claims,
                     headers=push_headers,
-                    ttl=ttl_val
+                    ttl=120
                 )
             )
-            status = getattr(resp, "status_code", 200)
-            logger.info("Sent background WebPush (HTTP %s): %s - %s to %s", status, title, body, aud)
+            logger.info("Sent background WebPush: %s - %s to %s", title, body, aud)
             return True
         except Exception as e:
             logger.warning("WebPush send error (%s): %s", type(e).__name__, e)
@@ -514,125 +510,99 @@ class PushReminderManager:
 
     async def run_loop(self):
         self._running = True
-        fetch_sem = asyncio.Semaphore(4)    # Bound concurrent upstream station forecast calls to 4
-        push_sem = asyncio.Semaphore(15)    # Bound concurrent push HTTPS sends to 15
-
         while self._running:
             try:
-                await asyncio.sleep(4.0)
+                await asyncio.sleep(6.0)
                 reminders_map = self.get_all_reminders()
                 if not reminders_map:
                     continue
 
                 now = time.time()
                 active_items = list(reminders_map.items())
-                sids = list(set(r["sid"] for _, r in active_items if r.get("sid")))
+                sids = set(r["sid"] for _, r in active_items)
 
-                # 1. Bounded parallel forecast fetch for all distinct active stations
-                async def fetch_station(sid_str: str):
-                    async with fetch_sem:
-                        try:
-                            fc = await get_station_forecasts(sid=sid_str)
-                            return sid_str, fc.get("forecasts", [])
-                        except Exception as err:
-                            logger.warning("Error fetching forecasts for sid %s: %s", sid_str, err)
-                            return sid_str, None
-
-                fetched_results = await asyncio.gather(*[fetch_station(sid) for sid in sids], return_exceptions=True)
-                station_forecasts_map = {}
-                for item in fetched_results:
-                    if isinstance(item, tuple) and len(item) == 2:
-                        station_forecasts_map[item[0]] = item[1]
-
-                pending_pushes = []
-
-                # 2. Evaluate all active reminders in memory
-                for rem_key, rem in active_items:
-                    sid = rem.get("sid")
-                    # Evict reminders older than 2 hours to prevent table growth
-                    if now - rem.get("created_at", 0) > 7200:
-                        self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
-                        continue
-
-                    forecasts = station_forecasts_map.get(sid)
-                    if forecasts is None:
-                        # Upstream fetch failed for this station; retry next cycle without false arrival
-                        continue
-
-                    rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
-                    matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
-
-                    if not matching_fc:
-                        # If the bus was close (<= 2 min) and now disappeared from forecast list, it has arrived!
-                        if rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 2:
-                            rnum = rem.get("rnum", "")
-                            stname = rem.get("stationName", "")
-                            sub = rem.get("subscription")
-                            pending_pushes.append({
-                                "sub": sub,
-                                "title": f"🚌 Маршрут {rnum} прибыл!",
-                                "body": f"Остановка «{stname}»",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}",
-                                "sid": rem["sid"],
-                                "rid": rem["rid"]
-                            })
-                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
-                        continue
-
-                    raw_t = matching_fc.get("time")
+                for sid in sids:
                     try:
-                        cur_time = int(raw_t) if raw_t is not None else 0
-                    except (ValueError, TypeError):
-                        cur_time = 0
+                        fc_data = await get_station_forecasts(sid=sid)
+                        forecasts = fc_data.get("forecasts", [])
 
-                    last = rem.get("lastNotifiedTime")
-                    should_fire = False
+                        for rem_key, rem in active_items:
+                            if rem.get("sid") != sid:
+                                continue
 
-                    if cur_time <= 0:
-                        should_fire = True
-                    elif last is None:
-                        self.update_last_notified(rem_key, cur_time)
-                    elif cur_time > last:
-                        # If bus was delayed by traffic, update baseline
-                        self.update_last_notified(rem_key, cur_time)
-                    elif last > 5 and cur_time <= 5:
-                        should_fire = True
-                    elif last > 1 and cur_time <= 1:
-                        should_fire = True
+                            # Evict reminders older than 2 hours to prevent table growth
+                            if now - rem.get("created_at", 0) > 7200:
+                                self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                                continue
 
-                    if should_fire:
-                        self.update_last_notified(rem_key, cur_time)
-                        rnum = rem.get("rnum", "")
-                        stname = rem.get("stationName", "")
-                        sub = rem.get("subscription")
+                            rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
+                            matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
+                            if not matching_fc:
+                                # If the bus was close (<= 2 min) and now disappeared from forecast list, it has arrived!
+                                if rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 2:
+                                    rnum = rem.get("rnum", "")
+                                    stname = rem.get("stationName", "")
+                                    sub = rem.get("subscription")
+                                    await self.send_webpush(
+                                        sub=sub,
+                                        title=f"🚌 Маршрут {rnum} прибыл!",
+                                        body=f"Остановка «{stname}»",
+                                        tag=f"arrival_{rem['sid']}_{rem['rid']}"
+                                    )
+                                    self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                                continue
 
-                        if cur_time <= 0:
-                            pending_pushes.append({
-                                "sub": sub,
-                                "title": f"🚌 Маршрут {rnum} прибыл!",
-                                "body": f"Остановка «{stname}»",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}",
-                                "sid": rem["sid"],
-                                "rid": rem["rid"]
-                            })
-                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
-                        else:
-                            pending_pushes.append({
-                                "sub": sub,
-                                "title": f"🚌 Маршрут {rnum} — {cur_time} мин",
-                                "body": f"Остановка «{stname}» (прибытие через ~{cur_time} мин)",
-                                "tag": f"arrival_{rem['sid']}_{rem['rid']}",
-                                "sid": rem["sid"],
-                                "rid": rem["rid"]
-                            })
+                            raw_t = matching_fc.get("time")
+                            try:
+                                cur_time = int(raw_t) if raw_t is not None else 0
+                            except (ValueError, TypeError):
+                                cur_time = 0
 
-                # 3. Bounded parallel WebPush dispatch
-                if pending_pushes:
-                    async def _send_bounded(args):
-                        async with push_sem:
-                            await self.send_webpush(**args)
+                            last = rem.get("lastNotifiedTime")
+                            should_fire = False
 
-                    await asyncio.gather(*[_send_bounded(p) for p in pending_pushes], return_exceptions=True)
+                            if cur_time <= 0:
+                                should_fire = True
+                            elif last is None:
+                                self.update_last_notified(rem_key, cur_time)
+                            elif cur_time > last:
+                                # If bus was delayed by traffic, update baseline
+                                self.update_last_notified(rem_key, cur_time)
+                            elif last >= 10 and cur_time >= 10:
+                                if cur_time <= last - 5:
+                                    should_fire = True
+                            elif last >= 10 and cur_time < 10:
+                                if cur_time <= last - 5 or cur_time <= 9:
+                                    should_fire = True
+                            elif cur_time < 10:
+                                if cur_time <= last - 1:
+                                    should_fire = True
+
+                            if should_fire:
+                                self.update_last_notified(rem_key, cur_time)
+                                rnum = rem.get("rnum", "")
+                                stname = rem.get("stationName", "")
+                                sub = rem.get("subscription")
+
+                                if cur_time <= 0:
+                                    # Final arrival push & reset from database
+                                    await self.send_webpush(
+                                        sub=sub,
+                                        title=f"🚌 Маршрут {rnum} прибыл!",
+                                        body=f"Остановка «{stname}»",
+                                        tag=f"arrival_{rem['sid']}_{rem['rid']}"
+                                    )
+                                    self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                                else:
+                                    # Step countdown push
+                                    await self.send_webpush(
+                                        sub=sub,
+                                        title=f"🚌 Маршрут {rnum} — {cur_time} мин",
+                                        body=f"Остановка «{stname}» (прибытие через ~{cur_time} мин)",
+                                        tag=f"arrival_{rem['sid']}_{rem['rid']}"
+                                    )
+                    except Exception as sid_err:
+                        logger.warning("Error processing station reminders for sid %s: %s", sid, sid_err)
 
             except asyncio.CancelledError:
                 break
@@ -910,11 +880,12 @@ async def get_vehicles(rids: str = "", curk: str = "0"):
     if not rids:
         return {"vehicles": []}
         
-    vehicle_poller.register_client_request(rids)
+    has_new = vehicle_poller.register_client_request(rids)
     
-    # Cold start only: if never polled before, perform initial poll
-    if vehicle_poller.last_poll_time == 0:
-        await vehicle_poller.poll_once()
+    # If client requested full sync (curk == 0), new routes requested, or cache older than 4s, fetch fresh telemetry immediately
+    now = time.time()
+    if curk == "0" or has_new or (now - vehicle_poller.last_poll_time > 4.0):
+        await vehicle_poller.poll_once(force=True)
 
     return vehicle_poller.get_snapshot(rids)
 
@@ -1126,7 +1097,7 @@ async def test_push_endpoint(request: Request):
     try:
         body = await request.json()
         sub = body.get("subscription")
-        delay = max(0, min(int(body.get("delay", 3)), 30))
+        delay = int(body.get("delay", 3))
         if not sub or not isinstance(sub, dict):
             raise HTTPException(status_code=400, detail="Missing subscription")
 
@@ -1147,4 +1118,4 @@ async def test_push_endpoint(request: Request):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
