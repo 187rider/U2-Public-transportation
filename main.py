@@ -113,7 +113,7 @@ async def verify_signature(request: Request):
         raise HTTPException(status_code=403, detail="Invalid timestamp format")
     
     current_ts = int(time.time())
-    if abs(current_ts - ts) > 60:
+    if abs(current_ts - ts) > 180:
         raise HTTPException(status_code=403, detail="Timestamp expired or invalid")
         
     expected = hashlib.sha256(f"{ts}{API_SECRET}".encode('utf-8')).hexdigest()
