@@ -482,15 +482,20 @@ class PushReminderManager:
                 "aud": aud
             }
 
+            clean_tag = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
             push_headers = {
-                "Urgency": "high"
+                "Urgency": "high",
+                "urgency": "high"
             }
+            if clean_tag:
+                push_headers["Topic"] = clean_tag
+                push_headers["topic"] = clean_tag
             if "apple.com" in endpoint:
                 push_headers["apns-push-type"] = "alert"
                 push_headers["apns-priority"] = "10"
 
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
+            resp = await loop.run_in_executor(
                 None,
                 lambda: webpush(
                     subscription_info=sub,
@@ -498,10 +503,11 @@ class PushReminderManager:
                     vapid_private_key=VAPID_KEY_FILE,
                     vapid_claims=fresh_claims,
                     headers=push_headers,
-                    ttl=120
+                    ttl=60
                 )
             )
-            logger.info("Sent background WebPush: %s - %s to %s", title, body, aud)
+            status = getattr(resp, "status_code", 200)
+            logger.info("Sent background WebPush (HTTP %s): %s - %s to %s", status, title, body, aud)
             return True
         except Exception as e:
             logger.warning("WebPush send error (%s): %s", type(e).__name__, e)
