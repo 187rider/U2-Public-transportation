@@ -487,7 +487,10 @@ class PushReminderManager:
             # to apns-priority:10 internally. Do NOT add raw apns-* headers;
             # Apple's gateway ignores them and may mis-classify the push as background.
             push_headers = {
-                "Urgency": "high"
+                "Urgency": "high",
+                "urgency": "high",
+                "apns-push-type": "alert",
+                "apns-priority": "10"
             }
 
             loop = asyncio.get_running_loop()
