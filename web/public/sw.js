@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v8';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v9';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -184,6 +184,8 @@ self.addEventListener('push', (event) => {
     body: body,
     tag: tag,
     icon: '/apple-touch-icon.png',
+    renotify: true,
+    vibrate: [200, 100, 200],
     data: { url: url }
   };
 
@@ -192,6 +194,7 @@ self.addEventListener('push', (event) => {
       console.warn('showNotification with options failed, retrying minimal:', err);
       return self.registration.showNotification(title, {
         body: body,
+        tag: tag,
         data: { url: url }
       });
     })

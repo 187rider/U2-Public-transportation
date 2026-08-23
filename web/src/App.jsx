@@ -515,6 +515,7 @@ async function triggerArrivalPush(title, body, tag = 'arrival-alarm') {
   const options = {
     body: body,
     tag: tag || 'arrival-alarm',
+    renotify: true,
     data: { url: '/' }
   };
 
