@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v25';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v26';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -40,53 +40,35 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Cache strategies and request routing
 self.addEventListener('fetch', (event) => {
-  // Only handle GET requests
-  if (event.request.method !== 'GET') {
-    return;
-  }
+  const url = new URL(event.request.url);
 
-  let url;
-  try {
-    url = new URL(event.request.url);
-  } catch {
-    return;
-  }
-
-  // Strictly only cache own-origin HTTP/HTTPS requests
-  if (!url.protocol.startsWith('http') || url.origin !== self.location.origin) {
-    return;
-  }
-
-  // 1. Vector Map Tiles: CACHE-FIRST (0ms load from disk, saves 99% mobile traffic)
-  if (url.pathname.startsWith('/tiles/')) {
+  // 1. Vector Map Tiles (.pbf): Cache-First
+  if (url.pathname.endsWith('.pbf') || url.pathname.includes('/tiles/')) {
     event.respondWith(
       caches.open(TILES_CACHE_NAME).then((cache) => {
-        return cache.match(event.request).then((cachedTile) => {
-          if (cachedTile) {
-            return cachedTile; // Return cached tile instantly with 0 network usage
+        return cache.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) {
+            return cachedResponse;
           }
-          return fetch(event.request)
-            .then((networkTile) => {
-              if (networkTile && networkTile.status === 200) {
-                cache.put(event.request, networkTile.clone()).catch(() => {});
-              }
-              return networkTile;
-            })
-            .catch(() => {
-              return new Response(null, { status: 204, statusText: 'No Content' });
-            });
+          return fetch(event.request).then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              cache.put(event.request, networkResponse.clone()).catch(() => {});
+            }
+            return networkResponse;
+          });
         });
       })
     );
     return;
   }
 
-  // 2. Static Transit Data (Stations & Routes): STALE-WHILE-REVALIDATE (Instant offline startup)
-  if (url.pathname === '/api/stations' || url.pathname === '/api/routes') {
+  // 2. Static Transit Metadata (Stations, Routes): Stale-While-Revalidate
+  if (url.pathname.includes('/api/stations') || url.pathname.includes('/api/routes')) {
     event.respondWith(
       caches.open(STATIC_API_CACHE_NAME).then((cache) => {
-        return cache.match(event.request).then((cachedData) => {
+        return cache.match(event.request).then((cachedResponse) => {
           const fetchPromise = fetch(event.request)
             .then((networkResponse) => {
               if (networkResponse && networkResponse.status === 200) {
@@ -94,11 +76,11 @@ self.addEventListener('fetch', (event) => {
               }
               return networkResponse;
             })
-            .catch(() => cachedData);
+            .catch(() => cachedResponse);
 
-          if (cachedData) {
+          if (cachedResponse) {
             event.waitUntil(fetchPromise);
-            return cachedData;
+            return cachedResponse;
           }
           return fetchPromise;
         });
@@ -107,8 +89,20 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Live Telemetry (/api/vehicles, /api/forecasts): Strictly Network-Only
-  if (url.pathname.startsWith('/api/')) {
+  // 3. Dynamic Realtime Telemetry (Vehicles, Forecasts): Network-Only (No cache)
+  if (
+    url.pathname.includes('/api/vehicles') ||
+    url.pathname.includes('/api/station_forecasts') ||
+    url.pathname.includes('/api/reminders')
+  ) {
+    event.respondWith(
+      fetch(event.request).catch(() => {
+        return new Response(JSON.stringify({ vehicles: [], forecasts: [], error: 'offline' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      })
+    );
     return;
   }
 
@@ -164,6 +158,8 @@ self.addEventListener('push', (event) => {
   let sid = '';
   let rid = '';
   let url = '/';
+  let icon = '/apple-touch-icon.png';
+  let badge = '/favicon.svg';
 
   if (event.data) {
     try {
@@ -175,6 +171,8 @@ self.addEventListener('push', (event) => {
         if (data.sid) sid = String(data.sid);
         if (data.rid) rid = String(data.rid);
         if (data.url) url = String(data.url);
+        if (data.icon) icon = String(data.icon);
+        if (data.badge) badge = String(data.badge);
       }
     } catch {
       try {
@@ -187,7 +185,8 @@ self.addEventListener('push', (event) => {
   const baseOptions = {
     body: body,
     tag: tag,
-    icon: '/apple-touch-icon.png',
+    icon: icon,
+    badge: badge,
     data: { url: url }
   };
 
@@ -195,13 +194,13 @@ self.addEventListener('push', (event) => {
     const isIOS = /iPad|iPhone|iPod/.test(self.navigator.userAgent) ||
       (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
 
-    // Universal: Explicitly close any previous notification card for this route (iOS + Android)
+    // Universal: Explicitly close previous notification card for this exact route (iOS + Android)
     try {
       if (typeof self.registration.getNotifications === 'function') {
         const existing = await self.registration.getNotifications();
         const prefix = sid && rid ? `arrival_${sid}_${rid}` : tag;
         for (const notif of existing) {
-          if (notif.tag && (notif.tag === tag || notif.tag.startsWith(prefix))) {
+          if (notif.tag && (notif.tag === tag || notif.tag === prefix || notif.tag.startsWith(prefix + '_'))) {
             try { notif.close(); } catch {}
           }
         }
