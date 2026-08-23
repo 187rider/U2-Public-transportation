@@ -485,7 +485,11 @@ class PushReminderManager:
             }
 
             is_apple = "apple.com" in endpoint.lower()
-            clean_tag = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
+            if is_apple and sid and rid:
+                route_collapse_id = f"arrival_{sid}_{rid}"
+                clean_collapse = "".join(c for c in route_collapse_id if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
+            else:
+                clean_collapse = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
 
             push_headers = {
                 "Urgency": "high"
@@ -493,11 +497,11 @@ class PushReminderManager:
             if is_apple:
                 push_headers["apns-push-type"] = "alert"
                 push_headers["apns-priority"] = "10"
-                if clean_tag:
-                    push_headers["apns-collapse-id"] = clean_tag
+                if clean_collapse:
+                    push_headers["apns-collapse-id"] = clean_collapse
             else:
-                if clean_tag:
-                    push_headers["Topic"] = clean_tag
+                if clean_collapse:
+                    push_headers["Topic"] = clean_collapse
 
             ttl_val = 120
 
