@@ -366,10 +366,20 @@ def get_reminders_db():
             station_name TEXT,
             rid TEXT,
             rnum TEXT,
+            vehid TEXT,
+            gos_num TEXT,
             last_notified_time INTEGER,
             created_at REAL
         )
     """)
+    try:
+        conn.execute("ALTER TABLE push_reminders ADD COLUMN vehid TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE push_reminders ADD COLUMN gos_num TEXT")
+    except Exception:
+        pass
     conn.commit()
     return conn
 
@@ -395,6 +405,8 @@ class PushReminderManager:
                         "stationName": str(r["station_name"]),
                         "rid": str(r["rid"]),
                         "rnum": str(r["rnum"]),
+                        "vehid": str(r["vehid"] or "") if "vehid" in r.keys() else "",
+                        "gosNum": str(r["gos_num"] or "") if "gos_num" in r.keys() else "",
                         "lastNotifiedTime": r["last_notified_time"],
                         "created_at": float(r["created_at"] or 0)
                     }
@@ -410,7 +422,9 @@ class PushReminderManager:
         endpoint = sub.get("endpoint")
         sid = str(data.get("sid", ""))
         rid = str(data.get("rid", ""))
-        rem_key = f"{endpoint}_{sid}_{rid}"
+        vehid = str(data.get("vehid", ""))
+        gos_num = str(data.get("gosNum", ""))
+        rem_key = f"{endpoint}_{sid}_{rid}_{vehid}" if vehid else f"{endpoint}_{sid}_{rid}"
 
         init_time = data.get("initialTime")
         init_num = None
@@ -424,8 +438,8 @@ class PushReminderManager:
             with get_reminders_db() as conn:
                 conn.execute("""
                     INSERT OR REPLACE INTO push_reminders 
-                    (rem_key, subscription_json, sid, station_name, rid, rnum, last_notified_time, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (rem_key, subscription_json, sid, station_name, rid, rnum, vehid, gos_num, last_notified_time, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     rem_key,
                     json.dumps(sub),
@@ -433,21 +447,23 @@ class PushReminderManager:
                     str(data.get("stationName", "Остановка")),
                     rid,
                     str(data.get("rnum", "Транспорт")),
+                    vehid,
+                    gos_num,
                     init_num,
                     time.time()
                 ))
                 conn.commit()
-            logger.info("Saved persistent push reminder: %s for %s (%s) initial: %s", rem_key, data.get("rnum"), data.get("stationName"), init_num)
+            logger.info("Saved persistent push reminder: %s for %s (%s) vehid:%s gosNum:%s initial:%s", rem_key, data.get("rnum"), data.get("stationName"), vehid, gos_num, init_num)
             return True
         except Exception as e:
             logger.error("Failed to save reminder to DB: %s", e)
             return False
 
-    def remove_reminder(self, endpoint: str, sid: str, rid: str):
-        rem_key = f"{endpoint}_{sid}_{rid}"
+    def remove_reminder(self, endpoint: str, sid: str, rid: str, vehid: str = ""):
+        rem_key = f"{endpoint}_{sid}_{rid}_{vehid}" if vehid else f"{endpoint}_{sid}_{rid}"
         try:
             with get_reminders_db() as conn:
-                conn.execute("DELETE FROM push_reminders WHERE rem_key = ?", (rem_key,))
+                conn.execute("DELETE FROM push_reminders WHERE rem_key = ? OR rem_key = ?", (rem_key, f"{endpoint}_{sid}_{rid}"))
                 conn.commit()
         except Exception as e:
             logger.error("Failed to remove reminder from DB: %s", e)
@@ -566,23 +582,32 @@ class PushReminderManager:
                         continue
 
                     rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
-                    matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
+                    rem_vehid = str(rem.get("vehid", "")).strip()
+
+                    matching_fc = None
+                    if rem_vehid:
+                        matching_fc = next((f for f in forecasts if str(f.get("vehid", "")).strip() == rem_vehid), None)
+                    if not matching_fc:
+                        matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
+
+                    rnum = rem.get("rnum", "")
+                    gos_num = rem.get("gosNum", "")
+                    gos_label = f" ({gos_num})" if gos_num else ""
+                    stname = rem.get("stationName", "")
+                    sub = rem.get("subscription")
 
                     if not matching_fc:
                         # If the bus was close (<= 3 min) and now disappeared from forecast list, it has arrived!
                         if rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 3:
-                            rnum = rem.get("rnum", "")
-                            stname = rem.get("stationName", "")
-                            sub = rem.get("subscription")
                             pending_pushes.append({
                                 "sub": sub,
-                                "title": f"🚌 Маршрут {rnum} прибыл!",
+                                "title": f"🚌 Маршрут {rnum}{gos_label} прибыл!",
                                 "body": f"Остановка «{stname}»",
                                 "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],
                                 "rid": rem["rid"]
                             })
-                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
                         continue
 
                     raw_t = matching_fc.get("time")
@@ -596,18 +621,15 @@ class PushReminderManager:
                     # If the bus was close (<= 3 min) and the forecast time suddenly jumps up by >= 3 min,
                     # the tracked vehicle has arrived and upstream is now showing the NEXT vehicle behind it!
                     if last is not None and last <= 3 and cur_time >= last + 3:
-                        rnum = rem.get("rnum", "")
-                        stname = rem.get("stationName", "")
-                        sub = rem.get("subscription")
                         pending_pushes.append({
                             "sub": sub,
-                            "title": f"🚌 Маршрут {rnum} прибыл!",
+                            "title": f"🚌 Маршрут {rnum}{gos_label} прибыл!",
                             "body": f"Остановка «{stname}»",
                             "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                             "sid": rem["sid"],
                             "rid": rem["rid"]
                         })
-                        self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                        self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
                         continue
 
                     should_fire = False
@@ -631,24 +653,21 @@ class PushReminderManager:
 
                     if should_fire:
                         self.update_last_notified(rem_key, cur_time)
-                        rnum = rem.get("rnum", "")
-                        stname = rem.get("stationName", "")
-                        sub = rem.get("subscription")
 
                         if cur_time <= 0:
                             pending_pushes.append({
                                 "sub": sub,
-                                "title": f"🚌 Маршрут {rnum} прибыл!",
+                                "title": f"🚌 Маршрут {rnum}{gos_label} прибыл!",
                                 "body": f"Остановка «{stname}»",
                                 "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],
                                 "rid": rem["rid"]
                             })
-                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
                         else:
                             pending_pushes.append({
                                 "sub": sub,
-                                "title": f"🚌 Маршрут {rnum} — {cur_time} мин",
+                                "title": f"🚌 Маршрут {rnum}{gos_label} — {cur_time} мин",
                                 "body": f"Остановка «{stname}» (прибытие через ~{cur_time} мин)",
                                 "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],
@@ -1103,7 +1122,15 @@ async def get_station_forecasts(sid: str = ""):
                     time_val = 0
                 rid = str(item.get("rid") or "")
                 dest = str(item.get("where") or "")
-                forecasts.append({"rid": rid, "time": time_val, "destination": dest})
+                veh_id = str(item.get("vehid") or item.get("vid") or item.get("id") or "")
+                gos_num = str(item.get("gosNum") or item.get("gos_num") or "")
+                forecasts.append({
+                    "rid": rid, 
+                    "time": time_val, 
+                    "destination": dest,
+                    "vehid": veh_id,
+                    "gosNum": gos_num
+                })
         result = {"forecasts": forecasts}
         set_in_cache(cache_key, result, CACHE_TTL_FORECASTS)
         return result
@@ -1142,7 +1169,8 @@ async def unsubscribe_reminder(request: Request):
         push_reminder_manager.remove_reminder(
             endpoint=str(body.get("endpoint", "")),
             sid=str(body.get("sid", "")),
-            rid=str(body.get("rid", ""))
+            rid=str(body.get("rid", "")),
+            vehid=str(body.get("vehid", ""))
         )
         return {"status": "ok", "message": "Unsubscribed from arrival push alerts"}
     except Exception as e:

@@ -665,7 +665,7 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
               dest = dest.replace("Авиазаво", "Авиазавод");
             }
 
-            const isRemActive = window.isArrivalReminderActive ? window.isArrivalReminderActive(safeId, f.rid) : false;
+            const isRemActive = window.isArrivalReminderActive ? window.isArrivalReminderActive(safeId, f.rid, f.vehid) : false;
 
             html += `<li style="display: flex; align-items: center; padding: 7px 0; border-bottom: 1px solid #f1f5f9;">
               <div style="width: 50px; flex-shrink: 0; display: flex; justify-content: center;">
@@ -675,9 +675,9 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
                 <div style="background-color: #f1f5f9; border-radius: 6px; display: flex; align-items: center; justify-content: center; height: 28px; width: 58px; font-size: 12px; font-weight: 600; color: #0f172a;">${escapeHtml(f.time)} мин.</div>
               </div>
               <div class="dest-wrapper" style="margin-left: 8px; flex-grow: 1; overflow: hidden; white-space: nowrap; position: relative; text-overflow: ellipsis;">
-                <div class="dest-text" style="display: inline-block; font-size: 13px; color: #0f172a;">${escapeHtml(dest)}</div>
+                <div class="dest-text" style="display: inline-block; font-size: 13px; color: #0f172a;">${escapeHtml(dest)}${f.gosNum ? ` <span style="font-size: 11px; color: #64748b; font-weight: 500;">(${escapeHtml(f.gosNum)})</span>` : ''}</div>
               </div>
-              <button class="forecast-alarm-btn ${isRemActive ? 'active' : ''}" data-sid="${safeId}" data-stname="${safeName}" data-rid="${f.rid}" data-rnum="${escapeHtml(rnum)}" data-time="${escapeHtml(f.time)}" title="${isRemActive ? 'Отключить напоминание' : 'Напомнить за 1 мин до прибытия'}">
+              <button class="forecast-alarm-btn ${isRemActive ? 'active' : ''}" data-sid="${safeId}" data-stname="${safeName}" data-rid="${f.rid}" data-rnum="${escapeHtml(rnum)}" data-time="${escapeHtml(f.time)}" data-vehid="${f.vehid || ''}" data-gosnum="${escapeHtml(f.gosNum || '')}" title="${isRemActive ? 'Отключить напоминание' : 'Напомнить за 1 мин до прибытия'}">
                 <span class="material-symbols-outlined" style="font-size: 18px;">${isRemActive ? 'notifications_active' : 'notifications'}</span>
               </button>
             </li>`;
@@ -693,8 +693,10 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
               const rid = btn.dataset.rid;
               const rnum = btn.dataset.rnum;
               const time = btn.dataset.time;
+              const vehid = btn.dataset.vehid || "";
+              const gosnum = btn.dataset.gosnum || "";
               if (window.toggleArrivalReminder) {
-                const nowActive = await window.toggleArrivalReminder(sid, stname, rid, rnum, time);
+                const nowActive = await window.toggleArrivalReminder(sid, stname, rid, rnum, time, vehid, gosnum);
                 btn.classList.toggle('active', nowActive);
                 btn.title = nowActive ? 'Отключить напоминание' : 'Напомнить за 1 мин до прибытия';
                 const icon = btn.querySelector('.material-symbols-outlined');
@@ -928,15 +930,18 @@ export default function App() {
         if (reg && reg.pushManager) {
           const sub = await reg.pushManager.getSubscription();
           if (sub) {
-            const sid = existing ? existing.sid : remId.split('_')[0];
-            const rid = existing ? existing.rid : remId.split('_')[1];
+            const parts = remId.split('_');
+            const sid = existing ? existing.sid : parts[0];
+            const rid = existing ? existing.rid : parts[1];
+            const vehid = existing ? (existing.vehid || "") : (parts[2] || "");
             apiFetch('/api/reminders/unsubscribe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 endpoint: sub.endpoint,
                 sid: String(sid),
-                rid: String(rid)
+                rid: String(rid),
+                vehid: String(vehid)
               })
             }).catch(() => {});
           }
@@ -952,8 +957,8 @@ export default function App() {
     setTimeout(() => setAlertToast(null), 3000);
   };
 
-  const toggleArrivalReminder = async (sid, stationName, rid, rnum, initialTime) => {
-    const remId = `${sid}_${rid}`;
+  const toggleArrivalReminder = async (sid, stationName, rid, rnum, initialTime, vehid = "", gosNum = "") => {
+    const remId = vehid ? `${sid}_${rid}_${vehid}` : `${sid}_${rid}`;
     const exists = remindersRef.current.some(r => r.id === remId && !r.triggered);
 
     // 1. If reminder is already active, cancel/unsubscribe immediately without running subscribe flow
@@ -1042,7 +1047,8 @@ export default function App() {
 
             // Local confirmation notification upon tapping bell
             if (reg.showNotification) {
-              reg.showNotification(`🔔 Маршрут ${rnum}: напоминание включено`, {
+              const gosLabel = gosNum ? ` (${gosNum})` : "";
+              reg.showNotification(`🔔 Маршрут ${rnum}${gosLabel}: напоминание включено`, {
                 body: `Остановка «${stationName}». Пришлем уведомления по графику!`,
                 tag: `arrival_${sid}_${rid}`,
                 data: { url: '/' }
@@ -1062,6 +1068,8 @@ export default function App() {
       stationName: String(stationName),
       rid: String(rid),
       rnum: String(rnum),
+      vehid: String(vehid || ""),
+      gosNum: String(gosNum || ""),
       createdAt: Date.now(),
       triggered: false,
       lastTime: initialTime || "",
@@ -1080,6 +1088,8 @@ export default function App() {
           stationName: String(stationName),
           rid: String(rid),
           rnum: String(rnum),
+          vehid: String(vehid || ""),
+          gosNum: String(gosNum || ""),
           initialTime: String(initialTime || "")
         })
       }).catch((e) => console.warn("Server push subscribe error:", e));
@@ -1106,9 +1116,11 @@ export default function App() {
 
   useEffect(() => {
     window.toggleArrivalReminder = toggleArrivalReminder;
-    window.isArrivalReminderActive = (sid, rid) => {
-      const remId = `${sid}_${rid}`;
-      return remindersRef.current.some(r => r.id === remId && !r.triggered);
+    window.isArrivalReminderActive = (sid, rid, vehid = "") => {
+      if (vehid) {
+        return remindersRef.current.some(r => r.id === `${sid}_${rid}_${vehid}` && !r.triggered);
+      }
+      return remindersRef.current.some(r => (r.id === `${sid}_${rid}` || r.id.startsWith(`${sid}_${rid}_`)) && !r.triggered);
     };
     return () => {
       delete window.toggleArrivalReminder;
@@ -1133,7 +1145,13 @@ export default function App() {
           const forecasts = data.forecasts || [];
 
           activeList.filter(r => r.sid === sid).forEach(rem => {
-            const match = forecasts.find(f => String(f.rid) === String(rem.rid));
+            let match = null;
+            if (rem.vehid) {
+              match = forecasts.find(f => String(f.vehid) === String(rem.vehid));
+            }
+            if (!match) {
+              match = forecasts.find(f => String(f.rid) === String(rem.rid));
+            }
             if (!match) {
               if (rem.lastNotifiedTime != null && rem.lastNotifiedTime <= 3) {
                 triggerArrivalPush(
