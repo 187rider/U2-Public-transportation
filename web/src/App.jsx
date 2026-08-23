@@ -4,7 +4,7 @@ import { Map as MapLibreMap, NavigationControl, GeolocateControl, Popup, Marker 
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./App.css";
 
-const API_SECRET = import.meta.env.VITE_API_SECRET || "";
+const API_SECRET = import.meta.env.VITE_API_SECRET || "REDACTED_SECRET";
 let rawBase = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 if (typeof window !== "undefined" && window.location.protocol === "https:" && rawBase.startsWith("http://")) {
   rawBase = "";
@@ -514,9 +514,6 @@ async function triggerArrivalPush(title, body, tag = 'arrival-alarm') {
 
   const options = {
     body: body,
-    tag: tag || 'arrival-alarm',
-    renotify: true,
-    requireInteraction: true,
     data: { url: '/' }
   };
 
@@ -918,51 +915,7 @@ export default function App() {
 
   const [alertToast, setAlertToast] = useState(null);
 
-  const cancelArrivalReminder = async (remId, rnum = "") => {
-    const existing = remindersRef.current.find(r => r.id === remId && !r.triggered);
-    setReminders(prev => prev.filter(r => r.id !== remId));
-
-    try {
-      if ('serviceWorker' in navigator) {
-        const reg = await navigator.serviceWorker.ready;
-        if (reg && reg.pushManager) {
-          const sub = await reg.pushManager.getSubscription();
-          if (sub) {
-            const sid = existing ? existing.sid : remId.split('_')[0];
-            const rid = existing ? existing.rid : remId.split('_')[1];
-            apiFetch('/api/reminders/unsubscribe', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                endpoint: sub.endpoint,
-                sid: String(sid),
-                rid: String(rid)
-              })
-            }).catch(() => {});
-          }
-        }
-      }
-    } catch {}
-
-    const displayRnum = rnum || (existing ? existing.rnum : "");
-    setAlertToast({
-      title: "Уведомление отменено",
-      body: displayRnum ? `Напоминание для маршрута ${displayRnum} снято.` : "Напоминание снято."
-    });
-    setTimeout(() => setAlertToast(null), 3000);
-  };
-
   const toggleArrivalReminder = async (sid, stationName, rid, rnum, initialTime) => {
-    const remId = `${sid}_${rid}`;
-    const exists = remindersRef.current.some(r => r.id === remId && !r.triggered);
-
-    // 1. If reminder is already active, cancel/unsubscribe immediately without running subscribe flow
-    if (exists) {
-      await cancelArrivalReminder(remId, rnum);
-      return false;
-    }
-
-    // 2. Setting a new reminder -> check permissions & subscribe
     let pushSub = null;
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 
@@ -1040,11 +993,10 @@ export default function App() {
               pushSub = existingSub;
             }
 
-            // Local confirmation notification upon tapping bell
+            // Immediately test local notification dispatch to verify device display engine
             if (reg.showNotification) {
               reg.showNotification(`🔔 Маршрут ${rnum}: напоминание включено`, {
                 body: `Остановка «${stationName}». Пришлем уведомления по графику!`,
-                tag: `arrival_${sid}_${rid}`,
                 data: { url: '/' }
               }).catch((e) => console.warn("Local notification error:", e));
             }
@@ -1055,53 +1007,87 @@ export default function App() {
       }
     }
 
-    const initialNum = parseInt(initialTime, 10);
-    const newRem = {
-      id: remId,
-      sid: String(sid),
-      stationName: String(stationName),
-      rid: String(rid),
-      rnum: String(rnum),
-      createdAt: Date.now(),
-      triggered: false,
-      lastTime: initialTime || "",
-      lastNotifiedTime: !isNaN(initialNum) ? initialNum : null
-    };
-    setReminders(prev => [...prev.filter(r => r.id !== remId), newRem]);
+    const remId = `${sid}_${rid}`;
+    const exists = remindersRef.current.some(r => r.id === remId && !r.triggered);
 
-    // Register with server to wake device when locked/asleep
-    if (pushSub) {
-      apiFetch('/api/reminders/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          subscription: pushSub.toJSON(),
-          sid: String(sid),
-          stationName: String(stationName),
-          rid: String(rid),
-          rnum: String(rnum),
-          initialTime: String(initialTime || "")
-        })
-      }).catch((e) => console.warn("Server push subscribe error:", e));
-    }
-
-    playArrivalChime();
-    const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
-
-    if (isIOS && !isStandalone) {
+    if (exists) {
+      setReminders(prev => prev.filter(r => r.id !== remId));
+      if (pushSub) {
+        apiFetch('/api/reminders/unsubscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            endpoint: pushSub.endpoint,
+            sid: String(sid),
+            rid: String(rid)
+          })
+        }).catch(() => {});
+      }
       setAlertToast({
-        title: `🔔 Напоминание включено!`,
-        body: `💡 На iPhone для показа на заблокированном экране добавьте на экран «Домой» (Поделиться ➔ На экран «Домой»).`
+        title: "Уведомление отменено",
+        body: `Напоминание для маршрута ${rnum} снято.`
       });
-      setTimeout(() => setAlertToast(null), 6000);
+      setTimeout(() => setAlertToast(null), 3000);
+      return false;
     } else {
-      setAlertToast({
-        title: `🔔 Напоминание установлено!`,
-        body: `Оповестим даже при заблокированном экране!`
-      });
-      setTimeout(() => setAlertToast(null), 4000);
+      const initialNum = parseInt(initialTime, 10);
+      const newRem = {
+        id: remId,
+        sid: String(sid),
+        stationName: String(stationName),
+        rid: String(rid),
+        rnum: String(rnum),
+        createdAt: Date.now(),
+        triggered: false,
+        lastTime: initialTime || "",
+        lastNotifiedTime: !isNaN(initialNum) ? initialNum : null
+      };
+      setReminders(prev => [...prev.filter(r => r.id !== remId), newRem]);
+
+      // Register with server to wake device when locked/asleep
+      if (pushSub) {
+        apiFetch('/api/reminders/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscription: pushSub.toJSON(),
+            sid: String(sid),
+            stationName: String(stationName),
+            rid: String(rid),
+            rnum: String(rnum),
+            initialTime: String(initialTime || "")
+          })
+        }).catch((e) => console.warn("Server push subscribe error:", e));
+
+        apiFetch('/api/reminders/test_push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscription: pushSub.toJSON(),
+            delay: 3
+          })
+        }).catch(() => {});
+      }
+
+      playArrivalChime();
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+      const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+
+      if (isIOS && !isStandalone) {
+        setAlertToast({
+          title: `🔔 Напоминание включено!`,
+          body: `💡 На iPhone для показа на заблокированном экране добавьте на экран «Домой» (Поделиться ➔ На экран «Домой»).`
+        });
+        setTimeout(() => setAlertToast(null), 6000);
+      } else {
+        setAlertToast({
+          title: `🔔 Напоминание установлено!`,
+          body: `Оповестим даже при заблокированном экране!`
+        });
+        setTimeout(() => setAlertToast(null), 4000);
+      }
+      return true;
     }
-    return true;
   };
 
   useEffect(() => {
@@ -1142,7 +1128,10 @@ export default function App() {
               if (curTime == null) return;
               rem.lastTime = match.time;
 
-              // Milestone notification logic (5m, 1m, arrival):
+              // Step notification logic:
+              // 1. If curTime <= 0 or arrives -> final push, reset/delete from memory
+              // 2. If curTime >= 10 -> push on every 5 min drop (e.g. 22 -> 17 -> 12 -> 7)
+              // 3. If curTime < 10 -> push on every 1 min drop (e.g. 7 -> 6 -> 5 -> 4 -> 3 -> 2 -> 1)
               let shouldFire = false;
               const last = rem.lastNotifiedTime;
 
@@ -1151,12 +1140,18 @@ export default function App() {
               } else if (last == null) {
                 // Initial baseline
                 rem.lastNotifiedTime = curTime;
-              } else if (curTime > last) {
-                rem.lastNotifiedTime = curTime;
-              } else if (last > 5 && curTime <= 5) {
-                shouldFire = true;
-              } else if (last > 1 && curTime <= 1) {
-                shouldFire = true;
+              } else if (last >= 10 && curTime >= 10) {
+                if (curTime <= last - 5) {
+                  shouldFire = true;
+                }
+              } else if (last >= 10 && curTime < 10) {
+                if (curTime <= last - 5 || curTime <= 9) {
+                  shouldFire = true;
+                }
+              } else if (curTime < 10) {
+                if (curTime <= last - 1) {
+                  shouldFire = true;
+                }
               }
 
               if (shouldFire) {
@@ -1167,7 +1162,7 @@ export default function App() {
                   triggerArrivalPush(
                     `🚌 Маршрут ${rem.rnum} прибыл!`,
                     `Остановка «${rem.stationName}»`,
-                    `arrival_${rem.sid}_${rem.rid}`
+                    rem.id
                   );
                   setAlertToast({
                     title: `🚌 Маршрут ${rem.rnum} прибыл!`,
@@ -1182,7 +1177,7 @@ export default function App() {
                   triggerArrivalPush(
                     `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
                     `Остановка «${rem.stationName}» (прибытие через ~${curTime} мин)`,
-                    `arrival_${rem.sid}_${rem.rid}`
+                    rem.id
                   );
                   setAlertToast({
                     title: `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
@@ -1852,25 +1847,9 @@ export default function App() {
   }, [routes]);
 
   // Fetch stations & routes & preload initial vehicle telemetry during splash screen
-  const fetchData = async (retryCount = 0) => {
+  const fetchData = async () => {
     setLoading(true);
-    if (retryCount === 0) setError(null);
-
-    // 1. Instant 0ms startup from local persistent cache
-    try {
-      const cachedSt = localStorage.getItem("cache_stations_v1");
-      const cachedRt = localStorage.getItem("cache_routes_v1");
-      if (cachedSt && cachedRt && stationsRef.current.length === 0) {
-        const parsedSt = JSON.parse(cachedSt);
-        const parsedRt = JSON.parse(cachedRt);
-        if (Array.isArray(parsedSt) && parsedSt.length > 0 && Array.isArray(parsedRt) && parsedRt.length > 0) {
-          setStations(parsedSt);
-          setRoutes(parsedRt);
-          setLoading(false);
-        }
-      }
-    } catch {}
-
+    setError(null);
     try {
       const [stRes, rtRes] = await Promise.all([
         apiFetch("/api/stations"),
@@ -1889,12 +1868,6 @@ export default function App() {
       const fetchedRoutes = rtData.routes || [];
       setStations(features);
       setRoutes(fetchedRoutes);
-      setError(null);
-
-      try {
-        localStorage.setItem("cache_stations_v1", JSON.stringify(features));
-        localStorage.setItem("cache_routes_v1", JSON.stringify(fetchedRoutes));
-      } catch {}
 
       let initialSelected = new Set();
       const saved = localStorage.getItem("pref_selectedRoutes");
@@ -1940,17 +1913,8 @@ export default function App() {
         setTimeout(() => setIsSplashMounted(false), 780);
       }, 500);
     } catch (err) {
-      console.warn("Transit data fetch attempt failed (attempt " + retryCount + "):", err);
-      if (retryCount < 3) {
-        // Silently retry in background (1s, 2s, 3s) before displaying error
-        setTimeout(() => {
-          fetchData(retryCount + 1);
-        }, 1200 * (retryCount + 1));
-        return;
-      }
-      if (!stationsRef.current || stationsRef.current.length === 0) {
-        setError("Не удалось загрузить данные. Проверьте, запущен ли FastAPI backend (main.py).");
-      }
+      console.error("Failed to load transit data:", err);
+      setError("Не удалось загрузить данные. Проверьте, запущен ли FastAPI backend (main.py).");
       setLoading(false);
       setIsSplashFading(true);
       setTimeout(() => setIsSplashMounted(false), 780);
@@ -3866,7 +3830,7 @@ export default function App() {
             <span>
               Напоминание: <strong>{reminders.filter(r => !r.triggered)[0].rnum}</strong> → {reminders.filter(r => !r.triggered)[0].stationName} {reminders.filter(r => !r.triggered)[0].lastTime ? `(~${reminders.filter(r => !r.triggered)[0].lastTime} мин)` : ''}
             </span>
-            <button className="arrival-reminder-cancel-btn" onClick={() => cancelArrivalReminder(reminders.filter(r => !r.triggered)[0].id)} title="Отменить напоминание">
+            <button className="arrival-reminder-cancel-btn" onClick={() => setReminders(prev => prev.filter(r => r.id !== reminders.filter(r => !r.triggered)[0].id))} title="Отменить напоминание">
               <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>close</span>
             </button>
           </div>
