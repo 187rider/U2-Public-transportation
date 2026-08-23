@@ -427,13 +427,6 @@ class PushReminderManager:
 
         if not gos_num and vehid and vehid in vehicle_poller.vehicles:
             gos_num = str(vehicle_poller.vehicles[vehid].get("gosNum", ""))
-        if not gos_num and rid:
-            for v in vehicle_poller.vehicles.values():
-                if str(v.get("rid", "")).strip() == rid and v.get("gosNum"):
-                    gos_num = str(v.get("gosNum", ""))
-                    if not vehid:
-                        vehid = str(v.get("id", ""))
-                    break
 
         rem_key = f"{endpoint}_{sid}_{rid}_{vehid}" if vehid else f"{endpoint}_{sid}_{rid}"
 
@@ -1145,18 +1138,9 @@ async def get_station_forecasts(sid: str = ""):
                 veh_id = str(item.get("vehid") or item.get("vid") or item.get("id") or "")
                 gos_num = str(item.get("gosNum") or item.get("gos_num") or "")
 
-                # If upstream forecast didn't include gosNum, enrich from live vehicle tracker
+                # If upstream forecast didn't include gosNum, enrich only if exact veh_id is known
                 if not gos_num and veh_id and veh_id in vehicle_poller.vehicles:
                     gos_num = str(vehicle_poller.vehicles[veh_id].get("gosNum", ""))
-                
-                if not gos_num and rid:
-                    # Look up active vehicle running on this subroute
-                    for v in vehicle_poller.vehicles.values():
-                        if str(v.get("rid", "")).strip() == rid and v.get("gosNum"):
-                            gos_num = str(v.get("gosNum", ""))
-                            if not veh_id:
-                                veh_id = str(v.get("id", ""))
-                            break
 
                 forecasts.append({
                     "rid": rid, 

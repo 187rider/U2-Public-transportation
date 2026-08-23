@@ -1890,10 +1890,25 @@ export default function App() {
     if (!Array.isArray(vehicleHistory) || vehicleHistory.length === 0) return [];
     const nowTime = Date.now();
     const decorated = vehicleHistory.map(item => {
-      const plate = formatGosNum(item.gosNum).toLowerCase();
-      const live = knownVehiclesRef.current[item.id] ||
-        Object.values(knownVehiclesRef.current).find(v =>
-          (plate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === plate));
+      const itemPlate = formatGosNum(item.gosNum).toLowerCase();
+      const itemRoute = String(item.route || '').trim().toLowerCase();
+      const live = (() => {
+        if (item.id && !String(item.id).includes('_') && knownVehiclesRef.current[item.id]) {
+          const directVeh = knownVehiclesRef.current[item.id];
+          const dRoute = String(directVeh.route || directVeh.rnum || '').trim().toLowerCase();
+          if (!itemRoute || dRoute === itemRoute) {
+            return directVeh;
+          }
+        }
+        return Object.values(knownVehiclesRef.current).find(v => {
+          const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+          if (itemRoute && vRoute && itemRoute !== vRoute) return false;
+          if (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) return true;
+          if (item.id && !String(item.id).includes('_') && v.id && String(v.id) === String(item.id)) return true;
+          if (item.rid && v.rid && String(item.rid) === String(v.rid)) return true;
+          return false;
+        }) || null;
+      })();
       const activeRem = getActiveReminderForVehicle(item, live);
       const isLive = !!live && (nowTime - (live._lastSeen || 0) < 60000);
       return { item, hasNotify: !!activeRem, isLive };
@@ -4302,11 +4317,24 @@ export default function App() {
                     <div className="history-list">
                       {sortedVehicleHistory.map((item) => {
                         const itemPlate = formatGosNum(item.gosNum).toLowerCase();
-                        const live = knownVehiclesRef.current[item.id] ||
-                          Object.values(knownVehiclesRef.current).find(v => 
-                            (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) ||
-                            (v.id && item.id && String(v.id) === String(item.id))
-                          );
+                        const itemRoute = String(item.route || '').trim().toLowerCase();
+                        const live = (() => {
+                          if (item.id && !String(item.id).includes('_') && knownVehiclesRef.current[item.id]) {
+                            const directVeh = knownVehiclesRef.current[item.id];
+                            const dRoute = String(directVeh.route || directVeh.rnum || '').trim().toLowerCase();
+                            if (!itemRoute || dRoute === itemRoute) {
+                              return directVeh;
+                            }
+                          }
+                          return Object.values(knownVehiclesRef.current).find(v => {
+                            const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+                            if (itemRoute && vRoute && itemRoute !== vRoute) return false;
+                            if (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) return true;
+                            if (item.id && !String(item.id).includes('_') && v.id && String(v.id) === String(item.id)) return true;
+                            if (item.rid && v.rid && String(item.rid) === String(v.rid)) return true;
+                            return false;
+                          }) || null;
+                        })();
                         const isLiveOnMap = !!live && (Date.now() - (live._lastSeen || 0) < 60000);
                         const isSelected = selectedVehicle?.id === item.id || (live && selectedVehicle?.id === live.id);
                         const activeReminder = getActiveReminderForVehicle(item, live);
