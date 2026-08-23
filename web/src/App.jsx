@@ -1874,14 +1874,14 @@ export default function App() {
 
     const vId = String(item.id || (live && live.id) || "").trim();
     const vPlate = formatGosNum(item.gosNum || (live && live.gosNum) || "").toLowerCase().trim();
-    const vRoute = String(item.route || (live && (live.route || live.rnum)) || "").trim().toLowerCase();
-    const vRid = String(item.rid || (live && live.rid) || "").trim();
 
     return activeRems.find(r => {
+      // 1. Exact Reminder ID match
+      if (item.id && (item.id === r.id || item.id === `rem_${r.sid}_${r.rid}_${r.rnum}`)) return true;
+      // 2. Exact Vehicle ID match
       if (r.vehid && vId && String(r.vehid).trim() === vId) return true;
+      // 3. Exact License Plate / Board Number match
       if (r.gosNum && vPlate && formatGosNum(r.gosNum).toLowerCase().trim() === vPlate) return true;
-      if (r.rid && vRid && String(r.rid).trim() === vRid) return true;
-      if (r.rnum && vRoute && String(r.rnum).trim().toLowerCase() === vRoute) return true;
       return false;
     }) || null;
   }, [reminders]);
