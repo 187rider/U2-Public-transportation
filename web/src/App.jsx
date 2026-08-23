@@ -1861,9 +1861,25 @@ export default function App() {
   }, [routes]);
 
   // Fetch stations & routes & preload initial vehicle telemetry during splash screen
-  const fetchData = async () => {
+  const fetchData = async (retryCount = 0) => {
     setLoading(true);
-    setError(null);
+    if (retryCount === 0) setError(null);
+
+    // 1. Instant 0ms startup from local persistent cache
+    try {
+      const cachedSt = localStorage.getItem("cache_stations_v1");
+      const cachedRt = localStorage.getItem("cache_routes_v1");
+      if (cachedSt && cachedRt && stationsRef.current.length === 0) {
+        const parsedSt = JSON.parse(cachedSt);
+        const parsedRt = JSON.parse(cachedRt);
+        if (Array.isArray(parsedSt) && parsedSt.length > 0 && Array.isArray(parsedRt) && parsedRt.length > 0) {
+          setStations(parsedSt);
+          setRoutes(parsedRt);
+          setLoading(false);
+        }
+      }
+    } catch {}
+
     try {
       const [stRes, rtRes] = await Promise.all([
         apiFetch("/api/stations"),
@@ -1882,6 +1898,12 @@ export default function App() {
       const fetchedRoutes = rtData.routes || [];
       setStations(features);
       setRoutes(fetchedRoutes);
+      setError(null);
+
+      try {
+        localStorage.setItem("cache_stations_v1", JSON.stringify(features));
+        localStorage.setItem("cache_routes_v1", JSON.stringify(fetchedRoutes));
+      } catch {}
 
       let initialSelected = new Set();
       const saved = localStorage.getItem("pref_selectedRoutes");
@@ -1927,8 +1949,17 @@ export default function App() {
         setTimeout(() => setIsSplashMounted(false), 780);
       }, 500);
     } catch (err) {
-      console.error("Failed to load transit data:", err);
-      setError("Не удалось загрузить данные. Проверьте, запущен ли FastAPI backend (main.py).");
+      console.warn("Transit data fetch attempt failed (attempt " + retryCount + "):", err);
+      if (retryCount < 3) {
+        // Silently retry in background (1s, 2s, 3s) before displaying error
+        setTimeout(() => {
+          fetchData(retryCount + 1);
+        }, 1200 * (retryCount + 1));
+        return;
+      }
+      if (!stationsRef.current || stationsRef.current.length === 0) {
+        setError("Не удалось загрузить данные. Проверьте, запущен ли FastAPI backend (main.py).");
+      }
       setLoading(false);
       setIsSplashFading(true);
       setTimeout(() => setIsSplashMounted(false), 780);
