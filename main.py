@@ -467,7 +467,6 @@ class PushReminderManager:
             "title": title,
             "body": body,
             "icon": "/apple-touch-icon.png",
-            "badge": "/favicon.svg",
             "tag": tag,
             "url": "/"
         }
