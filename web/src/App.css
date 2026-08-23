@@ -1426,6 +1426,28 @@ body {
   border-color: #a7f3d0;
 }
 
+.hud-notify-status-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
+  padding: 4px 10px;
+  border-radius: 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(245, 158, 11, 0.15);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.hud-notify-status-btn:hover {
+  background: #fde68a;
+  border-color: #f59e0b;
+  color: #92400e;
+}
+
 /* Compact 1-line Top Pill when any bottom drawer tab is open */
 .selected-vehicle-hud.compact {
   top: max(calc(env(safe-area-inset-top, 0px) + 8px), 48px);

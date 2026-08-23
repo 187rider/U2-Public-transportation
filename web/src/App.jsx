@@ -4000,10 +4000,132 @@ export default function App() {
           </div>
         )}
 
+        {/* Active Arrival Reminder Topbar HUD (when notification is active and no manual vehicle tracking is selected) */}
+        {!selectedVehicle && (() => {
+          const activeRem = reminders.find(r => !r.triggered);
+          if (!activeRem) return null;
+
+          const remPlate = formatGosNum(activeRem.gosNum).toLowerCase();
+          const remRoute = String(activeRem.rnum || '').trim().toLowerCase();
+
+          const liveVeh = (activeRem.vehid && knownVehiclesRef.current[activeRem.vehid]) ||
+            Object.values(knownVehiclesRef.current).find(v => {
+              const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+              if (remRoute && vRoute && remRoute !== vRoute) return false;
+              if (remPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === remPlate) return true;
+              if (activeRem.vehid && v.id && String(v.id) === String(activeRem.vehid)) return true;
+              if (activeRem.rid && v.rid && String(activeRem.rid) === String(v.rid)) return true;
+              return false;
+            });
+
+          const currentVehType = normalizeVehicleType(liveVeh?.type, activeRem.rnum);
+          const currentVehIcon = currentVehType === 'tram' ? 'tram' : (currentVehType === 'minibus' ? 'airport_shuttle' : 'directions_bus');
+
+          const displayPlate = activeRem.gosNum || liveVeh?.gosNum || "";
+          const remTime = activeRem.lastTime != null ? String(activeRem.lastTime) : "";
+
+          // Calculate progress percent
+          const remProgress = (() => {
+            if (liveVeh) {
+              if (typeof liveVeh.progress === "number" && !isNaN(liveVeh.progress)) {
+                return Math.min(100, Math.max(0, Math.round(liveVeh.progress)));
+              }
+            }
+            return null;
+          })();
+
+          return (
+            <div
+              className={`selected-vehicle-hud reminder-topbar-hud ${activeTab !== 0 ? 'compact' : ''}`}
+              onClick={() => {
+                if (liveVeh) {
+                  const targetRouteId = activeRem.rid || liveVeh.rid;
+                  if (targetRouteId) {
+                    setSelectedRoutes(prev => new Set(prev).add(targetRouteId));
+                  }
+                  closeAllStationPopups();
+                  setIsFollowingVehicle(true);
+                  isFollowingVehicleRef.current = true;
+                  setSelectedVehicle({
+                    rid: activeRem.rid || liveVeh.rid,
+                    id: liveVeh.id,
+                    gosNum: liveVeh.gosNum || activeRem.gosNum,
+                    route: activeRem.rnum || liveVeh.route,
+                    type: currentVehType,
+                    lat: liveVeh.lat,
+                    lng: liveVeh.lng
+                  });
+                  setActiveTab(0);
+                }
+              }}
+              style={{ cursor: liveVeh ? "pointer" : "default" }}
+            >
+              <div className="hud-top-row">
+                <div className="hud-vehicle-info">
+                  <div className={`hud-badge hud-badge-${currentVehType}`}>
+                    <span className="material-symbols-outlined" style={{ fontSize: "15px" }}>
+                      {currentVehIcon}
+                    </span>
+                    <span className="hud-route-num">{activeRem.rnum || 'Маршрут'}</span>
+                  </div>
+                  {displayPlate && (
+                    <span className="hud-gos-num">{formatGosNum(displayPlate)}</span>
+                  )}
+                  {remProgress != null && (
+                    <RouteProgressRing percent={remProgress} size={30} />
+                  )}
+                </div>
+
+                <div className="hud-actions" onClick={e => e.stopPropagation()}>
+                  <button
+                    className="hud-notify-status-btn"
+                    onClick={() => cancelArrivalReminder(activeRem.id, activeRem.rnum)}
+                    title="Напоминание активно (нажмите, чтобы отключить)"
+                  >
+                    <span className="material-symbols-outlined hud-btn-icon" style={{ fontSize: "15px", animation: "pulse-bell 1.5s infinite ease-in-out" }}>
+                      notifications_active
+                    </span>
+                    <span>Напоминание</span>
+                  </button>
+
+                  <button
+                    className="hud-close-btn"
+                    onClick={() => cancelArrivalReminder(activeRem.id, activeRem.rnum)}
+                    title="Отключить напоминание"
+                    aria-label="Отключить напоминание"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              <div className="hud-next-station-row">
+                <span className="material-symbols-outlined hud-next-icon" style={{ color: "#d97706" }}>
+                  place
+                </span>
+                <span className="hud-next-label">
+                  Остановка:
+                </span>
+                <div className="hud-next-name-wrapper" title={activeRem.stationName}>
+                  <span className={`hud-next-name ${activeRem.stationName && activeRem.stationName.length > 14 ? 'running-text' : ''}`}>
+                    {activeRem.stationName}
+                  </span>
+                </div>
+                {remTime !== "" && (
+                  <span className={`hud-next-time ${parseInt(remTime, 10) <= 0 ? 'arriving' : ''}`} style={{ background: "#fef3c7", color: "#b45309", borderColor: "#fde68a" }}>
+                    {parseInt(remTime, 10) <= 0 ? 'прибывает' : `~${remTime} мин`}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Selected Vehicle Tracking HUD */}
         {selectedVehicle && (() => {
           const currentVehType = normalizeVehicleType(selectedVehicle.type, selectedVehicle.route);
           const currentVehIcon = currentVehType === 'tram' ? 'tram' : (currentVehType === 'minibus' ? 'airport_shuttle' : 'directions_bus');
+          const activeRemForVeh = getActiveReminderForVehicle(selectedVehicle);
 
           return (
             <div className={`selected-vehicle-hud ${activeTab !== 0 ? 'compact' : ''}`}>
@@ -4022,6 +4144,20 @@ export default function App() {
                 </div>
 
                 <div className="hud-actions">
+                  {activeRemForVeh && (
+                    <button
+                      className="hud-notify-status-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        cancelArrivalReminder(activeRemForVeh.id, activeRemForVeh.rnum);
+                      }}
+                      title="Напоминание активно (нажмите, чтобы отключить)"
+                    >
+                      <span className="material-symbols-outlined hud-btn-icon" style={{ fontSize: "15px", animation: "pulse-bell 1.5s infinite ease-in-out" }}>
+                        notifications_active
+                      </span>
+                    </button>
+                  )}
                   <button
                     className={`hud-follow-btn ${isFollowingVehicle ? 'following' : 'paused'}`}
                     onClick={toggleFollowVehicle}
