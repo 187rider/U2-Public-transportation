@@ -1168,10 +1168,16 @@ export default function App() {
   useEffect(() => {
     window.toggleArrivalReminder = toggleArrivalReminder;
     window.isArrivalReminderActive = (sid, rid, vehid = "") => {
-      if (vehid) {
-        return remindersRef.current.some(r => r.id === `${sid}_${rid}_${vehid}` && !r.triggered);
-      }
-      return remindersRef.current.some(r => (r.id === `${sid}_${rid}` || r.id.startsWith(`${sid}_${rid}_`)) && !r.triggered);
+      return remindersRef.current.some(r => {
+        if (r.triggered) return false;
+        // Exact reminder ID match
+        if (vehid && r.id === `${sid}_${rid}_${vehid}`) return true;
+        // Exact vehicle ID match
+        if (vehid && r.vehid && String(r.vehid) === String(vehid)) return true;
+        // Only match sid+rid if no vehid was provided AND the reminder also has no vehid
+        if (!vehid && !r.vehid && r.id === `${sid}_${rid}`) return true;
+        return false;
+      });
     };
     return () => {
       delete window.toggleArrivalReminder;
