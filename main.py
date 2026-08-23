@@ -424,6 +424,17 @@ class PushReminderManager:
         rid = str(data.get("rid", ""))
         vehid = str(data.get("vehid", ""))
         gos_num = str(data.get("gosNum", ""))
+
+        if not gos_num and vehid and vehid in vehicle_poller.vehicles:
+            gos_num = str(vehicle_poller.vehicles[vehid].get("gosNum", ""))
+        if not gos_num and rid:
+            for v in vehicle_poller.vehicles.values():
+                if str(v.get("rid", "")).strip() == rid and v.get("gosNum"):
+                    gos_num = str(v.get("gosNum", ""))
+                    if not vehid:
+                        vehid = str(v.get("id", ""))
+                    break
+
         rem_key = f"{endpoint}_{sid}_{rid}_{vehid}" if vehid else f"{endpoint}_{sid}_{rid}"
 
         init_time = data.get("initialTime")
@@ -592,6 +603,15 @@ class PushReminderManager:
 
                     rnum = rem.get("rnum", "")
                     gos_num = rem.get("gosNum", "")
+                    if not gos_num and matching_fc and matching_fc.get("gosNum"):
+                        gos_num = str(matching_fc.get("gosNum", ""))
+                    if not gos_num and rem_vehid and rem_vehid in vehicle_poller.vehicles:
+                        gos_num = str(vehicle_poller.vehicles[rem_vehid].get("gosNum", ""))
+                    if not gos_num and rem.get("rid"):
+                        for v in vehicle_poller.vehicles.values():
+                            if str(v.get("rid", "")).strip() in rem_rids and v.get("gosNum"):
+                                gos_num = str(v.get("gosNum", ""))
+                                break
                     gos_label = f" ({gos_num})" if gos_num else ""
                     stname = rem.get("stationName", "")
                     sub = rem.get("subscription")
@@ -1124,6 +1144,20 @@ async def get_station_forecasts(sid: str = ""):
                 dest = str(item.get("where") or "")
                 veh_id = str(item.get("vehid") or item.get("vid") or item.get("id") or "")
                 gos_num = str(item.get("gosNum") or item.get("gos_num") or "")
+
+                # If upstream forecast didn't include gosNum, enrich from live vehicle tracker
+                if not gos_num and veh_id and veh_id in vehicle_poller.vehicles:
+                    gos_num = str(vehicle_poller.vehicles[veh_id].get("gosNum", ""))
+                
+                if not gos_num and rid:
+                    # Look up active vehicle running on this subroute
+                    for v in vehicle_poller.vehicles.values():
+                        if str(v.get("rid", "")).strip() == rid and v.get("gosNum"):
+                            gos_num = str(v.get("gosNum", ""))
+                            if not veh_id:
+                                veh_id = str(v.get("id", ""))
+                            break
+
                 forecasts.append({
                     "rid": rid, 
                     "time": time_val, 

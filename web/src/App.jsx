@@ -1152,15 +1152,21 @@ export default function App() {
             if (!match) {
               match = forecasts.find(f => String(f.rid) === String(rem.rid));
             }
+            if (match.gosNum && !rem.gosNum) {
+              rem.gosNum = match.gosNum;
+            }
+
+            const gosLabel = rem.gosNum ? ` (${rem.gosNum})` : "";
+
             if (!match) {
               if (rem.lastNotifiedTime != null && rem.lastNotifiedTime <= 3) {
                 triggerArrivalPush(
-                  `🚌 Маршрут ${rem.rnum} прибыл!`,
+                  `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
                   `Остановка «${rem.stationName}»`,
                   `arrival_${rem.sid}_${rem.rid}`
                 );
                 setAlertToast({
-                  title: `🚌 Маршрут ${rem.rnum} прибыл!`,
+                  title: `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
                   body: `Остановка «${rem.stationName}»`
                 });
                 setTimeout(() => setAlertToast(null), 8000);
@@ -1181,12 +1187,12 @@ export default function App() {
             // the tracked bus arrived and upstream is now showing the NEXT vehicle behind it
             if (last != null && last <= 3 && curTime >= last + 3) {
               triggerArrivalPush(
-                `🚌 Маршрут ${rem.rnum} прибыл!`,
+                `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
                 `Остановка «${rem.stationName}»`,
                 `arrival_${rem.sid}_${rem.rid}`
               );
               setAlertToast({
-                title: `🚌 Маршрут ${rem.rnum} прибыл!`,
+                title: `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
                 body: `Остановка «${rem.stationName}»`
               });
               setTimeout(() => setAlertToast(null), 8000);
@@ -1222,12 +1228,12 @@ export default function App() {
               if (curTime <= 0 || timeStr.includes("прибыв")) {
                 // Final arrival push & reset memory
                 triggerArrivalPush(
-                  `🚌 Маршрут ${rem.rnum} прибыл!`,
+                  `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
                   `Остановка «${rem.stationName}»`,
                   `arrival_${rem.sid}_${rem.rid}`
                 );
                 setAlertToast({
-                  title: `🚌 Маршрут ${rem.rnum} прибыл!`,
+                  title: `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
                   body: `Остановка «${rem.stationName}»`
                 });
                 setTimeout(() => setAlertToast(null), 8000);
@@ -1237,18 +1243,18 @@ export default function App() {
               } else {
                 // Step countdown push
                 triggerArrivalPush(
-                  `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
+                  `🚌 Маршрут ${rem.rnum}${gosLabel} — ${curTime} мин`,
                   `Остановка «${rem.stationName}» (прибытие через ~${curTime} мин)`,
                   `arrival_${rem.sid}_${rem.rid}`
                 );
                   setAlertToast({
-                    title: `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
+                    title: `🚌 Маршрут ${rem.rnum}${gosLabel} — ${curTime} мин`,
                     body: `Остановка «${rem.stationName}»`
                   });
                   setTimeout(() => setAlertToast(null), 4000);
 
                   // Update memory with latest notified timestamp
-                  setReminders(prev => prev.map(r => r.id === rem.id ? { ...r, lastTime: match.time, lastNotifiedTime: curTime } : r));
+                  setReminders(prev => prev.map(r => r.id === rem.id ? { ...r, lastTime: match.time, lastNotifiedTime: curTime, gosNum: rem.gosNum } : r));
                 }
               }
           });
@@ -3889,7 +3895,7 @@ export default function App() {
           <div className="arrival-reminder-bar">
             <span className="material-symbols-outlined" style={{ color: "#fbbf24", fontSize: "18px", animation: "pulse-bell 1.5s infinite ease-in-out" }}>notifications_active</span>
             <span>
-              Напоминание: <strong>{reminders.filter(r => !r.triggered)[0].rnum}</strong> → {reminders.filter(r => !r.triggered)[0].stationName} {reminders.filter(r => !r.triggered)[0].lastTime ? `(~${reminders.filter(r => !r.triggered)[0].lastTime} мин)` : ''}
+              Напоминание: <strong>{reminders.filter(r => !r.triggered)[0].rnum}{reminders.filter(r => !r.triggered)[0].gosNum ? ` (${reminders.filter(r => !r.triggered)[0].gosNum})` : ''}</strong> → {reminders.filter(r => !r.triggered)[0].stationName} {reminders.filter(r => !r.triggered)[0].lastTime ? `(~${reminders.filter(r => !r.triggered)[0].lastTime} мин)` : ''}
             </span>
             <button className="arrival-reminder-cancel-btn" onClick={() => cancelArrivalReminder(reminders.filter(r => !r.triggered)[0].id)} title="Отменить напоминание">
               <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>close</span>
