@@ -1134,65 +1134,95 @@ export default function App() {
 
           activeList.filter(r => r.sid === sid).forEach(rem => {
             const match = forecasts.find(f => String(f.rid) === String(rem.rid));
-            if (match) {
-              const timeNum = parseInt(match.time, 10);
-              const timeStr = String(match.time).toLowerCase();
-              const curTime = !isNaN(timeNum) ? timeNum : (timeStr.includes("прибыв") ? 0 : null);
+            if (!match) {
+              if (rem.lastNotifiedTime != null && rem.lastNotifiedTime <= 3) {
+                triggerArrivalPush(
+                  `🚌 Маршрут ${rem.rnum} прибыл!`,
+                  `Остановка «${rem.stationName}»`,
+                  `arrival_${rem.sid}_${rem.rid}`
+                );
+                setAlertToast({
+                  title: `🚌 Маршрут ${rem.rnum} прибыл!`,
+                  body: `Остановка «${rem.stationName}»`
+                });
+                setTimeout(() => setAlertToast(null), 8000);
+                setReminders(prev => prev.filter(r => r.id !== rem.id));
+              }
+              return;
+            }
 
-              if (curTime == null) return;
-              rem.lastTime = match.time;
+            const timeNum = parseInt(match.time, 10);
+            const timeStr = String(match.time).toLowerCase();
+            const curTime = !isNaN(timeNum) ? timeNum : (timeStr.includes("прибыв") ? 0 : null);
 
-              // Step notification logic:
-              // 1. If curTime <= 0 or arrives -> final push, reset/delete from memory
-              // 2. If curTime >= 10 -> push on every 5 min drop (e.g. 22 -> 17 -> 12 -> 7)
-              // 3. If curTime < 10 -> push on every 1 min drop (e.g. 7 -> 6 -> 5 -> 4 -> 3 -> 2 -> 1)
-              let shouldFire = false;
-              const last = rem.lastNotifiedTime;
+            if (curTime == null) return;
+            rem.lastTime = match.time;
+            const last = rem.lastNotifiedTime;
+
+            // If the bus was close (<= 3 min) and forecast time suddenly jumps by >= 3 min,
+            // the tracked bus arrived and upstream is now showing the NEXT vehicle behind it
+            if (last != null && last <= 3 && curTime >= last + 3) {
+              triggerArrivalPush(
+                `🚌 Маршрут ${rem.rnum} прибыл!`,
+                `Остановка «${rem.stationName}»`,
+                `arrival_${rem.sid}_${rem.rid}`
+              );
+              setAlertToast({
+                title: `🚌 Маршрут ${rem.rnum} прибыл!`,
+                body: `Остановка «${rem.stationName}»`
+              });
+              setTimeout(() => setAlertToast(null), 8000);
+              setReminders(prev => prev.filter(r => r.id !== rem.id));
+              return;
+            }
+
+            let shouldFire = false;
+
+            if (curTime <= 0 || timeStr.includes("прибыв")) {
+              shouldFire = true;
+            } else if (last == null) {
+              rem.lastNotifiedTime = curTime;
+            } else if (curTime > last) {
+              rem.lastNotifiedTime = curTime;
+            } else if (last >= 10 && curTime >= 10) {
+              if (curTime <= last - 5) {
+                shouldFire = true;
+              }
+            } else if (last >= 10 && curTime < 10) {
+              if (curTime <= last - 5 || curTime <= 9) {
+                shouldFire = true;
+              }
+            } else if (curTime < 10) {
+              if (curTime <= last - 1) {
+                shouldFire = true;
+              }
+            }
+
+            if (shouldFire) {
+              rem.lastNotifiedTime = curTime;
 
               if (curTime <= 0 || timeStr.includes("прибыв")) {
-                shouldFire = true;
-              } else if (last == null) {
-                // Initial baseline
-                rem.lastNotifiedTime = curTime;
-              } else if (last >= 10 && curTime >= 10) {
-                if (curTime <= last - 5) {
-                  shouldFire = true;
-                }
-              } else if (last >= 10 && curTime < 10) {
-                if (curTime <= last - 5 || curTime <= 9) {
-                  shouldFire = true;
-                }
-              } else if (curTime < 10) {
-                if (curTime <= last - 1) {
-                  shouldFire = true;
-                }
-              }
+                // Final arrival push & reset memory
+                triggerArrivalPush(
+                  `🚌 Маршрут ${rem.rnum} прибыл!`,
+                  `Остановка «${rem.stationName}»`,
+                  `arrival_${rem.sid}_${rem.rid}`
+                );
+                setAlertToast({
+                  title: `🚌 Маршрут ${rem.rnum} прибыл!`,
+                  body: `Остановка «${rem.stationName}»`
+                });
+                setTimeout(() => setAlertToast(null), 8000);
 
-              if (shouldFire) {
-                rem.lastNotifiedTime = curTime;
-
-                if (curTime <= 0 || timeStr.includes("прибыв")) {
-                  // Final arrival push & reset memory
-                  triggerArrivalPush(
-                    `🚌 Маршрут ${rem.rnum} прибыл!`,
-                    `Остановка «${rem.stationName}»`,
-                    `arrival_${rem.sid}_${rem.rid}`
-                  );
-                  setAlertToast({
-                    title: `🚌 Маршрут ${rem.rnum} прибыл!`,
-                    body: `Остановка «${rem.stationName}»`
-                  });
-                  setTimeout(() => setAlertToast(null), 8000);
-
-                  // Reset / remove from active reminders memory
-                  setReminders(prev => prev.filter(r => r.id !== rem.id));
-                } else {
-                  // Step countdown push
-                  triggerArrivalPush(
-                    `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
-                    `Остановка «${rem.stationName}» (прибытие через ~${curTime} мин)`,
-                    `arrival_${rem.sid}_${rem.rid}`
-                  );
+                // Reset / remove from active reminders memory
+                setReminders(prev => prev.filter(r => r.id !== rem.id));
+              } else {
+                // Step countdown push
+                triggerArrivalPush(
+                  `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
+                  `Остановка «${rem.stationName}» (прибытие через ~${curTime} мин)`,
+                  `arrival_${rem.sid}_${rem.rid}`
+                );
                   setAlertToast({
                     title: `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
                     body: `Остановка «${rem.stationName}»`
@@ -1203,7 +1233,6 @@ export default function App() {
                   setReminders(prev => prev.map(r => r.id === rem.id ? { ...r, lastTime: match.time, lastNotifiedTime: curTime } : r));
                 }
               }
-            }
           });
         } catch (err) {
           console.warn("Failed to check station forecast reminder:", err);

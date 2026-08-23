@@ -569,8 +569,8 @@ class PushReminderManager:
                     matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
 
                     if not matching_fc:
-                        # If the bus was close (<= 2 min) and now disappeared from forecast list, it has arrived!
-                        if rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 2:
+                        # If the bus was close (<= 3 min) and now disappeared from forecast list, it has arrived!
+                        if rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 3:
                             rnum = rem.get("rnum", "")
                             stname = rem.get("stationName", "")
                             sub = rem.get("subscription")
@@ -592,6 +592,24 @@ class PushReminderManager:
                         cur_time = 0
 
                     last = rem.get("lastNotifiedTime")
+
+                    # If the bus was close (<= 3 min) and the forecast time suddenly jumps up by >= 3 min,
+                    # the tracked vehicle has arrived and upstream is now showing the NEXT vehicle behind it!
+                    if last is not None and last <= 3 and cur_time >= last + 3:
+                        rnum = rem.get("rnum", "")
+                        stname = rem.get("stationName", "")
+                        sub = rem.get("subscription")
+                        pending_pushes.append({
+                            "sub": sub,
+                            "title": f"🚌 Маршрут {rnum} прибыл!",
+                            "body": f"Остановка «{stname}»",
+                            "tag": f"arrival_{rem['sid']}_{rem['rid']}",
+                            "sid": rem["sid"],
+                            "rid": rem["rid"]
+                        })
+                        self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                        continue
+
                     should_fire = False
 
                     if cur_time <= 0:
@@ -599,7 +617,7 @@ class PushReminderManager:
                     elif last is None:
                         self.update_last_notified(rem_key, cur_time)
                     elif cur_time > last:
-                        # If bus was delayed by traffic, update baseline
+                        # If bus was slightly delayed by traffic (<= 2 min drift), update baseline
                         self.update_last_notified(rem_key, cur_time)
                     elif last >= 10 and cur_time >= 10:
                         if cur_time <= last - 5:
