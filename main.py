@@ -483,15 +483,15 @@ class PushReminderManager:
                 "aud": aud
             }
 
+            # Standard WebPush Urgency header — web.push.apple.com translates this
+            # to apns-priority:10 internally. Do NOT add raw apns-* headers;
+            # Apple's gateway ignores them and may mis-classify the push as background.
             push_headers = {
-                "Urgency": "high",
-                "urgency": "high",
-                "apns-push-type": "alert",
-                "apns-priority": "10"
+                "Urgency": "high"
             }
 
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
+            resp = await loop.run_in_executor(
                 None,
                 lambda: webpush(
                     subscription_info=sub,
@@ -502,8 +502,11 @@ class PushReminderManager:
                     ttl=120
                 )
             )
-            logger.info("Sent background WebPush: %s - %s to %s", title, body, aud)
-            return True
+            status = getattr(resp, "status_code", 201)
+            logger.info("Sent background WebPush (HTTP %s): %s - %s to %s", status, title, body, aud)
+            if status == 410:
+                logger.warning("APNs subscription expired (410) — endpoint: %s", endpoint[:60])
+            return status < 300
         except Exception as e:
             logger.warning("WebPush send error (%s): %s", type(e).__name__, e)
             return False
