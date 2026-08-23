@@ -485,10 +485,11 @@ class PushReminderManager:
 
             push_headers = {
                 "Urgency": "high",
-                "urgency": "high",
-                "apns-push-type": "alert",
-                "apns-priority": "10"
+                "TTL": "120"
             }
+            if "apple.com" in endpoint:
+                push_headers["apns-push-type"] = "alert"
+                push_headers["apns-priority"] = "10"
 
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
