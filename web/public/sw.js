@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v16';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v17';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -160,9 +160,6 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('push', (event) => {
   let title = '🚌 Транспорт Улан-Удэ';
   let body = 'Обновление прибытия транспорта';
-  let tag = 'arrival-alarm';
-  let sid = '';
-  let rid = '';
   let url = '/';
 
   if (event.data) {
@@ -171,9 +168,6 @@ self.addEventListener('push', (event) => {
       if (data) {
         if (data.title) title = String(data.title);
         if (data.body) body = String(data.body);
-        if (data.tag) tag = String(data.tag);
-        if (data.sid) sid = String(data.sid);
-        if (data.rid) rid = String(data.rid);
         if (data.url) url = String(data.url);
       }
     } catch {
@@ -184,63 +178,16 @@ self.addEventListener('push', (event) => {
     }
   }
 
-  const isIOS = /iPad|iPhone|iPod/.test(self.navigator.userAgent) ||
-    (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
-
-  if (isIOS) {
-    // iOS WebKit: direct synchronous event.waitUntil with pure { body, data } options
-    event.waitUntil(
-      self.registration.showNotification(title, {
-        body: body,
-        data: { url: url }
-      }).catch((err) => {
-        console.error('iOS WebKit showNotification error:', err);
-      })
-    );
-    return;
-  }
-
-  const baseOptions = {
+  const options = {
     body: body,
-    tag: tag,
-    icon: '/apple-touch-icon.png',
     data: { url: url }
   };
 
-  async function handleAndroidPush() {
-    // Android / Chrome: Clean up previous route cards and use rich options
-    try {
-      if (sid && rid && typeof self.registration.getNotifications === 'function') {
-        const existing = await self.registration.getNotifications();
-        const prefix = `arrival_${sid}_${rid}`;
-        for (const notif of existing) {
-          if (notif.tag && notif.tag.startsWith(prefix) && notif.tag !== tag) {
-            try { notif.close(); } catch {}
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('Android getNotifications cleanup error:', e);
-    }
-
-    try {
-      const richOptions = {
-        ...baseOptions,
-        renotify: true,
-        vibrate: [300, 100, 300, 100, 400]
-      };
-      await self.registration.showNotification(title, richOptions);
-    } catch (err) {
-      console.warn('Rich showNotification failed, retrying base:', err);
-      try {
-        await self.registration.showNotification(title, baseOptions);
-      } catch (finalErr) {
-        console.error('Final showNotification error:', finalErr);
-      }
-    }
-  }
-
-  event.waitUntil(handleAndroidPush());
+  event.waitUntil(
+    self.registration.showNotification(title, options).catch((err) => {
+      console.error('showNotification failed:', err);
+    })
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {
