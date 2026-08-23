@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v7';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v8';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -161,8 +161,6 @@ self.addEventListener('push', (event) => {
   let title = '🚌 Транспорт Улан-Удэ';
   let body = 'Обновление прибытия транспорта';
   let tag = 'arrival-alarm';
-  let icon = '/apple-touch-icon.png';
-  let badge = '/favicon.svg';
   let url = '/';
 
   if (event.data) {
@@ -172,8 +170,6 @@ self.addEventListener('push', (event) => {
         if (data.title) title = String(data.title);
         if (data.body) body = String(data.body);
         if (data.tag) tag = String(data.tag);
-        if (data.icon) icon = String(data.icon);
-        if (data.badge) badge = String(data.badge);
         if (data.url) url = String(data.url);
       }
     } catch {
@@ -187,13 +183,18 @@ self.addEventListener('push', (event) => {
   const options = {
     body: body,
     tag: tag,
-    icon: icon,
-    badge: badge,
+    icon: '/apple-touch-icon.png',
     data: { url: url }
   };
 
   event.waitUntil(
-    self.registration.showNotification(title, options)
+    self.registration.showNotification(title, options).catch((err) => {
+      console.warn('showNotification with options failed, retrying minimal:', err);
+      return self.registration.showNotification(title, {
+        body: body,
+        data: { url: url }
+      });
+    })
   );
 });
 
