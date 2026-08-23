@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v11';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v12';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -184,37 +184,48 @@ self.addEventListener('push', (event) => {
     }
   }
 
-  const options = {
+  const baseOptions = {
     body: body,
     tag: tag,
     icon: '/apple-touch-icon.png',
-    renotify: true,
-    requireInteraction: true,
-    vibrate: [300, 100, 300, 100, 400],
     data: { url: url }
   };
 
-  event.waitUntil(
-    self.registration.getNotifications().then((existingNotifications) => {
-      // Close previous notifications for the same route to prevent stacking
-      if (sid && rid) {
+  async function handlePush() {
+    // 1. If getNotifications is supported (Android/Chrome), close previous step cards for this route
+    if (typeof self.registration.getNotifications === 'function' && sid && rid) {
+      try {
+        const existing = await self.registration.getNotifications();
         const prefix = `arrival_${sid}_${rid}`;
-        for (const notif of existingNotifications) {
+        for (const notif of existing) {
           if (notif.tag && notif.tag.startsWith(prefix) && notif.tag !== tag) {
             try { notif.close(); } catch {}
           }
         }
+      } catch (e) {
+        console.warn('getNotifications cleanup error:', e);
       }
-      return self.registration.showNotification(title, options);
-    }).catch((err) => {
-      console.warn('showNotification failed, retrying minimal:', err);
-      return self.registration.showNotification(title, {
-        body: body,
-        tag: tag,
-        data: { url: url }
-      });
-    })
-  );
+    }
+
+    // 2. Try rich notification first, fallback to minimal safe if browser rejects optional properties
+    try {
+      const richOptions = {
+        ...baseOptions,
+        renotify: true,
+        vibrate: [300, 100, 300, 100, 400]
+      };
+      await self.registration.showNotification(title, richOptions);
+    } catch (err) {
+      console.warn('Rich showNotification failed, retrying base:', err);
+      try {
+        await self.registration.showNotification(title, baseOptions);
+      } catch (finalErr) {
+        console.error('Final showNotification error:', finalErr);
+      }
+    }
+  }
+
+  event.waitUntil(handlePush());
 });
 
 self.addEventListener('notificationclick', (event) => {
