@@ -379,6 +379,14 @@ init_reminders_db()
 class PushReminderManager:
     def __init__(self):
         self._running = False
+        # Clear all persisted reminders on startup — reminders must be re-set by the client
+        try:
+            with sqlite3.connect(DB_REMINDERS_FILE) as conn:
+                conn.execute("DELETE FROM push_reminders")
+                conn.commit()
+            logger.info("Cleared all push reminders on startup")
+        except Exception as e:
+            logger.warning("Could not clear reminders DB on startup: %s", e)
 
     def get_all_reminders(self) -> dict[str, dict]:
         try:
