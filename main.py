@@ -484,17 +484,22 @@ class PushReminderManager:
                 "aud": aud
             }
 
+            is_apple = "apple.com" in endpoint.lower()
             clean_tag = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
+
             push_headers = {
-                "Urgency": "high",
-                "urgency": "high"
+                "Urgency": "high"
             }
-            if clean_tag:
-                push_headers["Topic"] = clean_tag
-                push_headers["topic"] = clean_tag
-            if "apple.com" in endpoint:
+            if is_apple:
                 push_headers["apns-push-type"] = "alert"
                 push_headers["apns-priority"] = "10"
+                if clean_tag:
+                    push_headers["apns-collapse-id"] = clean_tag
+            else:
+                if clean_tag:
+                    push_headers["Topic"] = clean_tag
+
+            ttl_val = 120
 
             loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(
@@ -505,7 +510,7 @@ class PushReminderManager:
                     vapid_private_key=VAPID_KEY_FILE,
                     vapid_claims=fresh_claims,
                     headers=push_headers,
-                    ttl=0
+                    ttl=ttl_val
                 )
             )
             status = getattr(resp, "status_code", 200)

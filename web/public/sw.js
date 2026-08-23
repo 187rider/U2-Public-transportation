@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v12';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v13';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -192,9 +192,21 @@ self.addEventListener('push', (event) => {
   };
 
   async function handlePush() {
-    // 1. If getNotifications is supported (Android/Chrome), close previous step cards for this route
-    if (typeof self.registration.getNotifications === 'function' && sid && rid) {
+    const isWebKit = typeof self.registration.getNotifications !== 'function';
+
+    if (isWebKit) {
+      // iOS WebKit / Safari PWA: strictly safe standard options
       try {
+        await self.registration.showNotification(title, baseOptions);
+      } catch (err) {
+        console.error('iOS WebKit showNotification error:', err);
+      }
+      return;
+    }
+
+    // Android / Chrome: Clean up previous route cards and use rich options
+    try {
+      if (sid && rid) {
         const existing = await self.registration.getNotifications();
         const prefix = `arrival_${sid}_${rid}`;
         for (const notif of existing) {
@@ -202,12 +214,11 @@ self.addEventListener('push', (event) => {
             try { notif.close(); } catch {}
           }
         }
-      } catch (e) {
-        console.warn('getNotifications cleanup error:', e);
       }
+    } catch (e) {
+      console.warn('Android getNotifications cleanup error:', e);
     }
 
-    // 2. Try rich notification first, fallback to minimal safe if browser rejects optional properties
     try {
       const richOptions = {
         ...baseOptions,
