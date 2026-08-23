@@ -484,8 +484,7 @@ class PushReminderManager:
             }
 
             push_headers = {
-                "Urgency": "high",
-                "TTL": "120"
+                "Urgency": "high"
             }
             if "apple.com" in endpoint:
                 push_headers["apns-push-type"] = "alert"
