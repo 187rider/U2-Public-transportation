@@ -938,6 +938,8 @@ export default function App() {
   const setAlertToast = () => {}; // disabled – no black info messages
 
   const [activeReminderIdx, setActiveReminderIdx] = useState(0);
+  const [reminderLimitNotice, setReminderLimitNotice] = useState(false);
+  const reminderLimitTimerRef = useRef(null);
   const touchStartYRef = useRef(null);
   const touchStartXRef = useRef(null);
 
@@ -1089,7 +1091,17 @@ export default function App() {
       return false;
     }
 
-    // 2. Setting a new reminder -> check permissions & subscribe
+    // 2. Setting a new reminder -> check 3-reminder limit
+    const activeList = remindersRef.current.filter(r => !r.triggered);
+    if (activeList.length >= 3) {
+      setReminderLimitNotice(true);
+      if (reminderLimitTimerRef.current) clearTimeout(reminderLimitTimerRef.current);
+      reminderLimitTimerRef.current = setTimeout(() => {
+        setReminderLimitNotice(false);
+      }, 4000);
+      return false;
+    }
+
     let pushSub = null;
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 
@@ -4235,6 +4247,12 @@ export default function App() {
 
           return (
             <div className={`reminder-topbar-stack ${activeTab !== 0 ? 'compact' : ''}`}>
+              {reminderLimitNotice && (
+                <div className="reminder-limit-banner">
+                  <span className="material-symbols-outlined" style={{ fontSize: "16px", color: "#d97706" }}>warning</span>
+                  <span>Выбрано максимальное количество маршрутов</span>
+                </div>
+              )}
               <div
                 key={activeRem.id}
                 className={`selected-vehicle-hud reminder-topbar-hud swipe-card ${activeTab !== 0 ? 'compact' : ''}`}
@@ -4353,6 +4371,16 @@ export default function App() {
             </div>
           );
         })()}
+
+        {/* Standalone Limit Warning if 0 active reminders */}
+        {!selectedVehicle && reminders.filter(r => !r.triggered).length === 0 && reminderLimitNotice && (
+          <div className="reminder-topbar-stack" style={{ pointerEvents: "none" }}>
+            <div className="reminder-limit-banner">
+              <span className="material-symbols-outlined" style={{ fontSize: "16px", color: "#d97706" }}>warning</span>
+              <span>Выбрано максимальное количество маршрутов</span>
+            </div>
+          </div>
+        )}
 
         {/* Selected Vehicle Tracking HUD */}
         {selectedVehicle && (() => {
