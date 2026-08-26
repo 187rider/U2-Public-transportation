@@ -480,17 +480,47 @@ function closeAllStationPopups() {
 }
 
 // Web Audio Sound Effects: Cash Register "Cha-Ching!" for Final Arrival, Soft Chime for Countdowns
+let arrivalAudioInstance = null;
+let audioContextInstance = null;
+
+function initAudioOnUserGesture() {
+  try {
+    if (!audioContextInstance) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (AudioContext) {
+        audioContextInstance = new AudioContext();
+      }
+    }
+    if (audioContextInstance && audioContextInstance.state === 'suspended') {
+      audioContextInstance.resume();
+    }
+    if (!arrivalAudioInstance && typeof Audio !== 'undefined') {
+      arrivalAudioInstance = new Audio('/arrival-chaching.wav');
+      arrivalAudioInstance.preload = 'auto';
+      arrivalAudioInstance.load();
+    }
+  } catch {}
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('click', initAudioOnUserGesture, { passive: true });
+  window.addEventListener('touchstart', initAudioOnUserGesture, { passive: true });
+}
+
 function playChaChingSound() {
   try {
-    // 1. Try HTML5 audio file first
-    const audio = new Audio('/arrival-chaching.wav');
-    audio.volume = 0.9;
-    const playPromise = audio.play();
-    if (playPromise !== undefined) {
-      playPromise.catch(() => {
-        // Fallback to Web Audio synthesis if audio element is blocked
-        synthesizeChaChing();
-      });
+    initAudioOnUserGesture();
+    if (arrivalAudioInstance) {
+      arrivalAudioInstance.currentTime = 0;
+      const playPromise = arrivalAudioInstance.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.warn("WAV audio play blocked, falling back to WebAudio synth:", err);
+          synthesizeChaChing();
+        });
+      }
+    } else {
+      synthesizeChaChing();
     }
   } catch {
     synthesizeChaChing();
@@ -501,7 +531,7 @@ function synthesizeChaChing() {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
-    const ctx = new AudioContext();
+    const ctx = audioContextInstance || new AudioContext();
     if (ctx.state === 'suspended') ctx.resume();
     const now = ctx.currentTime;
 
@@ -556,7 +586,7 @@ function playSubtleStepChime() {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
-    const ctx = new AudioContext();
+    const ctx = audioContextInstance || new AudioContext();
     if (ctx.state === 'suspended') ctx.resume();
     const now = ctx.currentTime;
 

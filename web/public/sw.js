@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v57';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v58';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -9,7 +9,8 @@ const STATIC_ASSETS = [
   '/manifest.json',
   '/apple-touch-icon.png',
   '/icon-512.png',
-  '/ulan_ude.gif'
+  '/ulan_ude.gif',
+  '/arrival-chaching.wav'
 ];
 
 self.addEventListener('install', (event) => {
@@ -231,11 +232,13 @@ self.addEventListener('push', (event) => {
     }
 
     try {
+      const isArrival = tag.startsWith('arrival_') && (title.includes('прибыл') || title.includes('arrived'));
       const richOptions = {
         ...baseOptions,
         renotify: true,
-        requireInteraction: true,
-        vibrate: [300, 100, 300, 100, 400]
+        requireInteraction: isArrival,
+        vibrate: isArrival ? [300, 100, 300, 100, 400] : [150],
+        sound: isArrival ? '/arrival-chaching.wav' : undefined
       };
       await self.registration.showNotification(title, richOptions);
     } catch (err) {
