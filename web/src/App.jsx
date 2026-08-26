@@ -1098,22 +1098,25 @@ export default function App() {
     setReminders(prev => [...prev.filter(r => r.id !== remId), newRem]);
 
     // Ensure reminded vehicle is placed cleanly into vehicleHistory without duplicate cards
-    const targetVehId = vehid || (liveMatch ? String(liveMatch.id) : `${sid}_${rid}`);
+    // Use the real vehicle ID from live telemetry if available
+    const targetVehId = vehid || (liveMatch ? String(liveMatch.id) : null);
+    const targetPlate = gosNum || (liveMatch ? liveMatch.gosNum : "");
     const historyEntry = {
-      id: targetVehId,
+      id: targetVehId || `rem_${sid}_${rid}_${rnum}`,
       route: rnum,
-      gosNum: gosNum || (liveMatch ? liveMatch.gosNum : ""),
+      gosNum: targetPlate,
       type: vehType || (liveMatch ? liveMatch.type : "bus"),
       rid: rid,
       timestamp: Date.now()
     };
     setVehicleHistory(prev => {
       const existingList = Array.isArray(prev) ? prev : [];
-      // Clean up previous entries of the same vehicle, plate, or same route line
+      // Only remove entries that are the EXACT same vehicle (by ID or plate), NOT all vehicles on the route
       const filtered = existingList.filter(v => {
         if (targetVehId && String(v.id) === String(targetVehId)) return false;
-        if (gosNum && formatGosNum(v.gosNum).toLowerCase() === formatGosNum(gosNum).toLowerCase()) return false;
-        if (v.route && String(v.route).trim().toLowerCase() === String(rnum).trim().toLowerCase()) return false;
+        if (targetPlate && targetPlate.length > 2 && formatGosNum(v.gosNum).toLowerCase() === formatGosNum(targetPlate).toLowerCase()) return false;
+        // Also remove any previous reminder placeholder for the same reminder
+        if (v.id && String(v.id) === `rem_${sid}_${rid}_${rnum}`) return false;
         return true;
       });
       const updated = [historyEntry, ...filtered].slice(0, 9);
@@ -1934,7 +1937,6 @@ export default function App() {
           if (itemRoute && vRoute && itemRoute !== vRoute) return false;
           if (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) return true;
           if (item.id && !String(item.id).includes('_') && v.id && String(v.id) === String(item.id)) return true;
-          if (item.rid && v.rid && String(item.rid) === String(v.rid)) return true;
           return false;
         }) || null;
       })();
@@ -4527,7 +4529,6 @@ export default function App() {
                             if (itemRoute && vRoute && itemRoute !== vRoute) return false;
                             if (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) return true;
                             if (item.id && !String(item.id).includes('_') && v.id && String(v.id) === String(item.id)) return true;
-                            if (item.rid && v.rid && String(item.rid) === String(v.rid)) return true;
                             return false;
                           }) || null;
                         })();
