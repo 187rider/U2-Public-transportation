@@ -479,32 +479,23 @@ function closeAllStationPopups() {
   document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
 }
 
-// Web Audio Sound Effects: Cash Register "Cha-Ching!" for Final Arrival, Soft Chime for Countdowns
+// Sound Effect for Final Arrival (eBay sound)
 let arrivalAudioInstance = null;
-let audioContextInstance = null;
 
 function initAudioOnUserGesture() {
   try {
-    if (!audioContextInstance) {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      if (AudioContext) {
-        audioContextInstance = new AudioContext();
-      }
-    }
-    if (audioContextInstance && audioContextInstance.state === 'suspended') {
-      audioContextInstance.resume();
-    }
     if (!arrivalAudioInstance && typeof Audio !== 'undefined') {
       arrivalAudioInstance = new Audio('/arrival-chaching.wav');
       arrivalAudioInstance.preload = 'auto';
-      arrivalAudioInstance.load();
     }
-  } catch {}
+  } catch (e) {
+    console.warn("Audio init error:", e);
+  }
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('click', initAudioOnUserGesture, { passive: true });
-  window.addEventListener('touchstart', initAudioOnUserGesture, { passive: true });
+  window.addEventListener('click', initAudioOnUserGesture, { passive: true, once: true });
+  window.addEventListener('touchstart', initAudioOnUserGesture, { passive: true, once: true });
 }
 
 function playChaChingSound() {
@@ -512,96 +503,17 @@ function playChaChingSound() {
     initAudioOnUserGesture();
     if (arrivalAudioInstance) {
       arrivalAudioInstance.currentTime = 0;
-      const playPromise = arrivalAudioInstance.play();
-      if (playPromise !== undefined) {
-        playPromise.catch((err) => {
-          console.warn("WAV audio play blocked, falling back to WebAudio synth:", err);
-          synthesizeChaChing();
-        });
-      }
-    } else {
-      synthesizeChaChing();
+      arrivalAudioInstance.play().catch(e => {
+        console.warn("Could not play arrival sound:", e);
+      });
+    } else if (typeof Audio !== 'undefined') {
+      const audio = new Audio('/arrival-chaching.wav');
+      audio.play().catch(e => {
+        console.warn("Could not play arrival sound:", e);
+      });
     }
-  } catch {
-    synthesizeChaChing();
-  }
-}
-
-function synthesizeChaChing() {
-  try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
-    const ctx = audioContextInstance || new AudioContext();
-    if (ctx.state === 'suspended') ctx.resume();
-    const now = ctx.currentTime;
-
-    // "Cha" (Mechanical latch & drawer slide)
-    const clickOsc = ctx.createOscillator();
-    const clickGain = ctx.createGain();
-    clickOsc.type = 'triangle';
-    clickOsc.frequency.setValueAtTime(1400, now);
-    clickOsc.frequency.exponentialRampToValueAtTime(450, now + 0.07);
-    clickGain.gain.setValueAtTime(0.35, now);
-    clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
-    clickOsc.connect(clickGain);
-    clickGain.connect(ctx.destination);
-    clickOsc.start(now);
-    clickOsc.stop(now + 0.07);
-
-    const slideOsc = ctx.createOscillator();
-    const slideGain = ctx.createGain();
-    slideOsc.type = 'sawtooth';
-    slideOsc.frequency.setValueAtTime(750, now + 0.03);
-    slideOsc.frequency.exponentialRampToValueAtTime(2400, now + 0.09);
-    slideGain.gain.setValueAtTime(0.18, now + 0.03);
-    slideGain.gain.exponentialRampToValueAtTime(0.001, now + 0.095);
-    slideOsc.connect(slideGain);
-    slideGain.connect(ctx.destination);
-    slideOsc.start(now + 0.03);
-    slideOsc.stop(now + 0.095);
-
-    // "Ching!" (High-pitched silver bell ring)
-    const chingStart = now + 0.09;
-    const bellFreqs = [2093, 2637, 3136, 4186];
-    const bellGains = [0.32, 0.24, 0.16, 0.1];
-
-    bellFreqs.forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, chingStart);
-      gain.gain.setValueAtTime(bellGains[i], chingStart);
-      gain.gain.exponentialRampToValueAtTime(0.0001, chingStart + 0.85);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(chingStart);
-      osc.stop(chingStart + 0.85);
-    });
   } catch (e) {
-    console.warn("Audio synthesize error:", e);
-  }
-}
-
-function playSubtleStepChime() {
-  try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
-    const ctx = audioContextInstance || new AudioContext();
-    if (ctx.state === 'suspended') ctx.resume();
-    const now = ctx.currentTime;
-
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(784, now); // G5
-    gain.gain.setValueAtTime(0.18, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.25);
-  } catch (e) {
-    console.warn("Subtle chime error:", e);
+    console.warn("Audio playback error:", e);
   }
 }
 
@@ -613,7 +525,6 @@ async function triggerArrivalPush(title, body, tag = 'arrival-alarm', isFinalArr
       try { navigator.vibrate([300, 100, 300, 100, 450]); } catch {}
     }
   } else {
-    playSubtleStepChime();
     if ('vibrate' in navigator) {
       try { navigator.vibrate([120]); } catch {}
     }
@@ -631,6 +542,7 @@ async function triggerArrivalPush(title, body, tag = 'arrival-alarm', isFinalArr
     renotify: true,
     requireInteraction: isFinalArrival,
     vibrate: isFinalArrival ? [300, 100, 300, 100, 450] : [150],
+    sound: isFinalArrival ? '/arrival-chaching.wav' : undefined,
     data: { url: '/' }
   };
 
@@ -1346,7 +1258,7 @@ export default function App() {
       }).catch((e) => console.warn("Server push subscribe error:", e));
     }
 
-    playArrivalChime();
+    initAudioOnUserGesture();
     const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
 
     if (isIOS && !isStandalone) {
