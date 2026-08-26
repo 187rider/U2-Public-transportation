@@ -4164,7 +4164,26 @@ export default function App() {
               return candidates[0];
             })();
 
-          const currentVehType = normalizeVehicleType(liveVeh?.type || activeRem.type, activeRem.rnum);
+          const getReminderVehicleType = (rem) => {
+            if (!rem) return "bus";
+            if (rem.vehid && knownVehiclesRef.current[rem.vehid]?.type) {
+              return normalizeVehicleType(knownVehiclesRef.current[rem.vehid].type, rem.rnum);
+            }
+            const cleanRoute = String(rem.rnum || '').trim().toLowerCase();
+            const liveMatch = Object.values(knownVehiclesRef.current).find(v => {
+              const vr = String(v.route || v.rnum || '').trim().toLowerCase();
+              return vr && vr === cleanRoute;
+            });
+            if (liveMatch?.type) {
+              return normalizeVehicleType(liveMatch.type, rem.rnum);
+            }
+            if (rem.type) {
+              return normalizeVehicleType(rem.type, rem.rnum);
+            }
+            return normalizeVehicleType(null, rem.rnum);
+          };
+
+          const currentVehType = getReminderVehicleType(activeRem);
           const currentVehIcon = currentVehType === 'tram' ? 'tram' : (currentVehType === 'minibus' ? 'airport_shuttle' : 'directions_bus');
           const displayPlate = activeRem.gosNum || liveVeh?.gosNum || "";
           const remTime = activeRem.lastTime != null ? String(activeRem.lastTime) : "";
@@ -4243,18 +4262,18 @@ export default function App() {
                     {displayPlate && <span className="hud-gos-num">{formatGosNum(displayPlate)}</span>}
                   </div>
 
-                  {/* Multi-notification switcher pills */}
+                  {/* Multi-notification switcher pills: only other active reminders */}
                   {activeRems.length > 1 && (
                     <div className="hud-route-switcher" onClick={e => e.stopPropagation()}>
                       {activeRems.map((r, idx) => {
-                        const vt = normalizeVehicleType(r.type, r.rnum);
-                        const isCurrent = idx === currentIdx;
+                        if (idx === currentIdx) return null;
+                        const vt = getReminderVehicleType(r);
                         return (
                           <button
                             key={r.id}
-                            className={`hud-switcher-pill ${isCurrent ? 'active' : ''} hud-badge-${vt}`}
+                            className={`hud-switcher-pill hud-badge-${vt}`}
                             onClick={() => setActiveReminderIdx(idx)}
-                            title={`Маршрут ${r.rnum || ''}`}
+                            title={`Переключить на маршрут ${r.rnum || ''}`}
                           >
                             <span>{r.rnum}</span>
                           </button>
@@ -4265,9 +4284,13 @@ export default function App() {
                   )}
 
                   <div className="hud-actions" onClick={e => e.stopPropagation()}>
-                    <button className="hud-notify-status-btn" onClick={() => cancelArrivalReminder(activeRem.id, activeRem.rnum)} title="Отключить напоминание">
-                      <span className="material-symbols-outlined hud-btn-icon" style={{ fontSize: "15px", animation: "pulse-bell 1.5s infinite ease-in-out" }}>notifications_active</span>
-                      <span>Напоминание</span>
+                    <button
+                      className="hud-notify-status-btn"
+                      onClick={() => cancelArrivalReminder(activeRem.id, activeRem.rnum)}
+                      title="Отключить напоминание"
+                      style={{ padding: "5px 7px", borderRadius: "10px" }}
+                    >
+                      <span className="material-symbols-outlined hud-btn-icon" style={{ fontSize: "16px", animation: "pulse-bell 1.5s infinite ease-in-out" }}>notifications_active</span>
                     </button>
                     <button className="hud-close-btn" onClick={() => cancelArrivalReminder(activeRem.id, activeRem.rnum)} title="Отключить" aria-label="Отключить">✕</button>
                   </div>
