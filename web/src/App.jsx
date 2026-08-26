@@ -29,7 +29,6 @@ function escapeHtml(str) {
 
 /** Normalize raw vehicle types ("Т", "Тм", "М", "bus", "tram", "minibus") into canonical types */
 function normalizeVehicleType(type, route) {
-  if (!type && !route) return "bus";
   const t = String(type || "").toLowerCase().trim();
   const r = String(route || "").toLowerCase().trim();
   if (t === "tram" || t === "т" || t === "тм" || r.startsWith("т-") || r.startsWith("тм-") || t.includes("трамвай")) {
@@ -37,6 +36,19 @@ function normalizeVehicleType(type, route) {
   }
   if (t === "minibus" || t === "м" || t === "мк" || t.includes("маршрут") || t.includes("микро")) {
     return "minibus";
+  }
+  if (window._globalRoutes && Array.isArray(window._globalRoutes)) {
+    const matched = window._globalRoutes.find(item => String(item.number || item.rnum || "").trim().toLowerCase() === r);
+    if (matched && matched.type) {
+      const mt = String(matched.type).toLowerCase().trim();
+      if (mt === "tram" || mt === "т" || mt === "тм") return "tram";
+      if (mt === "minibus" || mt === "м") return "minibus";
+      return "bus";
+    }
+  }
+  const tramNumbers = new Set(["1", "2", "4", "7", "8"]);
+  if (tramNumbers.has(r) && (!t || t === "bus" || t === "tram")) {
+    return "tram";
   }
   return "bus";
 }
@@ -2114,6 +2126,7 @@ export default function App() {
         return f;
       });
       const fetchedRoutes = rtData.routes || [];
+      window._globalRoutes = fetchedRoutes;
       setStations(features);
       setRoutes(fetchedRoutes);
 
@@ -3035,6 +3048,34 @@ export default function App() {
 
     return nextIsFav;
   };
+
+  const openStationOnMap = useCallback((sid, stationName = "") => {
+    if (!map.current || !stations || stations.length === 0) return;
+    const cleanSid = String(sid || "").trim();
+    const cleanName = String(stationName || "").trim().toLowerCase();
+    const feat = stations.find(s => {
+      if (cleanSid && (String(s.id) === cleanSid || String(s.properties?.id) === cleanSid)) return true;
+      if (cleanName && s.properties?.name && s.properties.name.trim().toLowerCase() === cleanName) return true;
+      return false;
+    });
+    if (!feat || !feat.geometry || !Array.isArray(feat.geometry.coordinates)) return;
+    const coords = feat.geometry.coordinates;
+    closeAllStationPopups();
+    map.current.flyTo({
+      center: coords,
+      zoom: Math.max(map.current.getZoom(), 16),
+      essential: true
+    });
+    showStationPopup(
+      map.current,
+      coords,
+      feat.properties,
+      routesRef.current,
+      favoritesRef.current.has(feat.properties.id),
+      toggleFavorite
+    );
+    setActiveTab(0);
+  }, [stations, toggleFavorite]);
 
   // Update GeoJSON Source & Viewport Pill Markers on Data or Filter Changes
   useEffect(() => {
@@ -4150,7 +4191,14 @@ export default function App() {
                     <span className="hud-route-num">{activeRem.rnum || '?'}</span>
                   </div>
                   {displayPlate && <span className="hud-gos-num" style={{ fontSize: "11px" }}>{formatGosNum(displayPlate)}</span>}
-                  <span style={{ color: "#64748b", fontSize: "11px", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openStationOnMap(activeRem.sid, activeRem.stationName);
+                    }}
+                    style={{ color: "#64748b", fontSize: "11px", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}
+                    title="Показать остановку на карте"
+                  >
                     → {activeRem.stationName || ''}
                   </span>
                   {remTime !== "" && (
@@ -4172,7 +4220,7 @@ export default function App() {
             return (
               <div
                 key={activeRem.id}
-                className={`selected-vehicle-hud reminder-topbar-hud ${activeTab !== 0 ? 'compact' : ''}`}
+                className={`selected-vehicle-hud reminder-topbar-hud ${activeTab !== 0 ? 'compact' : ''} ${!isCompact && extraRems.length > 0 ? 'has-extra' : ''}`}
                 style={{ position: "relative", top: "auto", left: "auto", transform: "none", width: "100%" }}
                 onClick={() => {
                   if (liveVeh) {
@@ -4207,7 +4255,15 @@ export default function App() {
                     <button className="hud-close-btn" onClick={() => cancelArrivalReminder(activeRem.id, activeRem.rnum)} title="Отключить" aria-label="Отключить">✕</button>
                   </div>
                 </div>
-                <div className="hud-next-station-row">
+                <div
+                  className="hud-next-station-row"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openStationOnMap(activeRem.sid, activeRem.stationName);
+                  }}
+                  style={{ cursor: "pointer" }}
+                  title="Показать остановку на карте"
+                >
                   <span className="material-symbols-outlined hud-next-icon" style={{ color: "#d97706" }}>place</span>
                   <span className="hud-next-label">Остановка:</span>
                   <div className="hud-next-name-wrapper" title={activeRem.stationName}>
@@ -4235,7 +4291,7 @@ export default function App() {
               {/* "+N ещё" toggle row when 2+ reminders */}
               {extraRems.length > 0 && (
                 <div
-                  className="reminder-drop-toggle"
+                  className={`reminder-drop-toggle ${reminderDropOpen ? 'open' : ''}`}
                   onClick={e => { e.stopPropagation(); setReminderDropOpen(prev => !prev); }}
                 >
                   <span className="material-symbols-outlined" style={{ fontSize: "16px", transition: "transform 0.2s", transform: reminderDropOpen ? "rotate(180deg)" : "rotate(0deg)" }}>
@@ -4244,10 +4300,10 @@ export default function App() {
                   <span>ещё {extraRems.length}</span>
                   {/* Mini route badges preview */}
                   {!reminderDropOpen && extraRems.map(r => {
-                    const vt = normalizeVehicleType(null, r.rnum);
+                    const vt = normalizeVehicleType(r.type, r.rnum);
                     return (
                       <div key={r.id} className={`hud-badge hud-badge-${vt}`} style={{ padding: "1px 6px", fontSize: "11px", marginLeft: "4px" }}>
-                        <span className="hud-route-num" style={{ fontSize: "11px" }}>{r.rnum || '?'}</span>
+                        <span className="hud-route-num" style={{ fontSize: "11px", fontWeight: "700" }}>{r.rnum || '?'}</span>
                       </div>
                     );
                   })}
@@ -4324,7 +4380,17 @@ export default function App() {
               </div>
 
               {nextStationInfo && (
-                <div className="hud-next-station-row">
+                <div
+                  className="hud-next-station-row"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (nextStationInfo?.id || nextStationInfo?.name) {
+                      openStationOnMap(nextStationInfo.id, nextStationInfo.name);
+                    }
+                  }}
+                  style={{ cursor: (nextStationInfo?.id || nextStationInfo?.name) ? "pointer" : "default" }}
+                  title="Показать остановку на карте"
+                >
                   <span className="material-symbols-outlined hud-next-icon">
                     {nextStationInfo.isTerminal ? 'flag' : 'arrow_forward'}
                   </span>

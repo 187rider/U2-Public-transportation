@@ -1465,17 +1465,23 @@ body {
   }
 }
 
+.reminder-topbar-hud.has-extra {
+  border-bottom-left-radius: 4px !important;
+  border-bottom-right-radius: 4px !important;
+  border-bottom: 1px dashed rgba(245, 158, 11, 0.25) !important;
+}
+
 /* Reminder Dropdown Toggle Bar */
 .reminder-drop-toggle {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 5px 12px;
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-radius: 0 0 14px 14px;
+  padding: 6px 14px;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 0 0 16px 16px;
   border: 1px solid rgba(245, 158, 11, 0.25);
   border-top: none;
   cursor: pointer;
@@ -1484,8 +1490,14 @@ body {
   color: #b45309;
   user-select: none;
   -webkit-user-select: none;
-  transition: background 0.15s;
-  margin-top: -2px;
+  transition: all 0.15s ease;
+  margin-top: -1px;
+}
+
+.reminder-drop-toggle.open {
+  border-radius: 0;
+  background: rgba(254, 243, 199, 0.6);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.2);
 }
 
 .reminder-drop-toggle:active {
@@ -1496,16 +1508,16 @@ body {
 .reminder-drop-panel {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 6px;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-radius: 0 0 14px 14px;
-  border: 1px solid rgba(245, 158, 11, 0.2);
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 0 0 16px 16px;
+  border: 1px solid rgba(245, 158, 11, 0.25);
   border-top: none;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
-  margin-top: -2px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  margin-top: -1px;
   animation: dropSlideIn 0.2s ease-out;
 }
 
@@ -1519,7 +1531,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 6px 10px;
   border-radius: 10px;
   background: rgba(254, 243, 199, 0.35);
   cursor: pointer;
