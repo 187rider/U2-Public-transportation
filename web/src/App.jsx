@@ -479,35 +479,59 @@ function closeAllStationPopups() {
   document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
 }
 
-// Web Audio Chime for Arrival Alarm
+// Web Audio Cash Register "Cha-Ching!" Arrival Chime
 function playArrivalChime() {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
     const ctx = new AudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume();
+    }
     const now = ctx.currentTime;
 
-    const osc1 = ctx.createOscillator();
-    const gain1 = ctx.createGain();
-    osc1.type = 'sine';
-    osc1.frequency.setValueAtTime(659.25, now); // E5
-    gain1.gain.setValueAtTime(0.3, now);
-    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-    osc1.connect(gain1);
-    gain1.connect(ctx.destination);
-    osc1.start(now);
-    osc1.stop(now + 0.35);
+    // --- 1. "Cha" (Mechanical register drawer latch / spring slide) ---
+    const clickOsc = ctx.createOscillator();
+    const clickGain = ctx.createGain();
+    clickOsc.type = 'triangle';
+    clickOsc.frequency.setValueAtTime(1400, now);
+    clickOsc.frequency.exponentialRampToValueAtTime(450, now + 0.07);
+    clickGain.gain.setValueAtTime(0.35, now);
+    clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+    clickOsc.connect(clickGain);
+    clickGain.connect(ctx.destination);
+    clickOsc.start(now);
+    clickOsc.stop(now + 0.07);
 
-    const osc2 = ctx.createOscillator();
-    const gain2 = ctx.createGain();
-    osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(880.00, now + 0.16); // A5
-    gain2.gain.setValueAtTime(0.35, now + 0.16);
-    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
-    osc2.connect(gain2);
-    gain2.connect(ctx.destination);
-    osc2.start(now + 0.16);
-    osc2.stop(now + 0.55);
+    const slideOsc = ctx.createOscillator();
+    const slideGain = ctx.createGain();
+    slideOsc.type = 'sawtooth';
+    slideOsc.frequency.setValueAtTime(750, now + 0.03);
+    slideOsc.frequency.exponentialRampToValueAtTime(2400, now + 0.09);
+    slideGain.gain.setValueAtTime(0.18, now + 0.03);
+    slideGain.gain.exponentialRampToValueAtTime(0.001, now + 0.095);
+    slideOsc.connect(slideGain);
+    slideGain.connect(ctx.destination);
+    slideOsc.start(now + 0.03);
+    slideOsc.stop(now + 0.095);
+
+    // --- 2. "Ching!" (High-pitched sparkling silver bell chime) ---
+    const chingStart = now + 0.09;
+    const bellFreqs = [2093, 2637, 3136, 4186]; // C7, E7, G7, C8 harmonic chords
+    const bellGains = [0.32, 0.24, 0.16, 0.1];
+
+    bellFreqs.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, chingStart);
+      gain.gain.setValueAtTime(bellGains[i], chingStart);
+      gain.gain.exponentialRampToValueAtTime(0.0001, chingStart + 0.8);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(chingStart);
+      osc.stop(chingStart + 0.8);
+    });
   } catch (e) {
     console.warn("Audio chime error:", e);
   }
