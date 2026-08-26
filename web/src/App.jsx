@@ -934,6 +934,10 @@ export default function App() {
   const alertToast = null;
   const setAlertToast = () => {}; // disabled – no black info messages
 
+  const [activeReminderIdx, setActiveReminderIdx] = useState(0);
+  const touchStartYRef = useRef(null);
+  const touchStartXRef = useRef(null);
+
   const cancelArrivalReminder = async (remId, rnum = "") => {
     const existing = remindersRef.current.find(r => r.id === remId && !r.triggered);
     setReminders(prev => prev.filter(r => r.id !== remId));
@@ -4118,110 +4122,101 @@ export default function App() {
           const activeRems = reminders.filter(r => !r.triggered).slice(0, 3);
           if (activeRems.length === 0) return null;
 
-          const renderReminderCard = (activeRem, isCompact = false) => {
-            const remPlate = formatGosNum(activeRem.gosNum).toLowerCase();
-            const remRoute = String(activeRem.rnum || '').trim().toLowerCase();
-            const liveVeh = (activeRem.vehid && knownVehiclesRef.current[activeRem.vehid]) ||
-              Object.values(knownVehiclesRef.current).find(v => {
+          const currentIdx = Math.min(activeReminderIdx, activeRems.length - 1);
+          const activeRem = activeRems[currentIdx] || activeRems[0];
+
+          const remPlate = formatGosNum(activeRem.gosNum).toLowerCase();
+          const remRoute = String(activeRem.rnum || '').trim().toLowerCase();
+          const liveVeh = (activeRem.vehid && knownVehiclesRef.current[activeRem.vehid]) ||
+            Object.values(knownVehiclesRef.current).find(v => {
+              const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+              if (remRoute && vRoute && remRoute !== vRoute) return false;
+              if (remPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === remPlate) return true;
+              if (activeRem.vehid && v.id && String(v.id) === String(activeRem.vehid)) return true;
+              return false;
+            }) ||
+            (() => {
+              if (!remRoute && !activeRem.rid) return null;
+              const candidates = Object.values(knownVehiclesRef.current).filter(v => {
                 const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
-                if (remRoute && vRoute && remRoute !== vRoute) return false;
-                if (remPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === remPlate) return true;
-                if (activeRem.vehid && v.id && String(v.id) === String(activeRem.vehid)) return true;
+                if (remRoute && vRoute && remRoute === vRoute) return true;
+                if (activeRem.rid && v.rid && String(activeRem.rid) === String(v.rid)) return true;
                 return false;
-              }) ||
-              (() => {
-                if (!remRoute && !activeRem.rid) return null;
-                const candidates = Object.values(knownVehiclesRef.current).filter(v => {
-                  const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
-                  if (remRoute && vRoute && remRoute === vRoute) return true;
-                  if (activeRem.rid && v.rid && String(activeRem.rid) === String(v.rid)) return true;
-                  return false;
-                });
-                if (candidates.length === 0) return null;
-                if (candidates.length === 1) return candidates[0];
-                if (activeRem.sid && stations && stations.length > 0) {
-                  const st = stations.find(s => String(s.id) === String(activeRem.sid) || String(s.properties?.id) === String(activeRem.sid));
-                  if (st && st.geometry && Array.isArray(st.geometry.coordinates)) {
-                    const stLng = st.geometry.coordinates[0];
-                    const stLat = st.geometry.coordinates[1];
-                    const expectedDistKm = Math.max(0.5, (parseFloat(activeRem.lastTime || 5) / 60) * 25);
-                    const scored = candidates.map(v => {
-                      const dLat = (stLat - v.lat) * 111.32;
-                      const dLng = (stLng - v.lng) * (111.32 * Math.cos(stLat * Math.PI / 180));
-                      const distKm = Math.sqrt(dLat * dLat + dLng * dLng);
-                      return { v, score: Math.abs(distKm - expectedDistKm) };
-                    });
-                    scored.sort((a, b) => a.score - b.score);
-                    return scored[0].v;
-                  }
+              });
+              if (candidates.length === 0) return null;
+              if (candidates.length === 1) return candidates[0];
+              if (activeRem.sid && stations && stations.length > 0) {
+                const st = stations.find(s => String(s.id) === String(activeRem.sid) || String(s.properties?.id) === String(activeRem.sid));
+                if (st && st.geometry && Array.isArray(st.geometry.coordinates)) {
+                  const stLng = st.geometry.coordinates[0];
+                  const stLat = st.geometry.coordinates[1];
+                  const expectedDistKm = Math.max(0.5, (parseFloat(activeRem.lastTime || 5) / 60) * 25);
+                  const scored = candidates.map(v => {
+                    const dLat = (stLat - v.lat) * 111.32;
+                    const dLng = (stLng - v.lng) * (111.32 * Math.cos(stLat * Math.PI / 180));
+                    const distKm = Math.sqrt(dLat * dLat + dLng * dLng);
+                    return { v, score: Math.abs(distKm - expectedDistKm) };
+                  });
+                  scored.sort((a, b) => a.score - b.score);
+                  return scored[0].v;
                 }
-                return candidates[0];
-              })();
-            const currentVehType = normalizeVehicleType(liveVeh?.type, activeRem.rnum);
-            const currentVehIcon = currentVehType === 'tram' ? 'tram' : (currentVehType === 'minibus' ? 'airport_shuttle' : 'directions_bus');
-            const displayPlate = activeRem.gosNum || liveVeh?.gosNum || "";
-            const remTime = activeRem.lastTime != null ? String(activeRem.lastTime) : "";
+              }
+              return candidates[0];
+            })();
 
-            if (isCompact) {
-              // Compact single-row card for dropdown items
-              return (
-                <div
-                  key={activeRem.id}
-                  className="reminder-drop-item"
-                  onClick={() => {
-                    if (liveVeh) {
-                      const targetRouteId = activeRem.rid || liveVeh.rid;
-                      if (targetRouteId) setSelectedRoutes(prev => new Set(prev).add(targetRouteId));
-                      closeAllStationPopups();
-                      setIsFollowingVehicle(true);
-                      isFollowingVehicleRef.current = true;
-                      setSelectedVehicle({
-                        rid: activeRem.rid || liveVeh.rid, id: liveVeh.id,
-                        gosNum: liveVeh.gosNum || activeRem.gosNum,
-                        route: activeRem.rnum || liveVeh.route, type: currentVehType,
-                        lat: liveVeh.lat, lng: liveVeh.lng
-                      });
-                      setActiveTab(0);
-                      setReminderDropOpen(false);
-                    }
-                  }}
-                >
-                  <div className={`hud-badge hud-badge-${currentVehType}`} style={{ padding: "2px 8px", fontSize: "12px" }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: "14px" }}>{currentVehIcon}</span>
-                    <span className="hud-route-num">{activeRem.rnum || '?'}</span>
-                  </div>
-                  {displayPlate && <span className="hud-gos-num" style={{ fontSize: "11px" }}>{formatGosNum(displayPlate)}</span>}
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openStationOnMap(activeRem.sid, activeRem.stationName);
-                    }}
-                    style={{ color: "#64748b", fontSize: "11px", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}
-                    title="Показать остановку на карте"
-                  >
-                    → {activeRem.stationName || ''}
-                  </span>
-                  {remTime !== "" && (
-                    <span style={{ fontSize: "11px", fontWeight: 600, color: parseInt(remTime, 10) <= 0 ? "#dc2626" : "#b45309", whiteSpace: "nowrap" }}>
-                      {parseInt(remTime, 10) <= 0 ? 'прибывает' : `~${remTime} мин`}
-                    </span>
-                  )}
-                  <button
-                    className="hud-close-btn"
-                    style={{ padding: "2px", fontSize: "12px", width: "20px", height: "20px", minWidth: "20px" }}
-                    onClick={e => { e.stopPropagation(); cancelArrivalReminder(activeRem.id, activeRem.rnum); }}
-                    title="Отключить"
-                  >✕</button>
-                </div>
-              );
-            }
+          const currentVehType = normalizeVehicleType(liveVeh?.type || activeRem.type, activeRem.rnum);
+          const currentVehIcon = currentVehType === 'tram' ? 'tram' : (currentVehType === 'minibus' ? 'airport_shuttle' : 'directions_bus');
+          const displayPlate = activeRem.gosNum || liveVeh?.gosNum || "";
+          const remTime = activeRem.lastTime != null ? String(activeRem.lastTime) : "";
 
-            // Full card for the primary (first) reminder
-            return (
+          return (
+            <div
+              className="reminder-topbar-stack"
+              style={{
+                position: "fixed",
+                top: "max(calc(env(safe-area-inset-top, 0px) + 8px), 48px)",
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 9998,
+                width: "calc(100% - 24px)",
+                maxWidth: "420px",
+                pointerEvents: "auto"
+              }}
+            >
               <div
                 key={activeRem.id}
-                className={`selected-vehicle-hud reminder-topbar-hud ${activeTab !== 0 ? 'compact' : ''} ${!isCompact && extraRems.length > 0 ? 'has-extra' : ''}`}
+                className={`selected-vehicle-hud reminder-topbar-hud swipe-card ${activeTab !== 0 ? 'compact' : ''}`}
                 style={{ position: "relative", top: "auto", left: "auto", transform: "none", width: "100%" }}
+                onTouchStart={(e) => {
+                  touchStartYRef.current = e.touches[0].clientY;
+                  touchStartXRef.current = e.touches[0].clientX;
+                }}
+                onTouchEnd={(e) => {
+                  if (touchStartYRef.current == null) return;
+                  const deltaY = e.changedTouches[0].clientY - touchStartYRef.current;
+                  const deltaX = e.changedTouches[0].clientX - touchStartXRef.current;
+                  touchStartYRef.current = null;
+                  touchStartXRef.current = null;
+
+                  if (Math.abs(deltaY) > 25 || Math.abs(deltaX) > 30) {
+                    if (deltaY < -25 || deltaX < -30) {
+                      // Swipe UP or LEFT -> Next
+                      setActiveReminderIdx(i => (i + 1) % activeRems.length);
+                    } else if (deltaY > 25 || deltaX > 30) {
+                      // Swipe DOWN or RIGHT -> Prev
+                      setActiveReminderIdx(i => (i - 1 + activeRems.length) % activeRems.length);
+                    }
+                  }
+                }}
+                onWheel={(e) => {
+                  if (activeRems.length > 1) {
+                    if (e.deltaY > 15) {
+                      setActiveReminderIdx(i => (i + 1) % activeRems.length);
+                    } else if (e.deltaY < -15) {
+                      setActiveReminderIdx(i => (i - 1 + activeRems.length) % activeRems.length);
+                    }
+                  }
+                }}
                 onClick={() => {
                   if (liveVeh) {
                     const targetRouteId = activeRem.rid || liveVeh.rid;
@@ -4247,6 +4242,28 @@ export default function App() {
                     </div>
                     {displayPlate && <span className="hud-gos-num">{formatGosNum(displayPlate)}</span>}
                   </div>
+
+                  {/* Multi-notification switcher pills */}
+                  {activeRems.length > 1 && (
+                    <div className="hud-route-switcher" onClick={e => e.stopPropagation()}>
+                      {activeRems.map((r, idx) => {
+                        const vt = normalizeVehicleType(r.type, r.rnum);
+                        const isCurrent = idx === currentIdx;
+                        return (
+                          <button
+                            key={r.id}
+                            className={`hud-switcher-pill ${isCurrent ? 'active' : ''} hud-badge-${vt}`}
+                            onClick={() => setActiveReminderIdx(idx)}
+                            title={`Маршрут ${r.rnum || ''}`}
+                          >
+                            <span>{r.rnum}</span>
+                          </button>
+                        );
+                      })}
+                      <span className="hud-swipe-indicator" title="Смахните вверх/вниз для переключения">↕</span>
+                    </div>
+                  )}
+
                   <div className="hud-actions" onClick={e => e.stopPropagation()}>
                     <button className="hud-notify-status-btn" onClick={() => cancelArrivalReminder(activeRem.id, activeRem.rnum)} title="Отключить напоминание">
                       <span className="material-symbols-outlined hud-btn-icon" style={{ fontSize: "15px", animation: "pulse-bell 1.5s infinite ease-in-out" }}>notifications_active</span>
@@ -4278,44 +4295,6 @@ export default function App() {
                   )}
                 </div>
               </div>
-            );
-          };
-
-          const extraRems = activeRems.slice(1);
-
-          return (
-            <div className="reminder-topbar-stack" style={{ position: "fixed", top: "max(calc(env(safe-area-inset-top, 0px) + 8px), 48px)", left: "50%", transform: "translateX(-50%)", zIndex: 9998, display: "flex", flexDirection: "column", gap: "0px", width: "calc(100% - 24px)", maxWidth: "420px", pointerEvents: "auto" }}>
-              {/* Always show primary reminder */}
-              {renderReminderCard(activeRems[0], false)}
-
-              {/* "+N ещё" toggle row when 2+ reminders */}
-              {extraRems.length > 0 && (
-                <div
-                  className={`reminder-drop-toggle ${reminderDropOpen ? 'open' : ''}`}
-                  onClick={e => { e.stopPropagation(); setReminderDropOpen(prev => !prev); }}
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: "16px", transition: "transform 0.2s", transform: reminderDropOpen ? "rotate(180deg)" : "rotate(0deg)" }}>
-                    expand_more
-                  </span>
-                  <span>ещё {extraRems.length}</span>
-                  {/* Mini route badges preview */}
-                  {!reminderDropOpen && extraRems.map(r => {
-                    const vt = normalizeVehicleType(r.type, r.rnum);
-                    return (
-                      <div key={r.id} className={`hud-badge hud-badge-${vt}`} style={{ padding: "1px 6px", fontSize: "11px", marginLeft: "4px" }}>
-                        <span className="hud-route-num" style={{ fontSize: "11px", fontWeight: "700" }}>{r.rnum || '?'}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Dropdown panel with compact cards */}
-              {extraRems.length > 0 && reminderDropOpen && (
-                <div className="reminder-drop-panel">
-                  {extraRems.map(r => renderReminderCard(r, true))}
-                </div>
-              )}
             </div>
           );
         })()}
