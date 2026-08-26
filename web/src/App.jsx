@@ -1077,11 +1077,11 @@ export default function App() {
     }
 
     const remId = vehid ? `${sid}_${rid}_${vehid}` : `${sid}_${rid}`;
-    const exists = remindersRef.current.some(r => (r.id === remId || (vehid && r.vehid === vehid)) && !r.triggered);
+    const exists = remindersRef.current.some(r => !r.triggered && String(r.sid) === String(sid) && (r.id === remId || (vehid && String(r.vehid) === String(vehid)) || (rid && String(r.rid) === String(rid))));
 
-    // 1. If reminder is already active, cancel/unsubscribe immediately without running subscribe flow
+    // 1. If reminder is already active for this stop, cancel/unsubscribe immediately
     if (exists) {
-      const existingRem = remindersRef.current.find(r => (r.id === remId || (vehid && r.vehid === vehid)) && !r.triggered);
+      const existingRem = remindersRef.current.find(r => !r.triggered && String(r.sid) === String(sid) && (r.id === remId || (vehid && String(r.vehid) === String(vehid)) || (rid && String(r.rid) === String(rid))));
       await cancelArrivalReminder(existingRem ? existingRem.id : remId, rnum);
       return false;
     }
@@ -1254,15 +1254,23 @@ export default function App() {
   useEffect(() => {
     window.toggleArrivalReminder = toggleArrivalReminder;
     window.isArrivalReminderActive = (sid, rid, vehid = "") => {
+      const cleanSid = String(sid || "");
+      const cleanRid = String(rid || "");
+      const cleanVehid = String(vehid || "");
       return remindersRef.current.some(r => {
         if (r.triggered) return false;
-        // Exact reminder ID match
-        if (vehid && r.id === `${sid}_${rid}_${vehid}`) return true;
-        // Exact vehicle ID match
-        if (vehid && r.vehid && String(r.vehid) === String(vehid)) return true;
-        // Only match sid+rid if no vehid was provided AND the reminder also has no vehid
-        if (!vehid && !r.vehid && r.id === `${sid}_${rid}`) return true;
-        return false;
+        // Must match the specific station (sid)
+        if (String(r.sid) !== cleanSid) return false;
+
+        // If both have vehid, match vehid
+        if (cleanVehid && r.vehid) {
+          return String(r.vehid) === cleanVehid;
+        }
+        // If rid matches
+        if (cleanRid && r.rid) {
+          return String(r.rid) === cleanRid;
+        }
+        return r.id === `${cleanSid}_${cleanRid}`;
       });
     };
     return () => {
