@@ -198,55 +198,26 @@ self.addEventListener('push', (event) => {
     data: { url: url }
   };
 
-  async function handlePush() {
-    const isIOS = /iPad|iPhone|iPod/.test(self.navigator.userAgent) ||
-      (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
-
-    // Universal: Explicitly close previous notification card for this exact route (iOS + Android)
-    try {
-      if (typeof self.registration.getNotifications === 'function') {
-        const existing = await self.registration.getNotifications();
-        const prefix = sid && rid ? `arrival_${sid}_${rid}` : tag;
-        for (const notif of existing) {
-          if (notif.tag && (notif.tag === tag || notif.tag === prefix || notif.tag.startsWith(prefix + '_'))) {
-            try { notif.close(); } catch {}
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('getNotifications cleanup error:', e);
-    }
-
-    if (isIOS) {
-      // iOS WebKit (PWA): standard options
-      try {
-        await self.registration.showNotification(title, {
-          body: body,
-          tag: tag,
-          data: { url: url }
-        });
-      } catch (err) {
-        console.error('iOS WebKit showNotification error:', err);
-      }
-      return;
-    }
+    const isArrival = tag.startsWith('arrival_') && (title.includes('прибыл') || title.includes('arrived'));
+    const options = {
+      body: body,
+      tag: tag || 'arrival-alarm',
+      icon: icon || '/apple-touch-icon.png',
+      badge: badge || '/favicon.svg',
+      renotify: isArrival,
+      requireInteraction: isArrival,
+      vibrate: isArrival ? [300, 100, 300, 100, 400] : [100],
+      data: { url: url || '/' }
+    };
 
     try {
-      const isArrival = tag.startsWith('arrival_') && (title.includes('прибыл') || title.includes('arrived'));
-      const richOptions = {
-        ...baseOptions,
-        renotify: true,
-        requireInteraction: isArrival,
-        vibrate: isArrival ? [300, 100, 300, 100, 400] : [150],
-        sound: isArrival ? '/arrival-chaching.wav' : undefined
-      };
-      await self.registration.showNotification(title, richOptions);
+      await self.registration.showNotification(title, options);
     } catch (err) {
-      console.warn('Rich showNotification failed, retrying base:', err);
+      console.warn('showNotification failed with rich options, fallback to basic:', err);
       try {
-        await self.registration.showNotification(title, baseOptions);
-      } catch (finalErr) {
-        console.error('Final showNotification error:', finalErr);
+        await self.registration.showNotification(title, { body: body, tag: tag, data: { url: url } });
+      } catch (e) {
+        console.error('Final showNotification error:', e);
       }
     }
   }
