@@ -978,37 +978,60 @@ export default function App() {
       }
     }
 
-    const liveMatch = (() => {
-      const all = Object.values(knownVehiclesRef.current);
-      // 1. Exact vehid match
-      if (vehid) {
-        const byId = all.find(v => String(v.id) === String(vehid));
-        if (byId) return byId;
-      }
-      // 2. Exact gosNum (plate) match within same route
-      if (gosNum) {
-        const plateNorm = formatGosNum(gosNum).toLowerCase();
-        const byPlate = all.find(v => {
-          if (!v.gosNum) return false;
-          const vRoute = String(v.route || v.rnum || "").trim().toLowerCase();
-          if (targetRoute && vRoute && targetRoute !== vRoute) return false;
-          return formatGosNum(v.gosNum).toLowerCase() === plateNorm;
-        });
-        if (byPlate) return byPlate;
-      }
-      // 3. Find candidates on this route or rid
-      const candidates = all.filter(v => {
+    const allVehicles = Object.values(knownVehiclesRef.current);
+
+    let liveMatch = null;
+    // 1. Exact vehid match
+    if (vehid) {
+      liveMatch = allVehicles.find(v => String(v.id) === String(vehid));
+    }
+    // 2. Exact gosNum (plate) match within same route
+    if (!liveMatch && gosNum) {
+      const plateNorm = formatGosNum(gosNum).toLowerCase();
+      liveMatch = allVehicles.find(v => {
+        if (!v.gosNum) return false;
+        const vRoute = String(v.route || v.rnum || "").trim().toLowerCase();
+        if (targetRoute && vRoute && targetRoute !== vRoute) return false;
+        return formatGosNum(v.gosNum).toLowerCase() === plateNorm;
+      });
+    }
+    // 3. Find candidates on this route or rid
+    if (!liveMatch) {
+      const candidates = allVehicles.filter(v => {
         const vRoute = String(v.route || v.rnum || "").trim().toLowerCase();
         if (targetRoute && vRoute && targetRoute === vRoute) return true;
         if (rid && v.rid && String(v.rid) === String(rid)) return true;
         return false;
       });
 
-      if (candidates.length === 1) return candidates[0];
+      if (candidates.length === 1) {
+        liveMatch = candidates[0];
+      } else if (candidates.length > 1) {
+        // Query vehicle forecasts in parallel to find exact vehicle matching arrival time to this station
+        try {
+          const forecastResults = await Promise.all(
+            candidates.map(async (v) => {
+              try {
+                const res = await apiFetch(`/api/vehicle_forecasts?vehid=${encodeURIComponent(v.id)}`);
+                if (!res.ok) return { v, eta: null };
+                const data = await res.json();
+                const stForecast = (data.forecasts || []).find(f => String(f.stid) === String(sid));
+                return { v, eta: stForecast ? parseInt(stForecast.time, 10) : null };
+              } catch {
+                return { v, eta: null };
+              }
+            })
+          );
 
-      if (candidates.length > 1) {
-        if (stLat != null && stLng != null) {
-          // Expected distance in km for initialTime at ~25 km/h (0.42 km/min)
+          const valid = forecastResults.filter(r => r.eta != null && !isNaN(r.eta));
+          if (valid.length > 0) {
+            valid.sort((a, b) => Math.abs(a.eta - initTimeNum) - Math.abs(b.eta - initTimeNum));
+            liveMatch = valid[0].v;
+          }
+        } catch {}
+
+        // Fallback to distance scoring if vehicle forecasts API unavailable
+        if (!liveMatch && stLat != null && stLng != null) {
           const expectedDistKm = Math.max(0.5, (initTimeNum / 60) * 25);
           const scored = candidates.map(v => {
             const dLat = (stLat - v.lat) * 111.32;
@@ -1017,12 +1040,14 @@ export default function App() {
             return { v, score: Math.abs(distKm - expectedDistKm) };
           });
           scored.sort((a, b) => a.score - b.score);
-          return scored[0].v;
+          liveMatch = scored[0].v;
         }
-        return candidates[0];
+
+        if (!liveMatch) {
+          liveMatch = candidates[0];
+        }
       }
-      return null;
-    })();
+    }
 
     if (liveMatch) {
       if (!vehid) vehid = String(liveMatch.id || "");
