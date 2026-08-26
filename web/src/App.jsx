@@ -964,8 +964,20 @@ export default function App() {
     let gosNum = inGosNum || "";
     let vehType = "";
 
-    // Find the EXACT live vehicle the user clicked, not just any on the route
+    // Find the EXACT live vehicle matching this forecast
     const targetRoute = String(rnum || "").trim().toLowerCase();
+    const initTimeNum = parseFloat(initialTime) || 0;
+
+    // Find station coordinates if sid is given
+    let stLat = null, stLng = null;
+    if (sid && stations && stations.length > 0) {
+      const st = stations.find(s => String(s.id) === String(sid) || String(s.properties?.id) === String(sid));
+      if (st && st.geometry && Array.isArray(st.geometry.coordinates)) {
+        stLng = st.geometry.coordinates[0];
+        stLat = st.geometry.coordinates[1];
+      }
+    }
+
     const liveMatch = (() => {
       const all = Object.values(knownVehiclesRef.current);
       // 1. Exact vehid match
@@ -984,13 +996,30 @@ export default function App() {
         });
         if (byPlate) return byPlate;
       }
-      // 3. Only if there's exactly ONE vehicle on the route, use it
-      if (targetRoute) {
-        const onRoute = all.filter(v => {
-          const vRoute = String(v.route || v.rnum || "").trim().toLowerCase();
-          return vRoute === targetRoute;
-        });
-        if (onRoute.length === 1) return onRoute[0];
+      // 3. Find candidates on this route or rid
+      const candidates = all.filter(v => {
+        const vRoute = String(v.route || v.rnum || "").trim().toLowerCase();
+        if (targetRoute && vRoute && targetRoute === vRoute) return true;
+        if (rid && v.rid && String(v.rid) === String(rid)) return true;
+        return false;
+      });
+
+      if (candidates.length === 1) return candidates[0];
+
+      if (candidates.length > 1) {
+        if (stLat != null && stLng != null) {
+          // Expected distance in km for initialTime at ~25 km/h (0.42 km/min)
+          const expectedDistKm = Math.max(0.5, (initTimeNum / 60) * 25);
+          const scored = candidates.map(v => {
+            const dLat = (stLat - v.lat) * 111.32;
+            const dLng = (stLng - v.lng) * (111.32 * Math.cos(stLat * Math.PI / 180));
+            const distKm = Math.sqrt(dLat * dLat + dLng * dLng);
+            return { v, score: Math.abs(distKm - expectedDistKm) };
+          });
+          scored.sort((a, b) => a.score - b.score);
+          return scored[0].v;
+        }
+        return candidates[0];
       }
       return null;
     })();
@@ -1959,7 +1988,16 @@ export default function App() {
           if (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) return true;
           if (item.id && !String(item.id).includes('_') && v.id && String(v.id) === String(item.id)) return true;
           return false;
-        }) || null;
+        }) || (() => {
+          if (!itemRoute && !item.rid) return null;
+          const candidates = Object.values(knownVehiclesRef.current).filter(v => {
+            const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+            if (itemRoute && vRoute && itemRoute === vRoute) return true;
+            if (item.rid && v.rid && String(item.rid) === String(v.rid)) return true;
+            return false;
+          });
+          return candidates.length > 0 ? candidates[0] : null;
+        })();
       })();
       const activeRem = getActiveReminderForVehicle(item, live);
       const isLive = !!live && (nowTime - (live._lastSeen || 0) < 60000);
@@ -4024,7 +4062,35 @@ export default function App() {
                 if (remPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === remPlate) return true;
                 if (activeRem.vehid && v.id && String(v.id) === String(activeRem.vehid)) return true;
                 return false;
-              });
+              }) ||
+              (() => {
+                if (!remRoute && !activeRem.rid) return null;
+                const candidates = Object.values(knownVehiclesRef.current).filter(v => {
+                  const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+                  if (remRoute && vRoute && remRoute === vRoute) return true;
+                  if (activeRem.rid && v.rid && String(activeRem.rid) === String(v.rid)) return true;
+                  return false;
+                });
+                if (candidates.length === 0) return null;
+                if (candidates.length === 1) return candidates[0];
+                if (activeRem.sid && stations && stations.length > 0) {
+                  const st = stations.find(s => String(s.id) === String(activeRem.sid) || String(s.properties?.id) === String(activeRem.sid));
+                  if (st && st.geometry && Array.isArray(st.geometry.coordinates)) {
+                    const stLng = st.geometry.coordinates[0];
+                    const stLat = st.geometry.coordinates[1];
+                    const expectedDistKm = Math.max(0.5, (parseFloat(activeRem.lastTime || 5) / 60) * 25);
+                    const scored = candidates.map(v => {
+                      const dLat = (stLat - v.lat) * 111.32;
+                      const dLng = (stLng - v.lng) * (111.32 * Math.cos(stLat * Math.PI / 180));
+                      const distKm = Math.sqrt(dLat * dLat + dLng * dLng);
+                      return { v, score: Math.abs(distKm - expectedDistKm) };
+                    });
+                    scored.sort((a, b) => a.score - b.score);
+                    return scored[0].v;
+                  }
+                }
+                return candidates[0];
+              })();
             const currentVehType = normalizeVehicleType(liveVeh?.type, activeRem.rnum);
             const currentVehIcon = currentVehType === 'tram' ? 'tram' : (currentVehType === 'minibus' ? 'airport_shuttle' : 'directions_bus');
             const displayPlate = activeRem.gosNum || liveVeh?.gosNum || "";
@@ -4550,7 +4616,16 @@ export default function App() {
                             if (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) return true;
                             if (item.id && !String(item.id).includes('_') && v.id && String(v.id) === String(item.id)) return true;
                             return false;
-                          }) || null;
+                          }) || (() => {
+                            if (!itemRoute && !item.rid) return null;
+                            const candidates = Object.values(knownVehiclesRef.current).filter(v => {
+                              const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+                              if (itemRoute && vRoute && itemRoute === vRoute) return true;
+                              if (item.rid && v.rid && String(item.rid) === String(v.rid)) return true;
+                              return false;
+                            });
+                            return candidates.length > 0 ? candidates[0] : null;
+                          })();
                         })();
                         const isLiveOnMap = !!live && (Date.now() - (live._lastSeen || 0) < 60000);
                         const isSelected = selectedVehicle?.id === item.id || (live && selectedVehicle?.id === live.id);
@@ -4680,8 +4755,8 @@ export default function App() {
 
                               <div className="history-card-details">
                                 <div className="history-card-title-row">
-                                  {item.gosNum && (
-                                    <span className="history-plate-text">{formatGosNum(item.gosNum)}</span>
+                                  {(item.gosNum || (live && live.gosNum)) && (
+                                    <span className="history-plate-text">{formatGosNum(item.gosNum || live.gosNum)}</span>
                                   )}
                                   <span
                                     className={`status-dot ${isLiveOnMap ? 'live' : 'offline'}`}
