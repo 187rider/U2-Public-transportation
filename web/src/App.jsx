@@ -3061,15 +3061,49 @@ export default function App() {
     return nextIsFav;
   };
 
-  const openStationOnMap = useCallback((sid, stationName = "") => {
+  const openStationOnMap = useCallback((sid, stationName = "", rid = "", rnum = "", vehType = "", liveVeh = null) => {
     if (!map.current || !stations || stations.length === 0) return;
     const cleanSid = String(sid || "").trim();
     const cleanName = String(stationName || "").trim().toLowerCase();
-    const feat = stations.find(s => {
-      if (cleanSid && (String(s.id) === cleanSid || String(s.properties?.id) === cleanSid)) return true;
-      if (cleanName && s.properties?.name && s.properties.name.trim().toLowerCase() === cleanName) return true;
-      return false;
-    });
+    const cleanType = String(vehType || "").trim().toLowerCase();
+    const cleanRid = String(rid || "").trim();
+
+    // 1. Primary: Exact Station ID match
+    let feat = cleanSid ? stations.find(s => String(s.properties?.id) === cleanSid || String(s.id) === cleanSid) : null;
+
+    // 2. If not found by exact ID, search by Name with direction & route awareness
+    if (!feat && cleanName) {
+      let candidates = stations.filter(s => s.properties?.name && s.properties.name.trim().toLowerCase() === cleanName);
+
+      // Filter by vehicle type (e.g. tram vs bus)
+      if (cleanType && candidates.length > 1) {
+        const typeCandidates = candidates.filter(s => s.properties?.type === cleanType || (cleanType === 'minibus' && s.properties?.type === 'bus'));
+        if (typeCandidates.length > 0) candidates = typeCandidates;
+      }
+
+      // Filter by route stations list if route ID is known
+      if (cleanRid && candidates.length > 1 && routeStationsCacheRef.current?.[cleanRid]) {
+        const routeStIds = new Set(routeStationsCacheRef.current[cleanRid].map(String));
+        const routeCandidates = candidates.filter(s => routeStIds.has(String(s.properties?.id)) || routeStIds.has(String(s.id)));
+        if (routeCandidates.length > 0) candidates = routeCandidates;
+      }
+
+      // If multiple candidates remain and we have live vehicle coordinates, pick the candidate closest to vehicle in travel direction
+      if (candidates.length > 1 && liveVeh && liveVeh.lat && liveVeh.lng) {
+        candidates.sort((a, b) => {
+          const aCoord = a.geometry?.coordinates || [0, 0];
+          const bCoord = b.geometry?.coordinates || [0, 0];
+          const distA = Math.hypot(aCoord[0] - liveVeh.lng, aCoord[1] - liveVeh.lat);
+          const distB = Math.hypot(bCoord[0] - liveVeh.lng, bCoord[1] - liveVeh.lat);
+          return distA - distB;
+        });
+      }
+
+      if (candidates.length > 0) {
+        feat = candidates[0];
+      }
+    }
+
     if (!feat || !feat.geometry || !Array.isArray(feat.geometry.coordinates)) return;
     const coords = feat.geometry.coordinates;
     closeAllStationPopups();
@@ -4294,7 +4328,7 @@ export default function App() {
                   className="hud-next-station-row"
                   onClick={(e) => {
                     e.stopPropagation();
-                    openStationOnMap(activeRem.sid, activeRem.stationName);
+                    openStationOnMap(activeRem.sid, activeRem.stationName, activeRem.rid, activeRem.rnum, currentVehType, liveVeh);
                   }}
                   style={{ cursor: "pointer" }}
                   title="Показать остановку на карте"
@@ -4381,8 +4415,15 @@ export default function App() {
                   className="hud-next-station-row"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (nextStationInfo?.id || nextStationInfo?.name) {
-                      openStationOnMap(nextStationInfo.id, nextStationInfo.name);
+                    if (nextStationInfo?.stid || nextStationInfo?.id || nextStationInfo?.name) {
+                      openStationOnMap(
+                        nextStationInfo.stid || nextStationInfo.id,
+                        nextStationInfo.name,
+                        selectedVehicle.rid,
+                        selectedVehicle.route,
+                        currentVehType,
+                        selectedVehicle
+                      );
                     }
                   }}
                   style={{ cursor: (nextStationInfo?.id || nextStationInfo?.name) ? "pointer" : "default" }}
