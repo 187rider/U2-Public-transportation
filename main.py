@@ -615,7 +615,7 @@ class PushReminderManager:
                         if rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 3:
                             pending_pushes.append({
                                 "sub": sub,
-                                "title": f"🚌 Маршрут {rnum}{gos_label} прибыл!",
+                                "title": f"🚌 Маршрут {rnum} прибыл!",
                                 "body": f"Остановка «{stname}»",
                                 "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],
@@ -637,7 +637,7 @@ class PushReminderManager:
                     if last is not None and last <= 3 and cur_time >= last + 3:
                         pending_pushes.append({
                             "sub": sub,
-                            "title": f"🚌 Маршрут {rnum}{gos_label} прибыл!",
+                            "title": f"🚌 Маршрут {rnum} прибыл!",
                             "body": f"Остановка «{stname}»",
                             "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                             "sid": rem["sid"],
@@ -671,7 +671,7 @@ class PushReminderManager:
                         if cur_time <= 0:
                             pending_pushes.append({
                                 "sub": sub,
-                                "title": f"🚌 Маршрут {rnum}{gos_label} прибыл!",
+                                "title": f"🚌 Маршрут {rnum} прибыл!",
                                 "body": f"Остановка «{stname}»",
                                 "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],
@@ -681,7 +681,7 @@ class PushReminderManager:
                         else:
                             pending_pushes.append({
                                 "sub": sub,
-                                "title": f"🚌 Маршрут {rnum}{gos_label} — {cur_time} мин",
+                                "title": f"🚌 Маршрут {rnum} — {cur_time} мин",
                                 "body": f"Остановка «{stname}» (прибытие через ~{cur_time} мин)",
                                 "tag": f"arrival_{rem['sid']}_{rem['rid']}",
                                 "sid": rem["sid"],

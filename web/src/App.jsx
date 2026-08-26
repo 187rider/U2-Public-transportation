@@ -1316,12 +1316,12 @@ export default function App() {
             if (!match) {
               if (rem.lastNotifiedTime != null && rem.lastNotifiedTime <= 3) {
                 triggerArrivalPush(
-                  `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
+                  `🚌 Маршрут ${rem.rnum} прибыл!`,
                   `Остановка «${rem.stationName}»`,
                   `arrival_${rem.sid}_${rem.rid}`
                 );
                 setAlertToast({
-                  title: `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
+                  title: `🚌 Маршрут ${rem.rnum} прибыл!`,
                   body: `Остановка «${rem.stationName}»`
                 });
                 setTimeout(() => setAlertToast(null), 8000);
@@ -1342,12 +1342,12 @@ export default function App() {
             // the tracked bus arrived and upstream is now showing the NEXT vehicle behind it
             if (last != null && last <= 3 && curTime >= last + 3) {
               triggerArrivalPush(
-                `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
+                `🚌 Маршрут ${rem.rnum} прибыл!`,
                 `Остановка «${rem.stationName}»`,
                 `arrival_${rem.sid}_${rem.rid}`
               );
               setAlertToast({
-                title: `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
+                title: `🚌 Маршрут ${rem.rnum} прибыл!`,
                 body: `Остановка «${rem.stationName}»`
               });
               setTimeout(() => setAlertToast(null), 8000);
@@ -1383,12 +1383,12 @@ export default function App() {
               if (curTime <= 0 || timeStr.includes("прибыв")) {
                 // Final arrival push & reset memory
                 triggerArrivalPush(
-                  `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
+                  `🚌 Маршрут ${rem.rnum} прибыл!`,
                   `Остановка «${rem.stationName}»`,
                   `arrival_${rem.sid}_${rem.rid}`
                 );
                 setAlertToast({
-                  title: `🚌 Маршрут ${rem.rnum}${gosLabel} прибыл!`,
+                  title: `🚌 Маршрут ${rem.rnum} прибыл!`,
                   body: `Остановка «${rem.stationName}»`
                 });
                 setTimeout(() => setAlertToast(null), 8000);
@@ -1398,12 +1398,12 @@ export default function App() {
               } else {
                 // Step countdown push
                 triggerArrivalPush(
-                  `🚌 Маршрут ${rem.rnum}${gosLabel} — ${curTime} мин`,
+                  `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
                   `Остановка «${rem.stationName}» (прибытие через ~${curTime} мин)`,
                   `arrival_${rem.sid}_${rem.rid}`
                 );
                   setAlertToast({
-                    title: `🚌 Маршрут ${rem.rnum}${gosLabel} — ${curTime} мин`,
+                    title: `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
                     body: `Остановка «${rem.stationName}»`
                   });
                   setTimeout(() => setAlertToast(null), 4000);
