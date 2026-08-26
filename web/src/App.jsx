@@ -1225,7 +1225,8 @@ export default function App() {
             if (!match) {
               match = forecasts.find(f => String(f.rid) === String(rem.rid));
             }
-            if (match.gosNum && !rem.gosNum) {
+            // Only enrich gosNum from exact vehid match, not rid fallback
+            if (match && match.gosNum && !rem.gosNum && match.vehid && String(match.vehid) === String(rem.vehid)) {
               rem.gosNum = match.gosNum;
             }
 
@@ -4022,7 +4023,6 @@ export default function App() {
                 if (remRoute && vRoute && remRoute !== vRoute) return false;
                 if (remPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === remPlate) return true;
                 if (activeRem.vehid && v.id && String(v.id) === String(activeRem.vehid)) return true;
-                if (activeRem.rid && v.rid && String(activeRem.rid) === String(v.rid)) return true;
                 return false;
               });
             const currentVehType = normalizeVehicleType(liveVeh?.type, activeRem.rnum);
