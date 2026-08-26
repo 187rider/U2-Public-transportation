@@ -527,8 +527,11 @@ async function triggerArrivalPush(title, body, tag = 'arrival-alarm') {
   const options = {
     body: body,
     tag: tag || 'arrival-alarm',
+    icon: '/apple-touch-icon.png',
+    badge: '/favicon.svg',
     renotify: true,
     requireInteraction: true,
+    vibrate: [300, 100, 300, 100, 400],
     data: { url: '/' }
   };
 
