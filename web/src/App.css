@@ -1467,7 +1467,47 @@ body {
 
 /* Reminder Topbar Stack & Swipe Card */
 .reminder-topbar-stack {
+  position: fixed;
+  top: max(calc(env(safe-area-inset-top, 0px) + 8px), 48px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9998;
+  width: calc(100% - 24px);
+  max-width: 420px;
+  pointer-events: auto;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  justify-content: center;
   filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.08));
+}
+
+.reminder-topbar-stack.compact {
+  width: auto;
+  max-width: 90vw;
+}
+
+.reminder-topbar-hud {
+  position: relative !important;
+  top: auto !important;
+  left: auto !important;
+  transform: none !important;
+  width: 100%;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reminder-topbar-hud.compact {
+  width: auto !important;
+  padding: 4px 10px !important;
+  border-radius: 24px !important;
+  gap: 0 !important;
+}
+
+.reminder-topbar-hud.compact .hud-next-station-row {
+  display: none !important;
+}
+
+.reminder-topbar-hud.compact .hud-top-row {
+  gap: 6px;
 }
 
 .reminder-topbar-hud.swipe-card {

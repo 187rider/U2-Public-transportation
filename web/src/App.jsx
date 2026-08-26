@@ -4197,23 +4197,10 @@ export default function App() {
           const remTime = activeRem.lastTime != null ? String(activeRem.lastTime) : "";
 
           return (
-            <div
-              className="reminder-topbar-stack"
-              style={{
-                position: "fixed",
-                top: "max(calc(env(safe-area-inset-top, 0px) + 8px), 48px)",
-                left: "50%",
-                transform: "translateX(-50%)",
-                zIndex: 9998,
-                width: "calc(100% - 24px)",
-                maxWidth: "420px",
-                pointerEvents: "auto"
-              }}
-            >
+            <div className={`reminder-topbar-stack ${activeTab !== 0 ? 'compact' : ''}`}>
               <div
                 key={activeRem.id}
                 className={`selected-vehicle-hud reminder-topbar-hud swipe-card ${activeTab !== 0 ? 'compact' : ''}`}
-                style={{ position: "relative", top: "auto", left: "auto", transform: "none", width: "100%" }}
                 onTouchStart={(e) => {
                   touchStartYRef.current = e.touches[0].clientY;
                   touchStartXRef.current = e.touches[0].clientX;
