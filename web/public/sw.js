@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v50';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v51';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -234,6 +234,7 @@ self.addEventListener('push', (event) => {
       const richOptions = {
         ...baseOptions,
         renotify: true,
+        requireInteraction: true,
         vibrate: [300, 100, 300, 100, 400]
       };
       await self.registration.showNotification(title, richOptions);

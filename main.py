@@ -514,6 +514,7 @@ class PushReminderManager:
                 if clean_collapse:
                     push_headers["apns-collapse-id"] = clean_collapse
             else:
+                push_headers["Urgency"] = "high"
                 if clean_collapse:
                     push_headers["Topic"] = clean_collapse
 
