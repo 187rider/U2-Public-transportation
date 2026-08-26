@@ -479,18 +479,33 @@ function closeAllStationPopups() {
   document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
 }
 
-// Web Audio Cash Register "Cha-Ching!" Arrival Chime
-function playArrivalChime() {
+// Web Audio Sound Effects: Cash Register "Cha-Ching!" for Final Arrival, Soft Chime for Countdowns
+function playChaChingSound() {
+  try {
+    // 1. Try HTML5 audio file first
+    const audio = new Audio('/arrival-chaching.wav');
+    audio.volume = 0.9;
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(() => {
+        // Fallback to Web Audio synthesis if audio element is blocked
+        synthesizeChaChing();
+      });
+    }
+  } catch {
+    synthesizeChaChing();
+  }
+}
+
+function synthesizeChaChing() {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
     const ctx = new AudioContext();
-    if (ctx.state === 'suspended') {
-      ctx.resume();
-    }
+    if (ctx.state === 'suspended') ctx.resume();
     const now = ctx.currentTime;
 
-    // --- 1. "Cha" (Mechanical register drawer latch / spring slide) ---
+    // "Cha" (Mechanical latch & drawer slide)
     const clickOsc = ctx.createOscillator();
     const clickGain = ctx.createGain();
     clickOsc.type = 'triangle';
@@ -515,9 +530,9 @@ function playArrivalChime() {
     slideOsc.start(now + 0.03);
     slideOsc.stop(now + 0.095);
 
-    // --- 2. "Ching!" (High-pitched sparkling silver bell chime) ---
+    // "Ching!" (High-pitched silver bell ring)
     const chingStart = now + 0.09;
-    const bellFreqs = [2093, 2637, 3136, 4186]; // C7, E7, G7, C8 harmonic chords
+    const bellFreqs = [2093, 2637, 3136, 4186];
     const bellGains = [0.32, 0.24, 0.16, 0.1];
 
     bellFreqs.forEach((freq, i) => {
@@ -526,22 +541,52 @@ function playArrivalChime() {
       osc.type = 'sine';
       osc.frequency.setValueAtTime(freq, chingStart);
       gain.gain.setValueAtTime(bellGains[i], chingStart);
-      gain.gain.exponentialRampToValueAtTime(0.0001, chingStart + 0.8);
+      gain.gain.exponentialRampToValueAtTime(0.0001, chingStart + 0.85);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start(chingStart);
-      osc.stop(chingStart + 0.8);
+      osc.stop(chingStart + 0.85);
     });
   } catch (e) {
-    console.warn("Audio chime error:", e);
+    console.warn("Audio synthesize error:", e);
+  }
+}
+
+function playSubtleStepChime() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    if (ctx.state === 'suspended') ctx.resume();
+    const now = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(784, now); // G5
+    gain.gain.setValueAtTime(0.18, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.25);
+  } catch (e) {
+    console.warn("Subtle chime error:", e);
   }
 }
 
 // Web Push / Service Worker Notification Trigger
-async function triggerArrivalPush(title, body, tag = 'arrival-alarm') {
-  playArrivalChime();
-  if ('vibrate' in navigator) {
-    try { navigator.vibrate([200, 100, 200, 100, 300]); } catch {}
+async function triggerArrivalPush(title, body, tag = 'arrival-alarm', isFinalArrival = false) {
+  if (isFinalArrival) {
+    playChaChingSound();
+    if ('vibrate' in navigator) {
+      try { navigator.vibrate([300, 100, 300, 100, 450]); } catch {}
+    }
+  } else {
+    playSubtleStepChime();
+    if ('vibrate' in navigator) {
+      try { navigator.vibrate([120]); } catch {}
+    }
   }
 
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
@@ -554,8 +599,8 @@ async function triggerArrivalPush(title, body, tag = 'arrival-alarm') {
     icon: '/apple-touch-icon.png',
     badge: '/favicon.svg',
     renotify: true,
-    requireInteraction: true,
-    vibrate: [300, 100, 300, 100, 400],
+    requireInteraction: isFinalArrival,
+    vibrate: isFinalArrival ? [300, 100, 300, 100, 450] : [150],
     data: { url: '/' }
   };
 
@@ -1354,7 +1399,8 @@ export default function App() {
                 triggerArrivalPush(
                   `🚌 Маршрут ${rem.rnum} прибыл!`,
                   `Остановка «${rem.stationName}»`,
-                  `arrival_${rem.sid}_${rem.rid}`
+                  `arrival_${rem.sid}_${rem.rid}`,
+                  true
                 );
                 setAlertToast({
                   title: `🚌 Маршрут ${rem.rnum} прибыл!`,
@@ -1380,7 +1426,8 @@ export default function App() {
               triggerArrivalPush(
                 `🚌 Маршрут ${rem.rnum} прибыл!`,
                 `Остановка «${rem.stationName}»`,
-                `arrival_${rem.sid}_${rem.rid}`
+                `arrival_${rem.sid}_${rem.rid}`,
+                true
               );
               setAlertToast({
                 title: `🚌 Маршрут ${rem.rnum} прибыл!`,
@@ -1421,7 +1468,8 @@ export default function App() {
                 triggerArrivalPush(
                   `🚌 Маршрут ${rem.rnum} прибыл!`,
                   `Остановка «${rem.stationName}»`,
-                  `arrival_${rem.sid}_${rem.rid}`
+                  `arrival_${rem.sid}_${rem.rid}`,
+                  true
                 );
                 setAlertToast({
                   title: `🚌 Маршрут ${rem.rnum} прибыл!`,
@@ -1436,7 +1484,8 @@ export default function App() {
                 triggerArrivalPush(
                   `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
                   `Остановка «${rem.stationName}» (прибытие через ~${curTime} мин)`,
-                  `arrival_${rem.sid}_${rem.rid}`
+                  `arrival_${rem.sid}_${rem.rid}`,
+                  false
                 );
                   setAlertToast({
                     title: `🚌 Маршрут ${rem.rnum} — ${curTime} мин`,
