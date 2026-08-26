@@ -964,16 +964,36 @@ export default function App() {
     let gosNum = inGosNum || "";
     let vehType = "";
 
-    // Find live vehicle running on this route to bind exact vehicle ID and plate
-    const liveMatch = Object.values(knownVehiclesRef.current).find(v => {
-      const vRoute = String(v.route || v.rnum || "").trim().toLowerCase();
-      const targetRoute = String(rnum || "").trim().toLowerCase();
-      if (targetRoute && vRoute && targetRoute === vRoute) {
-        if (rid && v.rid && String(v.rid) === String(rid)) return true;
-        return true;
+    // Find the EXACT live vehicle the user clicked, not just any on the route
+    const targetRoute = String(rnum || "").trim().toLowerCase();
+    const liveMatch = (() => {
+      const all = Object.values(knownVehiclesRef.current);
+      // 1. Exact vehid match
+      if (vehid) {
+        const byId = all.find(v => String(v.id) === String(vehid));
+        if (byId) return byId;
       }
-      return false;
-    });
+      // 2. Exact gosNum (plate) match within same route
+      if (gosNum) {
+        const plateNorm = formatGosNum(gosNum).toLowerCase();
+        const byPlate = all.find(v => {
+          if (!v.gosNum) return false;
+          const vRoute = String(v.route || v.rnum || "").trim().toLowerCase();
+          if (targetRoute && vRoute && targetRoute !== vRoute) return false;
+          return formatGosNum(v.gosNum).toLowerCase() === plateNorm;
+        });
+        if (byPlate) return byPlate;
+      }
+      // 3. Only if there's exactly ONE vehicle on the route, use it
+      if (targetRoute) {
+        const onRoute = all.filter(v => {
+          const vRoute = String(v.route || v.rnum || "").trim().toLowerCase();
+          return vRoute === targetRoute;
+        });
+        if (onRoute.length === 1) return onRoute[0];
+      }
+      return null;
+    })();
 
     if (liveMatch) {
       if (!vehid) vehid = String(liveMatch.id || "");
