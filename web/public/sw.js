@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v64';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v65';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -227,7 +227,8 @@ self.addEventListener('push', (event) => {
         badge: badge || '/favicon.svg',
         renotify: true,
         requireInteraction: isArrival,
-        vibrate: isArrival ? [400, 150, 400, 150, 500] : [200],
+        silent: false,
+        vibrate: isArrival ? [500, 150, 500, 150, 600] : [250, 100, 250],
         timestamp: Date.now(),
         data: { url: url || '/' }
       };
