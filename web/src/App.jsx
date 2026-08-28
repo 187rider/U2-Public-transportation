@@ -4855,8 +4855,9 @@ export default function App() {
                           <div
                             key={item.id}
                             className={`history-card ${isSelected ? 'selected' : ''} ${!isLiveOnMap ? 'inactive' : ''}`}
+                            role="button"
+                            tabIndex={0}
                             onClick={() => {
-                              if (!isLiveOnMap) return;
                               if (isSelected) { setActiveTab(0); return; }
 
                               const targetVeh = live || item;
@@ -4896,19 +4897,28 @@ export default function App() {
 
                               closeAllStationPopups();
 
-                              if (map.current) {
-                                isInitialFlyingRef.current = true;
-                              }
-
                               lastVehicleSelectionTimeRef.current = Date.now();
                               lastTabCloseTimeRef.current = Date.now();
-                              setIsFollowingVehicle(true);
-                              isFollowingVehicleRef.current = true;
+
+                              if (targetVeh.lat && targetVeh.lng && map.current) {
+                                isInitialFlyingRef.current = true;
+                                map.current.flyTo({
+                                  center: [targetVeh.lng, targetVeh.lat],
+                                  zoom: Math.max(map.current.getZoom(), 15.5),
+                                  duration: 600,
+                                  essential: true
+                                });
+                                setTimeout(() => {
+                                  isInitialFlyingRef.current = false;
+                                }, 650);
+                                setIsFollowingVehicle(true);
+                                isFollowingVehicleRef.current = true;
+                              }
 
                               setSelectedVehicle({
                                 rid: targetVeh.rid || firstRid,
-                                id: targetVeh.id,
-                                gosNum: targetVeh.gosNum,
+                                id: targetVeh.id || `veh_${firstRid}_${targetVeh.gosNum || item.route}`,
+                                gosNum: targetVeh.gosNum || item.gosNum,
                                 route: targetVeh.route || targetVeh.rnum || item.route,
                                 type: targetType,
                                 lat: targetVeh.lat,
@@ -4952,6 +4962,7 @@ export default function App() {
                             <div className="history-card-right">
                               {activeReminder && (
                                 <button
+                                  type="button"
                                   className="history-notify-bell-btn"
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -4965,24 +4976,19 @@ export default function App() {
                                   </span>
                                 </button>
                               )}
-                              {isLiveOnMap ? (
-                                <>
-                                  {itemProgress != null && (
-                                    <RouteProgressRing percent={itemProgress} />
-                                  )}
-                                  <button
-                                    className={`history-select-btn ${isSelected ? 'active' : ''}`}
-                                    title={isSelected ? "Слежение активно" : "Показать и следить"}
-                                    aria-label={isSelected ? "Слежение активно" : "Показать и следить"}
-                                  >
-                                    <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
-                                      {isSelected ? 'my_location' : 'near_me'}
-                                    </span>
-                                  </button>
-                                </>
-                              ) : (
-                                <span className="history-offline-badge">Не на линии</span>
+                              {itemProgress != null && isLiveOnMap && (
+                                <RouteProgressRing percent={itemProgress} />
                               )}
+                              <button
+                                type="button"
+                                className={`history-select-btn ${isSelected ? 'active' : ''}`}
+                                title={isSelected ? "Слежение активно" : (isLiveOnMap ? "Показать и следить" : "Показать маршрут на карте")}
+                                aria-label={isSelected ? "Слежение активно" : (isLiveOnMap ? "Показать и следить" : "Показать маршрут на карте")}
+                              >
+                                <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
+                                  {isSelected ? 'my_location' : 'near_me'}
+                                </span>
+                              </button>
                             </div>
                           </div>
                         );
