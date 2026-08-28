@@ -2519,7 +2519,12 @@ export default function App() {
       // Smooth Camera Tracking for Selected Vehicle
       if (selectedVehicleRef.current && isFollowingVehicleRef.current && !isInitialFlyingRef.current && map.current) {
         // Do not interrupt while user is actively dragging, pinch-zooming, scroll-zooming, or rotating
-        const isInteracting = isZoomingOrPinchingRef.current || isDraggingRef.current || map.current.isZooming() || map.current.isRotating();
+        const isInteracting = (
+          isZoomingOrPinchingRef.current ||
+          isDraggingRef.current ||
+          (Date.now() - lastWheelTimeRef.current < 800) ||
+          (map.current && (map.current.isZooming() || map.current.isMoving() || map.current.isRotating()))
+        );
         if (!isInteracting) {
           const selId = selectedVehicleRef.current.id;
           const selMarker = vehicleMarkersRef.current[selId];
@@ -2971,44 +2976,13 @@ export default function App() {
       map.current.on("dragstart", (e) => {
         isDraggingRef.current = true;
         dragStartPointRef.current = e?.point ? { x: e.point.x, y: e.point.y } : null;
+        if (isFollowingVehicleRef.current) {
+          isFollowingVehicleRef.current = false;
+          setIsFollowingVehicle(false);
+        }
       });
       map.current.on("dragend", (e) => {
         isDraggingRef.current = false;
-        if (
-          document.hidden ||
-          Date.now() - lastResumeTimeRef.current < 1000 ||
-          Date.now() - lastVehicleSelectionTimeRef.current < 1500 ||
-          Date.now() - lastTabCloseTimeRef.current < 1000 ||
-          isZoomingOrPinchingRef.current ||
-          isInitialFlyingRef.current ||
-          Date.now() - lastWheelTimeRef.current < 500
-        ) {
-          return;
-        }
-
-        if (map.current && (map.current.isZooming() || map.current.isRotating())) {
-          return;
-        }
-
-        const touch = e?.originalEvent?.touches?.[0] || e?.originalEvent?.changedTouches?.[0];
-        const clientY = touch ? touch.clientY : e?.originalEvent?.clientY;
-        if (clientY != null && (clientY < 100 || clientY > window.innerHeight - 100)) {
-          return; // Ignore top/bottom system gestures
-        }
-
-        if (e?.originalEvent?.target?.closest('.selected-vehicle-hud, .mui-bottom-nav, .mui-drawer, .maplibregl-ctrl, button')) {
-          return;
-        }
-
-        const startPt = dragStartPointRef.current;
-        const endPt = e?.point;
-        if (startPt && endPt) {
-          const dist = Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y);
-          if (dist < 35) {
-            return; // Ignore micro-jitters / taps / small scrolls
-          }
-        }
-
         if (isFollowingVehicleRef.current) {
           isFollowingVehicleRef.current = false;
           setIsFollowingVehicle(false);
