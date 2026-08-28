@@ -4033,6 +4033,90 @@ export default function App() {
     }
   };
 
+  const handleSelectVehicleFromHistory = useCallback((item, live) => {
+    if (!item) return;
+    const targetVeh = live || item;
+    const targetType = normalizeVehicleType(targetVeh.type || item.type, targetVeh.route || targetVeh.rnum || item.route);
+    
+    let routeItem = null;
+    if (routes && routes.length > 0) {
+      routeItem = routes.find(r => {
+        const ids = String(r.id || "").split(",");
+        return (targetVeh.rid && ids.includes(String(targetVeh.rid))) || (item.rid && ids.includes(String(item.rid)));
+      });
+      if (!routeItem) {
+        routeItem = routes.find(r => {
+          const matchNum = String(r.number).trim().toLowerCase() === String(targetVeh.route || targetVeh.rnum || item.route || "").trim().toLowerCase();
+          const matchType = normalizeVehicleType(r.type, r.number) === targetType;
+          return matchNum && matchType;
+        });
+      }
+    }
+
+    const targetRouteId = routeItem ? routeItem.id : (targetVeh.rid || item.rid);
+    if (targetRouteId) {
+      setSelectedRoutes(prev => {
+        if (prev.has(targetRouteId)) return prev;
+        const next = new Set(prev);
+        next.add(targetRouteId);
+        return next;
+      });
+    }
+
+    if (targetType === "tram" && !showTram) setShowTram(true);
+    if (targetType === "bus" && !showBus) setShowBus(true);
+    if (targetType === "minibus" && !showBus) setShowBus(true);
+
+    const firstRid = routeItem ? String(routeItem.id).split(",")[0].trim() : (targetVeh.rid || item.rid || null);
+    const selVehId = String(targetVeh.id || item.id);
+
+    closeAllStationPopups();
+    setActiveTab(0);
+
+    const isDesktop = window.innerWidth >= 768;
+    const padding = isDesktop
+      ? { left: 80, right: 20, top: 20, bottom: 20 }
+      : { left: 20, right: 20, top: 20, bottom: 120 };
+
+    const marker = vehicleMarkersRef.current[selVehId] || (live && vehicleMarkersRef.current[live.id]);
+    const mPos = marker ? marker.getLngLat() : null;
+    const anim = activeAnimationsRef.current[selVehId] || (live && activeAnimationsRef.current[live.id]);
+    const liveVeh = (live && knownVehiclesRef.current[live.id]) || knownVehiclesRef.current[selVehId] || live || targetVeh;
+    const targetLng = mPos ? mPos.lng : (anim ? anim.currentLng : (liveVeh?.lng || targetVeh.lng || item.lng));
+    const targetLat = mPos ? mPos.lat : (anim ? anim.currentLat : (liveVeh?.lat || targetVeh.lat || item.lat));
+
+    prevSelectedVehicleIdRef.current = selVehId;
+    lastVehicleSelectionTimeRef.current = Date.now();
+    lastTabCloseTimeRef.current = Date.now();
+
+    setIsFollowingVehicle(true);
+    isFollowingVehicleRef.current = true;
+
+    setSelectedVehicle({
+      rid: targetVeh.rid || firstRid,
+      id: selVehId,
+      gosNum: targetVeh.gosNum || item.gosNum || "",
+      route: targetVeh.route || targetVeh.rnum || item.route,
+      type: targetType,
+      lat: targetLat || targetVeh.lat,
+      lng: targetLng || targetVeh.lng
+    });
+
+    if (map.current && targetLng != null && targetLat != null) {
+      isInitialFlyingRef.current = true;
+      map.current.flyTo({
+        center: [targetLng, targetLat],
+        zoom: Math.max(map.current.getZoom(), 15.5),
+        duration: 750,
+        padding,
+        essential: true
+      });
+      setTimeout(() => {
+        isInitialFlyingRef.current = false;
+      }, 800);
+    }
+  }, [routes, showTram, showBus]);
+
   const favoriteStops = useMemo(() => {
     return stations.filter((st) => favorites.has(st.properties.id));
   }, [stations, favorites]);
@@ -4857,84 +4941,7 @@ export default function App() {
                             className={`history-card ${isSelected ? 'selected' : ''} ${!isLiveOnMap ? 'inactive' : ''}`}
                             role="button"
                             tabIndex={0}
-                            onClick={() => {
-                              const targetVeh = live || item;
-                              const targetType = normalizeVehicleType(targetVeh.type || item.type, targetVeh.route || targetVeh.rnum || item.route);
-                              
-                              let routeItem = null;
-                              if (routes && routes.length > 0) {
-                                routeItem = routes.find(r => {
-                                  const ids = String(r.id || "").split(",");
-                                  return (targetVeh.rid && ids.includes(String(targetVeh.rid))) || (item.rid && ids.includes(String(item.rid)));
-                                });
-                                if (!routeItem) {
-                                  routeItem = routes.find(r => {
-                                    const matchNum = String(r.number).trim().toLowerCase() === String(targetVeh.route || targetVeh.rnum || item.route || "").trim().toLowerCase();
-                                    const matchType = normalizeVehicleType(r.type, r.number) === targetType;
-                                    return matchNum && matchType;
-                                  });
-                                }
-                              }
-
-                              const targetRouteId = routeItem ? routeItem.id : (targetVeh.rid || item.rid);
-
-                              if (targetRouteId) {
-                                setSelectedRoutes(prev => {
-                                  if (prev.has(targetRouteId)) return prev;
-                                  const next = new Set(prev);
-                                  next.add(targetRouteId);
-                                  return next;
-                                });
-                              }
-
-                              if (targetType === "tram" && !showTram) setShowTram(true);
-                              if (targetType === "bus" && !showBus) setShowBus(true);
-                              if (targetType === "minibus" && !showBus) setShowBus(true);
-
-                              const firstRid = routeItem ? String(routeItem.id).split(",")[0].trim() : (targetVeh.rid || item.rid || null);
-                              const selVehId = targetVeh.id || item.id;
-
-                              closeAllStationPopups();
-
-                              lastVehicleSelectionTimeRef.current = Date.now();
-                              lastTabCloseTimeRef.current = Date.now();
-
-                              // Robust target coordinate resolution from live markers, animations, knownVehicles, or vehicle objects
-                              const marker = vehicleMarkersRef.current[selVehId] || (live && vehicleMarkersRef.current[live.id]);
-                              const mPos = marker ? marker.getLngLat() : null;
-                              const anim = activeAnimationsRef.current[selVehId] || (live && activeAnimationsRef.current[live.id]);
-                              const liveVeh = (live && knownVehiclesRef.current[live.id]) || knownVehiclesRef.current[selVehId] || live || targetVeh;
-                              const targetLng = mPos ? mPos.lng : (anim ? anim.currentLng : (liveVeh?.lng || targetVeh.lng || item.lng));
-                              const targetLat = mPos ? mPos.lat : (anim ? anim.currentLat : (liveVeh?.lat || targetVeh.lat || item.lat));
-
-                              if (map.current && targetLng != null && targetLat != null) {
-                                isInitialFlyingRef.current = true;
-                                map.current.flyTo({
-                                  center: [targetLng, targetLat],
-                                  zoom: Math.max(map.current.getZoom(), 15.5),
-                                  duration: 600,
-                                  essential: true
-                                });
-                                setTimeout(() => {
-                                  isInitialFlyingRef.current = false;
-                                }, 650);
-                              }
-
-                              setIsFollowingVehicle(true);
-                              isFollowingVehicleRef.current = true;
-
-                              setSelectedVehicle({
-                                rid: targetVeh.rid || firstRid,
-                                id: targetVeh.id || `veh_${firstRid}_${targetVeh.gosNum || item.route}`,
-                                gosNum: targetVeh.gosNum || item.gosNum,
-                                route: targetVeh.route || targetVeh.rnum || item.route,
-                                type: targetType,
-                                lat: targetLat || targetVeh.lat,
-                                lng: targetLng || targetVeh.lng
-                              });
-
-                              setActiveTab(0);
-                            }}
+                            onClick={() => handleSelectVehicleFromHistory(item, live)}
                           >
                             <div className="history-card-left">
                               <div className={`hud-badge hud-badge-${vehType}`} style={{ padding: "6px 10px", borderRadius: "12px" }}>
@@ -4991,6 +4998,10 @@ export default function App() {
                               <button
                                 type="button"
                                 className={`history-select-btn ${isSelected ? 'active' : ''}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSelectVehicleFromHistory(item, live);
+                                }}
                                 title={isSelected ? "Слежение активно" : (isLiveOnMap ? "Показать и следить" : "Показать маршрут на карте")}
                                 aria-label={isSelected ? "Слежение активно" : (isLiveOnMap ? "Показать и следить" : "Показать маршрут на карте")}
                               >
