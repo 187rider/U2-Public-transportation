@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v63';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v64';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -218,22 +218,24 @@ self.addEventListener('push', (event) => {
 
     // Android / Desktop Chrome / Edge
     try {
-      const isArrival = tag.startsWith('arrival_') && (title.includes('прибыл') || title.includes('arrived'));
+      const isArrival = (tag.startsWith('arrival_') || tag === 'arrival-alarm') && (title.includes('прибыл') || title.includes('arrived'));
+      const notifTag = isArrival ? `arrival_arrived_${Date.now()}` : (tag || 'arrival-alarm');
       const options = {
         body: body,
-        tag: tag || 'arrival-alarm',
+        tag: notifTag,
         icon: icon || '/apple-touch-icon.png',
         badge: badge || '/favicon.svg',
         renotify: true,
         requireInteraction: isArrival,
-        vibrate: isArrival ? [300, 100, 300, 100, 400] : [150],
+        vibrate: isArrival ? [400, 150, 400, 150, 500] : [200],
+        timestamp: Date.now(),
         data: { url: url || '/' }
       };
       await self.registration.showNotification(title, options);
     } catch (err) {
       console.warn('showNotification failed with rich options, fallback to basic:', err);
       try {
-        await self.registration.showNotification(title, { body: body, tag: tag, data: { url: url } });
+        await self.registration.showNotification(title, { body: body, tag: tag, timestamp: Date.now(), data: { url: url } });
       } catch (finalErr) {
         console.error('Final showNotification error:', finalErr);
       }
