@@ -490,14 +490,17 @@ class PushReminderManager:
             logger.error("Failed to update reminder in DB: %s", e)
 
     async def send_webpush(self, sub: dict, title: str, body: str, tag: str = "arrival-alarm", sid: str = "", rid: str = "") -> bool:
+        is_arrival = "прибыл" in title.lower() or "arrived" in title.lower()
         payload = {
             "title": title,
             "body": body,
             "icon": "/apple-touch-icon.png",
+            "badge": "/favicon.svg",
             "tag": tag,
             "sid": sid,
             "rid": rid,
-            "url": "/"
+            "url": "/",
+            "sound": "/arrival-chaching.wav" if is_arrival else "default"
         }
         try:
             from pywebpush import webpush
