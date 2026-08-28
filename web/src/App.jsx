@@ -882,6 +882,21 @@ export default function App() {
       return null;
     }
   });
+  const isSameVehicleHistoryEntry = (a, b) => {
+    if (!a || !b) return false;
+    if (a.id && b.id && String(a.id) === String(b.id)) return true;
+    
+    const aPlate = formatGosNum(a.gosNum).toLowerCase();
+    const bPlate = formatGosNum(b.gosNum).toLowerCase();
+    const aRoute = String(a.route || a.rnum || '').trim().toLowerCase();
+    const bRoute = String(b.route || b.rnum || '').trim().toLowerCase();
+
+    if (aPlate && bPlate && aPlate.length >= 2 && aPlate === bPlate) {
+      if (!aRoute || !bRoute || aRoute === bRoute) return true;
+    }
+    return false;
+  };
+
   const [selectedRouteStations, setSelectedRouteStations] = useState(null);
   const [nextStationInfo, setNextStationInfo] = useState(null);
   const [vehicleHistory, setVehicleHistory] = useState(() => {
@@ -889,7 +904,24 @@ export default function App() {
       const saved = localStorage.getItem("pref_vehicleHistory");
       if (!saved) return [];
       const parsed = JSON.parse(saved);
-      return Array.isArray(parsed) ? parsed.filter(item => item && item.id) : [];
+      if (Array.isArray(parsed)) {
+        const deduped = [];
+        for (const item of parsed) {
+          if (!item || !item.id) continue;
+          const idx = deduped.findIndex(d => isSameVehicleHistoryEntry(d, item));
+          if (idx === -1) {
+            deduped.push(item);
+          } else {
+            const existing = deduped[idx];
+            const preferItem = (!String(item.id).startsWith('rem_') && String(existing.id).startsWith('rem_')) || ((item.timestamp || 0) > (existing.timestamp || 0));
+            if (preferItem) {
+              deduped[idx] = { ...existing, ...item, id: !String(item.id).startsWith('rem_') ? item.id : existing.id };
+            }
+          }
+        }
+        return deduped.slice(0, 9);
+      }
+      return [];
     } catch {
       return [];
     }
@@ -1239,14 +1271,12 @@ export default function App() {
     };
     setVehicleHistory(prev => {
       const existingList = Array.isArray(prev) ? prev : [];
-      // Only remove entries that are the EXACT same vehicle (by ID or plate), NOT all vehicles on the route
-      const filtered = existingList.filter(v => {
-        if (targetVehId && String(v.id) === String(targetVehId)) return false;
-        if (targetPlate && targetPlate.length > 2 && formatGosNum(v.gosNum).toLowerCase() === formatGosNum(targetPlate).toLowerCase()) return false;
-        // Also remove any previous reminder placeholder for the same reminder
-        if (v.id && String(v.id) === `rem_${sid}_${rid}_${rnum}`) return false;
-        return true;
-      });
+      const existing = existingList.find(v => isSameVehicleHistoryEntry(v, historyEntry));
+      if (existing) {
+        if (!historyEntry.nextStation && existing.nextStation) historyEntry.nextStation = existing.nextStation;
+        if (historyEntry.progress == null && existing.progress != null) historyEntry.progress = existing.progress;
+      }
+      const filtered = existingList.filter(v => !isSameVehicleHistoryEntry(v, historyEntry));
       const updated = [historyEntry, ...filtered].slice(0, 9);
       try { localStorage.setItem("pref_vehicleHistory", JSON.stringify(updated)); } catch {}
       return updated;
@@ -1628,8 +1658,6 @@ export default function App() {
     if (!veh || !veh.id) return;
     setVehicleHistory(prev => {
       const list = Array.isArray(prev) ? prev : [];
-      const existing = list.find(item => item && item.id === veh.id);
-      const filtered = list.filter(item => item && item.id !== veh.id);
       const normalizedType = normalizeVehicleType(veh.type, veh.route || veh.rnum);
       const newEntry = {
         id: veh.id,
@@ -1639,10 +1667,18 @@ export default function App() {
         type: normalizedType,
         lat: veh.lat,
         lng: veh.lng,
-        nextStation: nextSt || veh.nextStation || existing?.nextStation || null,
-        progress: typeof veh.progress === "number" ? veh.progress : (existing?.progress ?? null),
+        nextStation: nextSt || veh.nextStation || null,
+        progress: typeof veh.progress === "number" ? veh.progress : null,
         timestamp: Date.now()
       };
+
+      const existing = list.find(item => isSameVehicleHistoryEntry(item, newEntry));
+      if (existing) {
+        if (!newEntry.nextStation && existing.nextStation) newEntry.nextStation = existing.nextStation;
+        if (newEntry.progress == null && existing.progress != null) newEntry.progress = existing.progress;
+      }
+
+      const filtered = list.filter(item => !isSameVehicleHistoryEntry(item, newEntry));
       const updated = [newEntry, ...filtered].slice(0, 9);
       try {
         localStorage.setItem("pref_vehicleHistory", JSON.stringify(updated));
@@ -2073,8 +2109,31 @@ export default function App() {
 
   const sortedVehicleHistory = useMemo(() => {
     if (!Array.isArray(vehicleHistory) || vehicleHistory.length === 0) return [];
+    
+    // Strict deduplication pass: merge duplicates by ID, license plate, and route
+    const deduped = [];
+    for (const raw of vehicleHistory) {
+      if (!raw || !raw.id) continue;
+      const existingIdx = deduped.findIndex(d => isSameVehicleHistoryEntry(d, raw));
+      if (existingIdx === -1) {
+        deduped.push(raw);
+      } else {
+        const existing = deduped[existingIdx];
+        const isRawRealId = raw.id && !String(raw.id).startsWith('rem_');
+        deduped[existingIdx] = {
+          ...existing,
+          ...raw,
+          id: isRawRealId ? raw.id : existing.id,
+          gosNum: raw.gosNum || existing.gosNum,
+          nextStation: raw.nextStation || existing.nextStation,
+          progress: raw.progress ?? existing.progress,
+          timestamp: Math.max(raw.timestamp || 0, existing.timestamp || 0)
+        };
+      }
+    }
+
     const nowTime = Date.now();
-    const decorated = vehicleHistory.map(item => {
+    const decorated = deduped.map(item => {
       const itemPlate = formatGosNum(item.gosNum).toLowerCase();
       const itemRoute = String(item.route || '').trim().toLowerCase();
       const live = (() => {
