@@ -440,6 +440,8 @@ class PushReminderManager:
 
         try:
             with get_reminders_db() as conn:
+                # Clean up any previous reminder on this endpoint for this same stop and route
+                conn.execute("DELETE FROM push_reminders WHERE rem_key = ? OR rem_key = ?", (rem_key, f"{endpoint}_{sid}_{rid}"))
                 conn.execute("""
                     INSERT OR REPLACE INTO push_reminders 
                     (rem_key, subscription_json, sid, station_name, rid, rnum, vehid, gos_num, last_notified_time, created_at)
@@ -572,13 +574,21 @@ class PushReminderManager:
                         station_forecasts_map[item[0]] = item[1]
 
                 pending_pushes = []
+                seen_endpoint_reminders = set()
 
                 # 2. Evaluate all active reminders in memory
                 for rem_key, rem in active_items:
                     sid = rem.get("sid")
+                    rid = rem.get("rid", "")
+                    ep = rem.get("subscription", {}).get("endpoint", "")
+                    dedup_key = f"{ep}_{sid}_{rid}"
+                    if dedup_key in seen_endpoint_reminders:
+                        continue
+                    seen_endpoint_reminders.add(dedup_key)
+
                     # Evict reminders older than 2 hours to prevent table growth
                     if now - rem.get("created_at", 0) > 7200:
-                        self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""))
+                        self.remove_reminder(ep, sid, rid)
                         continue
 
                     forecasts = station_forecasts_map.get(sid)
