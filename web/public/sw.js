@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v58';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v59';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -190,14 +190,7 @@ self.addEventListener('push', (event) => {
     }
   }
 
-  const baseOptions = {
-    body: body,
-    tag: tag,
-    icon: icon,
-    badge: badge,
-    data: { url: url }
-  };
-
+  async function handlePush() {
     const isArrival = tag.startsWith('arrival_') && (title.includes('прибыл') || title.includes('arrived'));
     const options = {
       body: body,
