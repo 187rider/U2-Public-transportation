@@ -428,7 +428,7 @@ class PushReminderManager:
         if not gos_num and vehid and vehid in vehicle_poller.vehicles:
             gos_num = str(vehicle_poller.vehicles[vehid].get("gosNum", ""))
 
-        rem_key = f"{endpoint}_{sid}_{rid}_{vehid}" if vehid else f"{endpoint}_{sid}_{rid}"
+        rem_key = f"{endpoint}_{sid}_{rid}"
 
         init_time = data.get("initialTime")
         init_num = None
@@ -441,7 +441,7 @@ class PushReminderManager:
         try:
             with get_reminders_db() as conn:
                 # Clean up any existing reminder on this device for this stop & route
-                conn.execute("DELETE FROM push_reminders WHERE (rem_key LIKE ? AND sid = ? AND rid = ?) OR rem_key = ?", (f"{endpoint}%", str(sid), str(rid), rem_key))
+                conn.execute("DELETE FROM push_reminders WHERE rem_key = ? OR (rem_key LIKE ? AND sid = ? AND rid = ?)", (rem_key, f"{endpoint}%", str(sid), str(rid)))
                 conn.execute("""
                     INSERT OR REPLACE INTO push_reminders 
                     (rem_key, subscription_json, sid, station_name, rid, rnum, vehid, gos_num, last_notified_time, created_at)
@@ -466,12 +466,12 @@ class PushReminderManager:
             return False
 
     def remove_reminder(self, endpoint: str, sid: str, rid: str, vehid: str = ""):
-        rem_key = f"{endpoint}_{sid}_{rid}_{vehid}" if vehid else f"{endpoint}_{sid}_{rid}"
+        rem_key = f"{endpoint}_{sid}_{rid}"
         try:
             with get_reminders_db() as conn:
                 conn.execute(
-                    "DELETE FROM push_reminders WHERE (rem_key LIKE ? AND sid = ? AND rid = ?) OR rem_key = ? OR rem_key = ?",
-                    (f"{endpoint}%", str(sid), str(rid), rem_key, f"{endpoint}_{sid}_{rid}")
+                    "DELETE FROM push_reminders WHERE rem_key = ? OR (rem_key LIKE ? AND sid = ? AND rid = ?)",
+                    (rem_key, f"{endpoint}%", str(sid), str(rid))
                 )
                 conn.commit()
         except Exception as e:
