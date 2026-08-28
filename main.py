@@ -387,6 +387,7 @@ def get_reminders_db():
 class PushReminderManager:
     def __init__(self):
         self._running = False
+        self._missed_counts = {}
 
     def get_all_reminders(self) -> dict[str, dict]:
         try:
@@ -408,6 +409,7 @@ class PushReminderManager:
                         "vehid": str(r["vehid"] or "") if "vehid" in r.keys() else "",
                         "gosNum": str(r["gos_num"] or "") if "gos_num" in r.keys() else "",
                         "lastNotifiedTime": r["last_notified_time"],
+                        "initialTime": r["last_notified_time"],
                         "created_at": float(r["created_at"] or 0)
                     }
                 return res
@@ -613,7 +615,7 @@ class PushReminderManager:
                     if not matching_fc:
                         init_time = 0
                         try:
-                            init_time = int(rem.get("initialTime", 0))
+                            init_time = int(rem.get("initialTime") or rem.get("lastNotifiedTime") or 0)
                         except (ValueError, TypeError):
                             init_time = 0
                         elapsed_min = (now - rem.get("created_at", now)) / 60.0
@@ -629,8 +631,18 @@ class PushReminderManager:
                                 "sid": rem["sid"],
                                 "rid": rem["rid"]
                             })
-                        self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
+                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
+                            self._missed_counts.pop(rem_key, None)
+                            continue
+
+                        rem_miss = self._missed_counts.get(rem_key, 0) + 1
+                        self._missed_counts[rem_key] = rem_miss
+                        if rem_miss >= 5 or elapsed_min > (init_time + 6):
+                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
+                            self._missed_counts.pop(rem_key, None)
                         continue
+                    else:
+                        self._missed_counts.pop(rem_key, None)
 
                     raw_t = matching_fc.get("time")
                     try:
@@ -1197,8 +1209,9 @@ async def get_station_forecasts(sid: str = ""):
 
 
 @app.get("/api/vapid_public_key")
+@app.get("/api/vapid-public-key")
 async def get_vapid_public_key():
-    return {"publicKey": VAPID_PUBLIC_KEY}
+    return {"publicKey": VAPID_PUBLIC_KEY, "public_key": VAPID_PUBLIC_KEY}
 
 
 @app.post("/api/reminders/subscribe", dependencies=[Depends(verify_signature)])

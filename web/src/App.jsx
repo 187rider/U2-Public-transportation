@@ -1156,9 +1156,20 @@ export default function App() {
         try {
           const reg = await navigator.serviceWorker.ready;
           if (reg && reg.pushManager) {
-            const keyRes = await apiFetch('/api/vapid-public-key');
-            const { public_key } = await keyRes.json();
-            const rawData = window.atob(public_key);
+            let vapidKey = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
+            try {
+              const kRes = await apiFetch('/api/vapid_public_key');
+              if (kRes.ok) {
+                const kData = await kRes.json();
+                if (kData && (kData.publicKey || kData.public_key)) {
+                  vapidKey = kData.publicKey || kData.public_key;
+                }
+              }
+            } catch {}
+
+            const padding = '='.repeat((4 - (vapidKey.length % 4)) % 4);
+            const base64 = (vapidKey + padding).replace(/-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
             const outputArray = new Uint8Array(rawData.length);
             for (let i = 0; i < rawData.length; ++i) {
               outputArray[i] = rawData.charCodeAt(i);
@@ -1166,10 +1177,16 @@ export default function App() {
 
             let existingSub = await reg.pushManager.getSubscription();
             if (existingSub) {
-              const currentKey = existingSub.options.applicationServerKey;
-              const isMatch = currentKey && new Uint8Array(currentKey).every((byte, idx) => byte === outputArray[idx]);
+              const currentKey = existingSub.options && existingSub.options.applicationServerKey;
+              let isMatch = false;
+              if (currentKey) {
+                const existingArr = new Uint8Array(currentKey);
+                if (existingArr.length === outputArray.length) {
+                  isMatch = existingArr.every((byte, idx) => byte === outputArray[idx]);
+                }
+              }
               if (!isMatch) {
-                await existingSub.unsubscribe();
+                await existingSub.unsubscribe().catch(() => {});
                 existingSub = null;
               }
             }
