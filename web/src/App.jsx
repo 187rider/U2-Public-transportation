@@ -913,6 +913,7 @@ export default function App() {
   const lastResumeTimeRef = useRef(Date.now());
   const lastWheelTimeRef = useRef(0);
   const lastVehicleSelectionTimeRef = useRef(0);
+  const lastTabCloseTimeRef = useRef(0);
   const isZoomingOrPinchingRef = useRef(false);
   const isDraggingRef = useRef(false);
   const dragStartPointRef = useRef(null);
