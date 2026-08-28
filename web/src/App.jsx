@@ -525,7 +525,7 @@ function playChaChingSound() {
   }
 }
 
-// Web Push / Service Worker Notification Trigger
+// In-App Sound and Vibration Trigger (System tray notifications are handled exclusively by backend WebPush)
 async function triggerArrivalPush(title, body, tag = 'arrival-alarm', isFinalArrival = false) {
   if (isFinalArrival) {
     playChaChingSound();
@@ -536,34 +536,6 @@ async function triggerArrivalPush(title, body, tag = 'arrival-alarm', isFinalArr
     if ('vibrate' in navigator) {
       try { navigator.vibrate([120]); } catch {}
     }
-  }
-
-  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
-    return;
-  }
-
-  const options = {
-    body: body,
-    tag: tag || 'arrival-alarm',
-    icon: '/apple-touch-icon.png',
-    badge: '/favicon.svg',
-    renotify: true,
-    requireInteraction: isFinalArrival,
-    vibrate: isFinalArrival ? [300, 100, 300, 100, 450] : [150],
-    sound: isFinalArrival ? '/arrival-chaching.wav' : undefined,
-    data: { url: '/' }
-  };
-
-  try {
-    if ('serviceWorker' in navigator) {
-      const reg = await navigator.serviceWorker.ready;
-      if (reg && reg.showNotification) {
-        await reg.showNotification(title, options);
-        return;
-      }
-    }
-  } catch (err) {
-    console.warn("showNotification error:", err);
   }
 }
 
