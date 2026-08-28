@@ -1139,17 +1139,34 @@ export default function App() {
     }
 
     const remId = vehid ? `${sid}_${rid}_${vehid}` : `${sid}_${rid}`;
-    const exists = remindersRef.current.some(r => !r.triggered && String(r.sid) === String(sid) && (r.id === remId || (vehid && String(r.vehid) === String(vehid)) || (rid && String(r.rid) === String(rid))));
+    const cleanPlate = gosNum ? formatGosNum(gosNum).toLowerCase() : "";
 
-    // 1. If reminder is already active for this stop, cancel/unsubscribe immediately
-    if (exists) {
-      const existingRem = remindersRef.current.find(r => !r.triggered && String(r.sid) === String(sid) && (r.id === remId || (vehid && String(r.vehid) === String(vehid)) || (rid && String(r.rid) === String(rid))));
-      await cancelArrivalReminder(existingRem ? existingRem.id : remId, rnum);
+    const existingRem = remindersRef.current.find(r => {
+      if (r.triggered) return false;
+      // 1. Same exact reminder ID
+      if (r.id === remId) return true;
+      // 2. Same stop and route
+      if (String(r.sid) === String(sid) && (String(r.rid) === String(rid) || (vehid && String(r.vehid) === String(vehid)))) return true;
+      // 3. Same vehicle ID across ANY stop
+      if (vehid && r.vehid && String(r.vehid) === String(vehid)) return true;
+      // 4. Same license plate across ANY stop
+      if (cleanPlate && r.gosNum && formatGosNum(r.gosNum).toLowerCase() === cleanPlate) return true;
       return false;
+    });
+
+    // 1. If reminder already exists:
+    if (existingRem) {
+      // If clicking the bell on the EXACT same stop -> toggle off and cancel
+      if (String(existingRem.sid) === String(sid)) {
+        await cancelArrivalReminder(existingRem.id, rnum);
+        return false;
+      }
+      // If setting a reminder for the same vehicle on a DIFFERENT stop -> cancel the older stop's reminder first
+      await cancelArrivalReminder(existingRem.id, rnum);
     }
 
     // 2. Setting a new reminder -> check 3-reminder limit
-    const activeList = remindersRef.current.filter(r => !r.triggered);
+    const activeList = remindersRef.current.filter(r => !r.triggered && r.id !== existingRem?.id);
     if (activeList.length >= 3) {
       setReminderLimitNotice(true);
       if (reminderLimitTimerRef.current) clearTimeout(reminderLimitTimerRef.current);
@@ -1255,7 +1272,10 @@ export default function App() {
       lastTime: initialTime || "",
       lastNotifiedTime: !isNaN(initialNum) ? initialNum : null
     };
-    setReminders(prev => [...prev.filter(r => r.id !== remId), newRem]);
+    setReminders(prev => [
+      ...prev.filter(r => r.id !== remId && (!cleanPlate || !r.gosNum || formatGosNum(r.gosNum).toLowerCase() !== cleanPlate) && (!vehid || !r.vehid || String(r.vehid) !== String(vehid))),
+      newRem
+    ]);
 
     // Ensure reminded vehicle is placed cleanly into vehicleHistory without duplicate cards
     // Use the real vehicle ID from live telemetry if available

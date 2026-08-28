@@ -442,6 +442,13 @@ class PushReminderManager:
 
         try:
             with get_reminders_db() as conn:
+                # Remove any existing reminder for the same vehicle (by vehid or gos_num) on this endpoint
+                if vehid or gos_num:
+                    conn.execute("""
+                        DELETE FROM push_reminders 
+                        WHERE rem_key LIKE ? AND ((vehid != '' AND vehid = ?) OR (gos_num != '' AND gos_num = ?))
+                    """, (f"{endpoint}%", vehid or "__none__", gos_num or "__none__"))
+
                 conn.execute("""
                     INSERT OR REPLACE INTO push_reminders 
                     (rem_key, subscription_json, sid, station_name, rid, rnum, vehid, gos_num, last_notified_time, created_at)
