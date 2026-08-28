@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v65';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v66';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -199,46 +199,26 @@ self.addEventListener('push', (event) => {
   };
 
   async function handlePush() {
-    const isIOS = /iPad|iPhone|iPod/.test(self.navigator.userAgent) ||
-      (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
+    const isArrival = tag.startsWith('arrival_') && (title.includes('прибыл') || title.includes('arrived'));
+    const options = {
+      body: body,
+      tag: tag || 'arrival-alarm',
+      icon: icon || '/apple-touch-icon.png',
+      badge: badge || '/favicon.svg',
+      renotify: isArrival,
+      requireInteraction: isArrival,
+      vibrate: isArrival ? [300, 100, 300, 100, 400] : [100],
+      data: { url: url || '/' }
+    };
 
-    if (isIOS) {
-      // iOS WebKit PWA: strict standard options to avoid WebKit push crash
-      try {
-        await self.registration.showNotification(title, {
-          body: body,
-          tag: tag,
-          data: { url: url }
-        });
-      } catch (err) {
-        console.error('iOS WebKit showNotification error:', err);
-      }
-      return;
-    }
-
-    // Android / Desktop Chrome / Edge
     try {
-      const isArrival = (tag.startsWith('arrival_') || tag === 'arrival-alarm') && (title.includes('прибыл') || title.includes('arrived'));
-      const notifTag = isArrival ? `arrival_arrived_${Date.now()}` : (tag || 'arrival-alarm');
-      const options = {
-        body: body,
-        tag: notifTag,
-        icon: icon || '/apple-touch-icon.png',
-        badge: badge || '/favicon.svg',
-        renotify: true,
-        requireInteraction: isArrival,
-        silent: false,
-        vibrate: isArrival ? [500, 150, 500, 150, 600] : [250, 100, 250],
-        timestamp: Date.now(),
-        data: { url: url || '/' }
-      };
       await self.registration.showNotification(title, options);
     } catch (err) {
       console.warn('showNotification failed with rich options, fallback to basic:', err);
       try {
-        await self.registration.showNotification(title, { body: body, tag: tag, timestamp: Date.now(), data: { url: url } });
-      } catch (finalErr) {
-        console.error('Final showNotification error:', finalErr);
+        await self.registration.showNotification(title, { body: body, tag: tag, data: { url: url } });
+      } catch (e) {
+        console.error('Final showNotification error:', e);
       }
     }
   }
