@@ -440,8 +440,8 @@ class PushReminderManager:
 
         try:
             with get_reminders_db() as conn:
-                # Clean up any previous reminder on this endpoint for this same stop and route
-                conn.execute("DELETE FROM push_reminders WHERE rem_key = ? OR rem_key = ?", (rem_key, f"{endpoint}_{sid}_{rid}"))
+                # Clean up any existing reminder on this device for this stop & route
+                conn.execute("DELETE FROM push_reminders WHERE (rem_key LIKE ? AND sid = ? AND rid = ?) OR rem_key = ?", (f"{endpoint}%", str(sid), str(rid), rem_key))
                 conn.execute("""
                     INSERT OR REPLACE INTO push_reminders 
                     (rem_key, subscription_json, sid, station_name, rid, rnum, vehid, gos_num, last_notified_time, created_at)
@@ -469,7 +469,10 @@ class PushReminderManager:
         rem_key = f"{endpoint}_{sid}_{rid}_{vehid}" if vehid else f"{endpoint}_{sid}_{rid}"
         try:
             with get_reminders_db() as conn:
-                conn.execute("DELETE FROM push_reminders WHERE rem_key = ? OR rem_key = ?", (rem_key, f"{endpoint}_{sid}_{rid}"))
+                conn.execute(
+                    "DELETE FROM push_reminders WHERE (rem_key LIKE ? AND sid = ? AND rid = ?) OR rem_key = ? OR rem_key = ?",
+                    (f"{endpoint}%", str(sid), str(rid), rem_key, f"{endpoint}_{sid}_{rid}")
+                )
                 conn.commit()
         except Exception as e:
             logger.error("Failed to remove reminder from DB: %s", e)
