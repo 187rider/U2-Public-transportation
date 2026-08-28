@@ -387,7 +387,6 @@ def get_reminders_db():
 class PushReminderManager:
     def __init__(self):
         self._running = False
-        self._missed_counts = {}
 
     def get_all_reminders(self) -> dict[str, dict]:
         try:
@@ -409,7 +408,6 @@ class PushReminderManager:
                         "vehid": str(r["vehid"] or "") if "vehid" in r.keys() else "",
                         "gosNum": str(r["gos_num"] or "") if "gos_num" in r.keys() else "",
                         "lastNotifiedTime": r["last_notified_time"],
-                        "initialTime": r["last_notified_time"],
                         "created_at": float(r["created_at"] or 0)
                     }
                 return res
@@ -442,13 +440,6 @@ class PushReminderManager:
 
         try:
             with get_reminders_db() as conn:
-                # Remove any existing reminder for the same vehicle (by vehid or gos_num) on this endpoint
-                if vehid or gos_num:
-                    conn.execute("""
-                        DELETE FROM push_reminders 
-                        WHERE rem_key LIKE ? AND ((vehid != '' AND vehid = ?) OR (gos_num != '' AND gos_num = ?))
-                    """, (f"{endpoint}%", vehid or "__none__", gos_num or "__none__"))
-
                 conn.execute("""
                     INSERT OR REPLACE INTO push_reminders 
                     (rem_key, subscription_json, sid, station_name, rid, rnum, vehid, gos_num, last_notified_time, created_at)
@@ -490,17 +481,14 @@ class PushReminderManager:
             logger.error("Failed to update reminder in DB: %s", e)
 
     async def send_webpush(self, sub: dict, title: str, body: str, tag: str = "arrival-alarm", sid: str = "", rid: str = "") -> bool:
-        is_arrival = "прибыл" in title.lower() or "arrived" in title.lower()
         payload = {
             "title": title,
             "body": body,
             "icon": "/apple-touch-icon.png",
-            "badge": "/favicon.svg",
             "tag": tag,
             "sid": sid,
             "rid": rid,
-            "url": "/",
-            "sound": "/arrival-chaching.wav" if is_arrival else "default"
+            "url": "/"
         }
         try:
             from pywebpush import webpush
@@ -600,13 +588,10 @@ class PushReminderManager:
 
                     rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
                     rem_vehid = str(rem.get("vehid", "")).strip()
-                    rem_gos = str(rem.get("gosNum", "")).strip().lower()
 
                     matching_fc = None
                     if rem_vehid:
                         matching_fc = next((f for f in forecasts if str(f.get("vehid", "")).strip() == rem_vehid), None)
-                    if not matching_fc and rem_gos:
-                        matching_fc = next((f for f in forecasts if str(f.get("gosNum", "")).strip().lower() == rem_gos), None)
                     if not matching_fc:
                         matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
 
@@ -626,16 +611,8 @@ class PushReminderManager:
                     sub = rem.get("subscription")
 
                     if not matching_fc:
-                        init_time = 0
-                        try:
-                            init_time = int(rem.get("initialTime") or rem.get("lastNotifiedTime") or 0)
-                        except (ValueError, TypeError):
-                            init_time = 0
-                        elapsed_min = (now - rem.get("created_at", now)) / 60.0
-                        was_close = (rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 3)
-                        time_passed = (init_time > 0 and elapsed_min >= (init_time - 0.5))
-
-                        if was_close or time_passed:
+                        # If the bus was close (<= 3 min) and now disappeared from forecast list, it has arrived!
+                        if rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 3:
                             pending_pushes.append({
                                 "sub": sub,
                                 "title": f"🚌 Маршрут {rnum} прибыл!",
@@ -645,18 +622,7 @@ class PushReminderManager:
                                 "rid": rem["rid"]
                             })
                             self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
-                            self._missed_counts.pop(rem_key, None)
-                            continue
-
-                        # Resilient to temporary upstream signal loss: do not delete prematurely
-                        rem_miss = self._missed_counts.get(rem_key, 0) + 1
-                        self._missed_counts[rem_key] = rem_miss
-                        if rem_miss >= 40 or elapsed_min > (max(init_time, 15) + 20):
-                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
-                            self._missed_counts.pop(rem_key, None)
                         continue
-                    else:
-                        self._missed_counts.pop(rem_key, None)
 
                     raw_t = matching_fc.get("time")
                     try:
