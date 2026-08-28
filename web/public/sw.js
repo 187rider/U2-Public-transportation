@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v68';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v69';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -199,26 +199,52 @@ self.addEventListener('push', (event) => {
   };
 
   async function handlePush() {
-    const isArrival = tag.startsWith('arrival_') && (title.includes('прибыл') || title.includes('arrived'));
-    const options = {
-      body: body,
-      tag: tag || 'arrival-alarm',
-      icon: icon || '/apple-touch-icon.png',
-      badge: badge || '/favicon.svg',
-      renotify: isArrival,
-      requireInteraction: isArrival,
-      vibrate: isArrival ? [300, 100, 300, 100, 400] : [100],
-      data: { url: url || '/' }
-    };
+    const isIOS = /iPad|iPhone|iPod/.test(self.navigator.userAgent) ||
+      (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
+
+    // Universal: Explicitly close previous notification card for this exact route (iOS + Android)
+    try {
+      if (typeof self.registration.getNotifications === 'function') {
+        const existing = await self.registration.getNotifications();
+        const prefix = sid && rid ? `arrival_${sid}_${rid}` : tag;
+        for (const notif of existing) {
+          if (notif.tag && (notif.tag === tag || notif.tag === prefix || notif.tag.startsWith(prefix + '_'))) {
+            try { notif.close(); } catch {}
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('getNotifications cleanup error:', e);
+    }
+
+    if (isIOS) {
+      // iOS WebKit (PWA): standard options
+      try {
+        await self.registration.showNotification(title, {
+          body: body,
+          tag: tag,
+          data: { url: url }
+        });
+      } catch (err) {
+        console.error('iOS WebKit showNotification error:', err);
+      }
+      return;
+    }
 
     try {
-      await self.registration.showNotification(title, options);
+      const richOptions = {
+        ...baseOptions,
+        renotify: true,
+        requireInteraction: true,
+        vibrate: [300, 100, 300, 100, 400]
+      };
+      await self.registration.showNotification(title, richOptions);
     } catch (err) {
-      console.warn('showNotification failed with rich options, fallback to basic:', err);
+      console.warn('Rich showNotification failed, retrying base:', err);
       try {
-        await self.registration.showNotification(title, { body: body, tag: tag, data: { url: url } });
-      } catch (e) {
-        console.error('Final showNotification error:', e);
+        await self.registration.showNotification(title, baseOptions);
+      } catch (finalErr) {
+        console.error('Final showNotification error:', finalErr);
       }
     }
   }
