@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v60';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v61';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -190,28 +190,49 @@ self.addEventListener('push', (event) => {
     }
   }
 
-  async function handlePush() {
-    const isArrival = tag.startsWith('arrival_') && (title.includes('прибыл') || title.includes('arrived'));
-    const options = {
-      body: body,
-      tag: tag || 'arrival-alarm',
-      icon: icon || '/apple-touch-icon.png',
-      badge: badge || '/favicon.svg',
-      renotify: true,
-      requireInteraction: isArrival,
-      vibrate: isArrival ? [300, 100, 300, 100, 400] : [150],
-      sound: isArrival ? '/arrival-chaching.wav' : undefined,
-      data: { url: url || '/' }
-    };
+  const baseOptions = {
+    body: body,
+    tag: tag,
+    icon: icon,
+    badge: badge,
+    data: { url: url }
+  };
 
-    try {
-      await self.registration.showNotification(title, options);
-    } catch (err) {
-      console.warn('showNotification failed with rich options, fallback to basic:', err);
+  async function handlePush() {
+    const isIOS = /iPad|iPhone|iPod/.test(self.navigator.userAgent) ||
+      (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
+
+    if (isIOS) {
+      // iOS WebKit PWA: strict standard options to avoid WebKit push crash
       try {
-        await self.registration.showNotification(title, { body: body, tag: tag, data: { url: url }, renotify: true });
-      } catch (e) {
-        console.error('Final showNotification error:', e);
+        await self.registration.showNotification(title, {
+          body: body,
+          tag: tag,
+          data: { url: url }
+        });
+      } catch (err) {
+        console.error('iOS WebKit showNotification error:', err);
+      }
+      return;
+    }
+
+    // Android / Desktop Chrome / Edge
+    try {
+      const isArrival = tag.startsWith('arrival_') && (title.includes('прибыл') || title.includes('arrived'));
+      const richOptions = {
+        ...baseOptions,
+        renotify: true,
+        requireInteraction: isArrival,
+        vibrate: isArrival ? [300, 100, 300, 100, 400] : [150],
+        sound: isArrival ? '/arrival-chaching.wav' : undefined
+      };
+      await self.registration.showNotification(title, richOptions);
+    } catch (err) {
+      console.warn('Rich showNotification failed, retrying base:', err);
+      try {
+        await self.registration.showNotification(title, baseOptions);
+      } catch (finalErr) {
+        console.error('Final showNotification error:', finalErr);
       }
     }
   }
