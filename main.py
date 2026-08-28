@@ -597,6 +597,7 @@ class PushReminderManager:
                         continue
 
                     rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
+                    rem_vehid = str(rem.get("vehid", "")).strip()
                     matching_fc = None
                     if rem_vehid:
                         matching_fc = next((f for f in forecasts if str(f.get("vehid", "")).strip() == rem_vehid), None)
