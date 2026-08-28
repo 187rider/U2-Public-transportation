@@ -518,12 +518,8 @@ class PushReminderManager:
                 push_headers["apns-priority"] = "10"
                 if clean_collapse:
                     push_headers["apns-collapse-id"] = clean_collapse
-            else:
-                push_headers["Urgency"] = "high"
-                if clean_collapse:
-                    push_headers["Topic"] = clean_collapse
 
-            ttl_val = 120
+            ttl_val = 60
 
             loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(
