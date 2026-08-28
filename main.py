@@ -664,17 +664,14 @@ class PushReminderManager:
                     elif last is None:
                         self.update_last_notified(rem_key, cur_time)
                     elif cur_time > last:
-                        # If bus was slightly delayed by traffic (<= 2 min drift), update baseline
+                        # If bus was slightly delayed by traffic, update baseline
                         self.update_last_notified(rem_key, cur_time)
-                    elif last >= 10 and cur_time >= 10:
-                        if cur_time <= last - 5:
-                            should_fire = True
-                    elif last >= 10 and cur_time < 10:
-                        if cur_time <= last - 5 or cur_time <= 9:
-                            should_fire = True
-                    elif cur_time < 10:
-                        if cur_time <= last - 1:
-                            should_fire = True
+                    elif last > 5 and cur_time <= 5:
+                        should_fire = True
+                    elif last > 3 and cur_time <= 3:
+                        should_fire = True
+                    elif last > 1 and cur_time <= 1:
+                        should_fire = True
 
                     if should_fire:
                         self.update_last_notified(rem_key, cur_time)
