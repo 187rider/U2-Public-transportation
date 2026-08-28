@@ -491,9 +491,9 @@ class PushReminderManager:
             "body": body,
             "icon": "/apple-touch-icon.png",
             "tag": tag,
-            "sid": sid,
-            "rid": rid,
-            "url": "/"
+            "sid": str(sid),
+            "rid": str(rid),
+            "url": f"/?sid={sid}" if sid else "/"
         }
         try:
             from pywebpush import webpush

@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v69';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v70';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -195,7 +195,7 @@ self.addEventListener('push', (event) => {
     tag: tag,
     icon: icon,
     badge: badge,
-    data: { url: url }
+    data: { url: url, sid: sid, rid: rid }
   };
 
   async function handlePush() {
@@ -223,7 +223,7 @@ self.addEventListener('push', (event) => {
         await self.registration.showNotification(title, {
           body: body,
           tag: tag,
-          data: { url: url }
+          data: { url: url, sid: sid, rid: rid }
         });
       } catch (err) {
         console.error('iOS WebKit showNotification error:', err);
@@ -254,11 +254,18 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = (event.notification.data && event.notification.data.url) || '/';
+  const notifData = (event.notification && event.notification.data) || {};
+  const sid = notifData.sid || '';
+  const rid = notifData.rid || '';
+  const targetUrl = (notifData.url && notifData.url !== '/') ? notifData.url : (sid ? `/?sid=${encodeURIComponent(sid)}` : '/');
+
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
         if (client.url && 'focus' in client) {
+          if (sid) {
+            client.postMessage({ type: 'OPEN_STATION_POPUP', sid: sid, rid: rid });
+          }
           if ('navigate' in client && targetUrl !== '/') {
             client.navigate(targetUrl);
           }

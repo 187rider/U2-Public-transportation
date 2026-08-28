@@ -3230,6 +3230,40 @@ export default function App() {
     setActiveTab(0);
   }, [stations, toggleFavorite]);
 
+  // Handle open station popup from push notification click or URL query param (?sid=...)
+  useEffect(() => {
+    if (!map.current || !stations || stations.length === 0) return;
+
+    // 1. Check URL query parameters (?sid=123 or ?station=123)
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const sidParam = urlParams.get('sid') || urlParams.get('station');
+      if (sidParam) {
+        setTimeout(() => {
+          openStationOnMap(sidParam);
+        }, 300);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } catch {}
+
+    // 2. Listen for messages from Service Worker when notification is clicked while window is open
+    const handleSwMessage = (event) => {
+      if (event.data && event.data.type === 'OPEN_STATION_POPUP' && event.data.sid) {
+        openStationOnMap(event.data.sid, '', event.data.rid || '');
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+    }
+
+    return () => {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+      }
+    };
+  }, [stations, openStationOnMap]);
+
   // Update GeoJSON Source & Viewport Pill Markers on Data or Filter Changes
   useEffect(() => {
     if (!map.current) return;
