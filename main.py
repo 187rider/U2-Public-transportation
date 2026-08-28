@@ -600,10 +600,13 @@ class PushReminderManager:
 
                     rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
                     rem_vehid = str(rem.get("vehid", "")).strip()
+                    rem_gos = str(rem.get("gosNum", "")).strip().lower()
 
                     matching_fc = None
                     if rem_vehid:
                         matching_fc = next((f for f in forecasts if str(f.get("vehid", "")).strip() == rem_vehid), None)
+                    if not matching_fc and rem_gos:
+                        matching_fc = next((f for f in forecasts if str(f.get("gosNum", "")).strip().lower() == rem_gos), None)
                     if not matching_fc:
                         matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
 
@@ -629,8 +632,8 @@ class PushReminderManager:
                         except (ValueError, TypeError):
                             init_time = 0
                         elapsed_min = (now - rem.get("created_at", now)) / 60.0
-                        was_close = (rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 4)
-                        time_passed = (init_time > 0 and elapsed_min >= (init_time - 1))
+                        was_close = (rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 3)
+                        time_passed = (init_time > 0 and elapsed_min >= (init_time - 0.5))
 
                         if was_close or time_passed:
                             pending_pushes.append({
@@ -645,9 +648,10 @@ class PushReminderManager:
                             self._missed_counts.pop(rem_key, None)
                             continue
 
+                        # Resilient to temporary upstream signal loss: do not delete prematurely
                         rem_miss = self._missed_counts.get(rem_key, 0) + 1
                         self._missed_counts[rem_key] = rem_miss
-                        if rem_miss >= 5 or elapsed_min > (init_time + 6):
+                        if rem_miss >= 40 or elapsed_min > (max(init_time, 15) + 20):
                             self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
                             self._missed_counts.pop(rem_key, None)
                         continue
