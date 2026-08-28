@@ -468,6 +468,13 @@ const style = {
 };
 
 let activeStationPopup = null;
+let popupStateListener = null;
+
+function setPopupState(open) {
+  if (typeof popupStateListener === 'function') {
+    try { popupStateListener(Boolean(open)); } catch {}
+  }
+}
 
 function closeAllStationPopups() {
   if (activeStationPopup) {
@@ -477,6 +484,7 @@ function closeAllStationPopups() {
     activeStationPopup = null;
   }
   document.querySelectorAll('.maplibregl-popup').forEach(p => p.remove());
+  setPopupState(false);
 }
 
 // Sound Effect for Final Arrival (eBay sound)
@@ -607,6 +615,7 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
     .addTo(mapInstance);
 
   activeStationPopup = popup;
+  setPopupState(true);
 
   let isActive = true;
   let forecastTimer = null;
@@ -619,6 +628,7 @@ function showStationPopup(mapInstance, coords, props, routes = [], isFavorite = 
     if (activeStationPopup === popup) {
       activeStationPopup = null;
     }
+    setPopupState(false);
   });
 
   const favBtn = document.getElementById(`popup-fav-btn-${safeId}`);
@@ -834,6 +844,16 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [stopLimit, setStopLimit] = useState(60);
+  const [isPopupOpen, setIsPopupOpen] = useState(false);
+
+  useEffect(() => {
+    popupStateListener = (open) => {
+      setIsPopupOpen(open);
+    };
+    return () => {
+      popupStateListener = null;
+    };
+  }, []);
 
   // Favorites
   const [favorites, setFavorites] = useState(() => {
@@ -2851,6 +2871,14 @@ export default function App() {
       }, 500);
     });
 
+    map.current.on('popupopen', () => setPopupState(true));
+    map.current.on('popupclose', () => {
+      setTimeout(() => {
+        const popups = document.querySelectorAll('.maplibregl-popup');
+        setPopupState(popups.length > 0);
+      }, 50);
+    });
+
     map.current.addControl(new YandexFloatingCompassControl(), "top-right");
     map.current.addControl(new NavigationControl({ showCompass: false, showZoom: true }), "top-right");
     
@@ -4455,8 +4483,10 @@ export default function App() {
           const displayPlate = activeRem.gosNum || liveVeh?.gosNum || "";
           const remTime = activeRem.lastTime != null ? String(activeRem.lastTime) : "";
 
+          const isHudCompact = activeTab !== 0 || isPopupOpen;
+
           return (
-            <div className={`reminder-topbar-stack ${activeTab !== 0 ? 'compact' : ''}`}>
+            <div className={`reminder-topbar-stack ${isHudCompact ? 'compact' : ''}`}>
               {reminderLimitNotice && (
                 <div className="reminder-limit-banner">
                   <span className="material-symbols-outlined" style={{ fontSize: "16px", color: "#d97706" }}>warning</span>
@@ -4465,7 +4495,7 @@ export default function App() {
               )}
               <div
                 key={activeRem.id}
-                className={`selected-vehicle-hud reminder-topbar-hud swipe-card ${activeTab !== 0 ? 'compact' : ''}`}
+                className={`selected-vehicle-hud reminder-topbar-hud swipe-card ${isHudCompact ? 'compact' : ''}`}
                 onTouchStart={(e) => {
                   touchStartYRef.current = e.touches[0].clientY;
                   touchStartXRef.current = e.touches[0].clientX;
@@ -4584,7 +4614,7 @@ export default function App() {
 
         {/* Standalone Limit Warning if 0 active reminders */}
         {!selectedVehicle && reminders.filter(r => !r.triggered).length === 0 && reminderLimitNotice && (
-          <div className="reminder-topbar-stack" style={{ pointerEvents: "none" }}>
+          <div className={`reminder-topbar-stack ${activeTab !== 0 || isPopupOpen ? 'compact' : ''}`} style={{ pointerEvents: "none" }}>
             <div className="reminder-limit-banner">
               <span className="material-symbols-outlined" style={{ fontSize: "16px", color: "#d97706" }}>warning</span>
               <span>Выбрано максимальное количество маршрутов</span>
@@ -4597,9 +4627,10 @@ export default function App() {
           const currentVehType = normalizeVehicleType(selectedVehicle.type, selectedVehicle.route);
           const currentVehIcon = currentVehType === 'tram' ? 'tram' : (currentVehType === 'minibus' ? 'airport_shuttle' : 'directions_bus');
           const activeRemForVeh = getActiveReminderForVehicle(selectedVehicle);
+          const isHudCompact = activeTab !== 0 || isPopupOpen;
 
           return (
-            <div className={`selected-vehicle-hud ${activeTab !== 0 ? 'compact' : ''}`}>
+            <div className={`selected-vehicle-hud ${isHudCompact ? 'compact' : ''}`}>
               <div className="hud-top-row">
                 <div className="hud-vehicle-info">
                   <div className={`hud-badge hud-badge-${currentVehType}`}>
