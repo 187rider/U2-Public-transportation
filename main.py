@@ -602,7 +602,10 @@ class PushReminderManager:
                     matching_fc = None
                     if rem_vehid:
                         matching_fc = next((f for f in forecasts if str(f.get("vehid", "")).strip() == rem_vehid), None)
-                    if not matching_fc:
+                    elif rem.get("gosNum"):
+                        g_clean = str(rem.get("gosNum", "")).strip().lower()
+                        matching_fc = next((f for f in forecasts if str(f.get("gosNum", "")).strip().lower() == g_clean), None)
+                    else:
                         matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
 
                     rnum = rem.get("rnum", "")
@@ -642,9 +645,9 @@ class PushReminderManager:
 
                     last = rem.get("lastNotifiedTime")
 
-                    # If the bus was close (<= 3 min) and the forecast time suddenly jumps up by >= 3 min,
+                    # If the bus was close (<= 3 min) and the forecast time suddenly jumps up,
                     # the tracked vehicle has arrived and upstream is now showing the NEXT vehicle behind it!
-                    if last is not None and last <= 3 and cur_time >= last + 3:
+                    if last is not None and last <= 3 and (cur_time >= last + 2 or (last <= 1 and cur_time > last)):
                         pending_pushes.append({
                             "sub": sub,
                             "title": f"🚌 Маршрут {rnum} прибыл!",
