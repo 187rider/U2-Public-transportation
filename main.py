@@ -611,8 +611,16 @@ class PushReminderManager:
                     sub = rem.get("subscription")
 
                     if not matching_fc:
-                        # If the bus was close (<= 3 min) and now disappeared from forecast list, it has arrived!
-                        if rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 3:
+                        init_time = 0
+                        try:
+                            init_time = int(rem.get("initialTime", 0))
+                        except (ValueError, TypeError):
+                            init_time = 0
+                        elapsed_min = (now - rem.get("created_at", now)) / 60.0
+                        was_close = (rem.get("lastNotifiedTime") is not None and rem["lastNotifiedTime"] <= 4)
+                        time_passed = (init_time > 0 and elapsed_min >= (init_time - 1))
+
+                        if was_close or time_passed:
                             pending_pushes.append({
                                 "sub": sub,
                                 "title": f"🚌 Маршрут {rnum} прибыл!",
@@ -621,7 +629,7 @@ class PushReminderManager:
                                 "sid": rem["sid"],
                                 "rid": rem["rid"]
                             })
-                            self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
+                        self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
                         continue
 
                     raw_t = matching_fc.get("time")

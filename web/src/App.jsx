@@ -914,29 +914,32 @@ export default function App() {
   const lastWheelTimeRef = useRef(0);
   const lastVehicleSelectionTimeRef = useRef(0);
   const lastTabCloseTimeRef = useRef(0);
-  const isZoomingOrPinchingRef = useRef(false);
+              const isZoomingOrPinchingRef = useRef(false);
   const isDraggingRef = useRef(false);
   const dragStartPointRef = useRef(null);
   const wasFollowingBeforeHiddenRef = useRef(initialIsFollowing);
   const isAppResumeRef = useRef(false);
   const wakeLockRef = useRef(null);
-  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
-  const [consecutiveFetchErrors, setConsecutiveFetchErrors] = useState(0);
-  const isProgrammaticMoveRef = useRef(false);
-  const lastFollowPillUpdateRef = useRef(0);
-  const missedPollsRef = useRef(0);
-  const hasInitialCenteredRef = useRef(!selectedVehicle);
-  const debouncedForecastRefreshRef = useRef(null);
-
-  // Arrival Reminders & Push Notification Alarm System
   const [reminders, setReminders] = useState(() => {
     try {
       const saved = localStorage.getItem("pref_arrival_reminders");
-      return saved ? JSON.parse(saved) : [];
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const now = Date.now();
+        // Prune expired reminders (older than initialTime + 5 mins or 30 mins)
+        return Array.isArray(parsed) ? parsed.filter(r => {
+          if (!r || r.triggered) return false;
+          const initMins = parseInt(r.initialTime, 10) || 15;
+          const ageMins = (now - (r.createdAt || now)) / 60000;
+          return ageMins < Math.max(initMins + 5, 20);
+        }) : [];
+      }
     } catch {
       return [];
     }
+    return [];
   });
+
   const remindersRef = useRef(reminders);
   useEffect(() => {
     remindersRef.current = reminders;
@@ -967,7 +970,7 @@ export default function App() {
             const parts = remId.split('_');
             const sid = existing ? existing.sid : parts[0];
             const rid = existing ? existing.rid : parts[1];
-            const vehid = existing ? (existing.vehid || "") : (parts[2] || "");
+            const vehid = existing ? existing.vehid : (parts[2] || "");
             apiFetch('/api/reminders/unsubscribe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -981,7 +984,9 @@ export default function App() {
           }
         }
       }
-    } catch {}
+    } catch (err) {
+      console.warn("Failed to unsubscribe push reminder:", err);
+    }
 
     const displayRnum = rnum || (existing ? existing.rnum : "");
     setAlertToast({
@@ -1139,22 +1144,13 @@ export default function App() {
             : "Разрешите уведомления в настройках браузера."
         });
         setTimeout(() => setAlertToast(null), 7000);
-      } else if (Notification.permission === 'granted' && 'serviceWorker' in navigator) {
+      } else if (Notification.permission === 'granted') {
         try {
           const reg = await navigator.serviceWorker.ready;
           if (reg && reg.pushManager) {
-            let vapidKey = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
-            try {
-              const kRes = await apiFetch('/api/vapid_public_key');
-              if (kRes.ok) {
-                const kData = await kRes.json();
-                if (kData && kData.publicKey) vapidKey = kData.publicKey;
-              }
-            } catch {}
-
-            const padding = '='.repeat((4 - (vapidKey.length % 4)) % 4);
-            const base64 = (vapidKey + padding).replace(/-/g, '+').replace(/_/g, '/');
-            const rawData = window.atob(base64);
+            const keyRes = await apiFetch('/api/vapid-public-key');
+            const { public_key } = await keyRes.json();
+            const rawData = window.atob(public_key);
             const outputArray = new Uint8Array(rawData.length);
             for (let i = 0; i < rawData.length; ++i) {
               outputArray[i] = rawData.charCodeAt(i);
@@ -1162,21 +1158,10 @@ export default function App() {
 
             let existingSub = await reg.pushManager.getSubscription();
             if (existingSub) {
-              try {
-                const existingKey = existingSub.options && existingSub.options.applicationServerKey;
-                let matches = false;
-                if (existingKey) {
-                  const existingArr = new Uint8Array(existingKey);
-                  if (existingArr.length === outputArray.length) {
-                    matches = existingArr.every((val, i) => val === outputArray[i]);
-                  }
-                }
-                if (!matches) {
-                  await existingSub.unsubscribe();
-                  existingSub = null;
-                }
-              } catch {
-                await existingSub.unsubscribe().catch(() => {});
+              const currentKey = existingSub.options.applicationServerKey;
+              const isMatch = currentKey && new Uint8Array(currentKey).every((byte, idx) => byte === outputArray[idx]);
+              if (!isMatch) {
+                await existingSub.unsubscribe();
                 existingSub = null;
               }
             }
@@ -1207,6 +1192,7 @@ export default function App() {
       vehid: String(vehid || ""),
       gosNum: String(gosNum || ""),
       createdAt: Date.now(),
+      initialTime: String(initialTime),
       triggered: false,
       lastTime: initialTime || "",
       lastNotifiedTime: !isNaN(initialNum) ? initialNum : null
@@ -1334,10 +1320,15 @@ export default function App() {
               rem.gosNum = match.gosNum;
             }
 
-            const gosLabel = rem.gosNum ? ` (${rem.gosNum})` : "";
+            const now = Date.now();
+            const elapsedMin = (now - (rem.createdAt || now)) / 60000;
+            const initMin = parseInt(rem.initialTime, 10) || 0;
 
             if (!match) {
-              if (rem.lastNotifiedTime != null && rem.lastNotifiedTime <= 3) {
+              const wasClose = rem.lastNotifiedTime != null && rem.lastNotifiedTime <= 4;
+              const timePassed = initMin > 0 && elapsedMin >= (initMin - 1);
+
+              if (wasClose || timePassed) {
                 triggerArrivalPush(
                   `🚌 Маршрут ${rem.rnum} прибыл!`,
                   `Остановка «${rem.stationName}»`,
@@ -1349,8 +1340,9 @@ export default function App() {
                   body: `Остановка «${rem.stationName}»`
                 });
                 setTimeout(() => setAlertToast(null), 8000);
-                setReminders(prev => prev.filter(r => r.id !== rem.id));
               }
+              // Always clean up the reminder if it is no longer in forecast
+              setReminders(prev => prev.filter(r => r.id !== rem.id));
               return;
             }
 
@@ -1358,7 +1350,13 @@ export default function App() {
             const timeStr = String(match.time).toLowerCase();
             const curTime = !isNaN(timeNum) ? timeNum : (timeStr.includes("прибыв") ? 0 : null);
 
-            if (curTime == null) return;
+            if (curTime == null) {
+              if (elapsedMin > initMin + 5) {
+                setReminders(prev => prev.filter(r => r.id !== rem.id));
+              }
+              return;
+            }
+
             rem.lastTime = match.time;
             const last = rem.lastNotifiedTime;
 
