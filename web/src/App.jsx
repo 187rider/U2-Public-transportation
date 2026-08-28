@@ -4858,8 +4858,6 @@ export default function App() {
                             role="button"
                             tabIndex={0}
                             onClick={() => {
-                              if (isSelected) { setActiveTab(0); return; }
-
                               const targetVeh = live || item;
                               const targetType = normalizeVehicleType(targetVeh.type || item.type, targetVeh.route || targetVeh.rnum || item.route);
                               
@@ -4894,16 +4892,25 @@ export default function App() {
                               if (targetType === "minibus" && !showBus) setShowBus(true);
 
                               const firstRid = routeItem ? String(routeItem.id).split(",")[0].trim() : (targetVeh.rid || item.rid || null);
+                              const selVehId = targetVeh.id || item.id;
 
                               closeAllStationPopups();
 
                               lastVehicleSelectionTimeRef.current = Date.now();
                               lastTabCloseTimeRef.current = Date.now();
 
-                              if (targetVeh.lat && targetVeh.lng && map.current) {
+                              // Robust target coordinate resolution from live markers, animations, knownVehicles, or vehicle objects
+                              const marker = vehicleMarkersRef.current[selVehId] || (live && vehicleMarkersRef.current[live.id]);
+                              const mPos = marker ? marker.getLngLat() : null;
+                              const anim = activeAnimationsRef.current[selVehId] || (live && activeAnimationsRef.current[live.id]);
+                              const liveVeh = (live && knownVehiclesRef.current[live.id]) || knownVehiclesRef.current[selVehId] || live || targetVeh;
+                              const targetLng = mPos ? mPos.lng : (anim ? anim.currentLng : (liveVeh?.lng || targetVeh.lng || item.lng));
+                              const targetLat = mPos ? mPos.lat : (anim ? anim.currentLat : (liveVeh?.lat || targetVeh.lat || item.lat));
+
+                              if (map.current && targetLng != null && targetLat != null) {
                                 isInitialFlyingRef.current = true;
                                 map.current.flyTo({
-                                  center: [targetVeh.lng, targetVeh.lat],
+                                  center: [targetLng, targetLat],
                                   zoom: Math.max(map.current.getZoom(), 15.5),
                                   duration: 600,
                                   essential: true
@@ -4911,9 +4918,10 @@ export default function App() {
                                 setTimeout(() => {
                                   isInitialFlyingRef.current = false;
                                 }, 650);
-                                setIsFollowingVehicle(true);
-                                isFollowingVehicleRef.current = true;
                               }
+
+                              setIsFollowingVehicle(true);
+                              isFollowingVehicleRef.current = true;
 
                               setSelectedVehicle({
                                 rid: targetVeh.rid || firstRid,
@@ -4921,9 +4929,10 @@ export default function App() {
                                 gosNum: targetVeh.gosNum || item.gosNum,
                                 route: targetVeh.route || targetVeh.rnum || item.route,
                                 type: targetType,
-                                lat: targetVeh.lat,
-                                lng: targetVeh.lng
+                                lat: targetLat || targetVeh.lat,
+                                lng: targetLng || targetVeh.lng
                               });
+
                               setActiveTab(0);
                             }}
                           >
