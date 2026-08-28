@@ -73,7 +73,8 @@ VEHICLES_API_URL = f"{BUS62_URL}/getVehicleAnimations.php"
 VEHICLES_API9_URL = os.getenv("VEHICLES_API9_URL", "https://api9.bus62.ru/getVehicleAnimations.php")
 
 KEY = os.getenv("BUS62_KEY", "maps.bus62.ru:80").encode('utf-8')
-IV  = os.getenv("BUS62_IV", "Content-MD5-Hash").encode('utf-8')
+IV = os.getenv("BUS62_IV", "3277864329765431").encode('utf-8')
+UPSTREAM_SEMAPHORE = asyncio.Semaphore(6)
 
 
 def generate_hash():
@@ -1090,7 +1091,8 @@ async def get_vehicle_forecasts(vehid: str = ""):
     url = f"{BUS62_URL}/getVehicleForecasts.php"
     params = {"vehid": vehid, "city": BUS62_CITY}
     try:
-        r = await async_client.get(url, params=params, headers=get_headers(), timeout=10)
+        async with UPSTREAM_SEMAPHORE:
+            r = await async_client.get(url, params=params, headers=get_headers(), timeout=10)
         r.raise_for_status()
         if not r.text.strip():
             result = {"forecasts": []}
@@ -1133,7 +1135,8 @@ async def get_station_forecasts(sid: str = ""):
     url = f"{BUS62_URL}/getStationForecasts.php"
     params = {"sid": sid, "city": BUS62_CITY}
     try:
-        r = await async_client.get(url, params=params, headers=get_headers(), timeout=10)
+        async with UPSTREAM_SEMAPHORE:
+            r = await async_client.get(url, params=params, headers=get_headers(), timeout=10)
         r.raise_for_status()
         if not r.text.strip():
             result = {"forecasts": []}
