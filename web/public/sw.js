@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v62';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v63';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -224,9 +224,9 @@ self.addEventListener('push', (event) => {
         tag: tag || 'arrival-alarm',
         icon: icon || '/apple-touch-icon.png',
         badge: badge || '/favicon.svg',
-        renotify: isArrival,
+        renotify: true,
         requireInteraction: isArrival,
-        vibrate: isArrival ? [300, 100, 300, 100, 400] : [100],
+        vibrate: isArrival ? [300, 100, 300, 100, 400] : [150],
         data: { url: url || '/' }
       };
       await self.registration.showNotification(title, options);
