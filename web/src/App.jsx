@@ -913,13 +913,21 @@ export default function App() {
   const lastResumeTimeRef = useRef(Date.now());
   const lastWheelTimeRef = useRef(0);
   const lastVehicleSelectionTimeRef = useRef(0);
-  const lastTabCloseTimeRef = useRef(0);
-              const isZoomingOrPinchingRef = useRef(false);
+  const isZoomingOrPinchingRef = useRef(false);
   const isDraggingRef = useRef(false);
   const dragStartPointRef = useRef(null);
   const wasFollowingBeforeHiddenRef = useRef(initialIsFollowing);
   const isAppResumeRef = useRef(false);
   const wakeLockRef = useRef(null);
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [consecutiveFetchErrors, setConsecutiveFetchErrors] = useState(0);
+  const isProgrammaticMoveRef = useRef(false);
+  const lastFollowPillUpdateRef = useRef(0);
+  const missedPollsRef = useRef(0);
+  const hasInitialCenteredRef = useRef(!selectedVehicle);
+  const debouncedForecastRefreshRef = useRef(null);
+
+  // Arrival Reminders & Push Notification Alarm System
   const [reminders, setReminders] = useState(() => {
     try {
       const saved = localStorage.getItem("pref_arrival_reminders");
