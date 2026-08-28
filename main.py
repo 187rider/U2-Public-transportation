@@ -1154,34 +1154,7 @@ async def get_station_forecasts(sid: str = ""):
                 veh_id = str(item.get("vehid") or item.get("vid") or item.get("id") or "")
                 gos_num = str(item.get("gosNum") or item.get("gos_num") or "")
 
-                # If veh_id was not provided, match candidate vehicles by arrival time to this station
-                if not veh_id and rid:
-                    candidates = [v for v in vehicle_poller.vehicles.values() if str(v.get("rid", "")) == rid]
-                    if len(candidates) == 1:
-                        veh_id = str(candidates[0].get("id", ""))
-                        gos_num = str(candidates[0].get("gosNum", ""))
-                    elif len(candidates) > 1:
-                        best_candidate = None
-                        min_diff = 999
-                        for cand in candidates:
-                            c_id = str(cand.get("id", ""))
-                            if not c_id:
-                                continue
-                            try:
-                                v_fc = await get_vehicle_forecasts(vehid=c_id)
-                                for st_fc in v_fc.get("forecasts", []):
-                                    if str(st_fc.get("stid", "")) == str(sid):
-                                        diff = abs(int(st_fc.get("time", 0)) - time_val)
-                                        if diff < min_diff:
-                                            min_diff = diff
-                                            best_candidate = cand
-                            except Exception:
-                                pass
-                        if best_candidate and min_diff <= 3:
-                            veh_id = str(best_candidate.get("id", ""))
-                            gos_num = str(best_candidate.get("gosNum", ""))
-
-                # If upstream forecast didn't include gosNum, enrich only if exact veh_id is known
+                # If upstream forecast didn't include gosNum, enrich from vehicle_poller cache
                 if not gos_num and veh_id and veh_id in vehicle_poller.vehicles:
                     gos_num = str(vehicle_poller.vehicles[veh_id].get("gosNum", ""))
 
