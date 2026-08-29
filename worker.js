@@ -55,14 +55,7 @@ async function generateBus62Hash() {
   const D = pad(d.getUTCDate());
   const str = `${s}:${m}:${h} ${Y}-${M}-${D}`;
 
-  // PKCS7 Padding for 16-byte blocks
   const enc = new TextEncoder();
-  const strBytes = enc.encode(str);
-  const padLen = 16 - (strBytes.length % 16);
-  const padded = new Uint8Array(strBytes.length + padLen);
-  padded.set(strBytes, 0);
-  padded.fill(padLen, strBytes.length);
-
   const key = await crypto.subtle.importKey(
     "raw",
     enc.encode(BUS62_KEY),
@@ -74,7 +67,7 @@ async function generateBus62Hash() {
   const encrypted = await crypto.subtle.encrypt(
     { name: "AES-CBC", iv: enc.encode(BUS62_IV) },
     key,
-    padded
+    enc.encode(str)
   );
 
   return Array.from(new Uint8Array(encrypted))
