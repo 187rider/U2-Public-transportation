@@ -383,8 +383,20 @@ async function handleGetRoutes(env = {}) {
     });
   }
 
-  const routes = Array.from(routesByNum.values());
-  const result = { count: routes.length, routes };
+  const formattedRoutes = Array.from(routesByNum.values()).map((r) => ({
+    ...r,
+    id: r.id.join(",")
+  }));
+
+  formattedRoutes.sort((a, b) => {
+    const typeOrder = { bus: 0, tram: 1, minibus: 2 };
+    if (typeOrder[a.type] !== typeOrder[b.type]) return typeOrder[a.type] - typeOrder[b.type];
+    const numA = parseInt(a.number, 10), numB = parseInt(b.number, 10);
+    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+    return a.number.localeCompare(b.number);
+  });
+
+  const result = { count: formattedRoutes.length, routes: formattedRoutes };
   setInCache("all_routes_grouped", result);
   return Response.json(result);
 }
@@ -405,11 +417,11 @@ async function handleGetStations(env = {}) {
 
   const features = [];
   for (const station of rawStations) {
-    const stId = String(station.id || "");
+    const stType = String(station.type) === "0" ? "bus" : "tram";
     const stName = String(station.name || "").trim();
-    const stType = String(station.type || "bus");
-    const isWarm = Boolean(station.is_warm || station.warm || false);
-    const description = String(station.descr || station.description || "").trim();
+    const stId = String(station.id || "");
+    const isWarm = String(station.is_warm || station.warm || "0");
+    const description = String(station.description || station.descr || "").trim();
 
     const l0 = parseFloat(station.lon0 || 0) / 1000000.0;
     const a0 = parseFloat(station.lat0 || 0) / 1000000.0;
