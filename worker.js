@@ -278,16 +278,12 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig) {
   const headers = {
     "Content-Type": "application/octet-stream",
     "Content-Encoding": "aes128gcm",
-    "TTL": "120",
+    "TTL": "86400",
     "Urgency": "high",
+    "Topic": "bus-arrival",
     "Authorization": `vapid t=${jwt}, k=${vapidConfig.publicKey}`,
     "Crypto-Key": `p256ecdsa=${vapidConfig.publicKey}`
   };
-
-  // Google FCM format support
-  if (subscription.endpoint.includes("fcm.googleapis.com")) {
-    headers["Authorization"] = `WebPush ${jwt}`;
-  }
 
   // Apple APNs format support
   if (subscription.endpoint.includes("apple.com")) {
