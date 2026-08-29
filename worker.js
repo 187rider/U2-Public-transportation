@@ -1023,7 +1023,44 @@ export default {
       });
     }
 
-    // Static Assets from Cloudflare
+    // 2. Map Tiles Handler (Cloudflare R2 / Static Assets)
+    if (url.pathname.startsWith("/tiles/")) {
+      const tileKey = url.pathname.replace(/^\/tiles\//, "");
+
+      // 1. Check Cloudflare R2 bucket if bound
+      if (env.TILES_BUCKET) {
+        try {
+          const obj = await env.TILES_BUCKET.get(tileKey);
+          if (obj) {
+            const headers = new Headers();
+            obj.writeHttpMetadata(headers);
+            headers.set("Content-Type", "application/x-protobuf");
+            headers.set("Content-Encoding", "gzip");
+            headers.set("Cache-Control", "public, max-age=2592000, immutable");
+            return new Response(obj.body, { headers });
+          }
+        } catch (e) {}
+      }
+
+      // 2. Fallback to Cloudflare Workers Static Assets
+      try {
+        const assetRes = await env.ASSETS.fetch(request);
+        if (assetRes.status === 200) {
+          const newHeaders = new Headers(assetRes.headers);
+          newHeaders.set("Content-Type", "application/x-protobuf");
+          newHeaders.set("Content-Encoding", "gzip");
+          newHeaders.set("Cache-Control", "public, max-age=2592000, immutable");
+          return new Response(assetRes.body, {
+            status: 200,
+            headers: newHeaders
+          });
+        }
+      } catch (e) {}
+
+      return new Response("Tile not found", { status: 404 });
+    }
+
+    // 3. Static Assets from Cloudflare
     let response;
     try {
       response = await env.ASSETS.fetch(request);
