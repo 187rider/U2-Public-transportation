@@ -2,6 +2,9 @@ name = "u2-public-transportation"
 main = "worker.js"
 compatibility_date = "2024-09-23"
 
+[triggers]
+crons = ["* * * * *"]
+
 [assets]
 directory = "./dist"
 binding = "ASSETS"
