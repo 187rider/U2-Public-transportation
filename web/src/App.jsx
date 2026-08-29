@@ -2346,6 +2346,12 @@ export default function App() {
 
   useEffect(() => {
     fetchData();
+    // Safety guard: guarantee splash screen fades out smoothly within 3.5 seconds
+    const splashTimer = setTimeout(() => {
+      setIsSplashFading(true);
+      setTimeout(() => setIsSplashMounted(false), 780);
+    }, 3500);
+    return () => clearTimeout(splashTimer);
   }, []);
 
   const updateSourceData = () => {
