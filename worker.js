@@ -23,14 +23,19 @@ function getVapidConfig(env = {}) {
   const publicKey = env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
 
   let jwk = null;
-  if (env.VAPID_JWK_JSON) {
+  const rawKey = env.VAPID_JWK_JSON || env.VAPID_PRIVATE_KEY || "";
+
+  if (rawKey.trim().startsWith("{")) {
     try {
-      jwk = JSON.parse(env.VAPID_JWK_JSON);
+      jwk = JSON.parse(rawKey);
     } catch (e) {}
   }
 
   if (!jwk) {
-    const d = env.VAPID_PRIVATE_KEY || "";
+    let d = rawKey.trim();
+    if (d.includes("-----BEGIN")) {
+      d = d.replace(/-----[^\n]+-----/g, "").replace(/\s+/g, "");
+    }
     jwk = {
       kty: "EC",
       x: env.VAPID_PUBLIC_X || "hfMOOmwHUy0jDRcpYhkb7m6AzCqqPeWSm3PIUB4xsE8",
@@ -42,7 +47,7 @@ function getVapidConfig(env = {}) {
 
   // Fail loudly if private key is missing
   if (!jwk || !jwk.d) {
-    throw new Error("VAPID private key is missing. Set VAPID_PRIVATE_KEY or VAPID_JWK_JSON in Worker secrets.");
+    throw new Error("VAPID private key is missing. Set VAPID_PRIVATE_KEY in Worker secrets.");
   }
 
   return { subject, publicKey, jwk };
