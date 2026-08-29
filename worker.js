@@ -16,23 +16,43 @@ function getUpstreamConfig(env = {}) {
   };
 }
 
-function parsePemToJwk(pemStr) {
+function parsePemToJwk(pemStr, publicKeyStr = "") {
   try {
-    const cleanStr = pemStr.replace(/\\n/g, "\n").trim();
+    const cleanStr = (pemStr || "").replace(/\\n/g, "\n").trim();
     if (cleanStr.startsWith("{")) {
       return JSON.parse(cleanStr);
     }
-
-    const b64 = cleanStr.replace(/-----[^\n]+-----/g, "").replace(/\s+/g, "");
-    const rawStr = atob(b64);
-    const der = new Uint8Array(rawStr.length);
-    for (let i = 0; i < rawStr.length; i++) der[i] = rawStr.charCodeAt(i);
 
     const toB64Url = (buf) => {
       let bin = "";
       for (let i = 0; i < buf.byteLength; i++) bin += String.fromCharCode(buf[i]);
       return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     };
+
+    // If raw 32-byte scalar (e.g. 43 chars base64url)
+    if (cleanStr.length >= 42 && cleanStr.length <= 44 && !cleanStr.includes(" ")) {
+      const d = cleanStr;
+      if (publicKeyStr) {
+        try {
+          const pubDer = base64UrlToUint8Array(publicKeyStr);
+          if (pubDer.length === 65 && pubDer[0] === 0x04) {
+            return {
+              kty: "EC",
+              crv: "P-256",
+              d,
+              x: toB64Url(pubDer.subarray(1, 33)),
+              y: toB64Url(pubDer.subarray(33, 65)),
+              publicKey: publicKeyStr
+            };
+          }
+        } catch (e) {}
+      }
+    }
+
+    const b64 = cleanStr.replace(/-----[^\n]+-----/g, "").replace(/\s+/g, "");
+    const rawStr = atob(b64);
+    const der = new Uint8Array(rawStr.length);
+    for (let i = 0; i < rawStr.length; i++) der[i] = rawStr.charCodeAt(i);
 
     let d = null, x = null, y = null, pub = null;
 
@@ -66,6 +86,18 @@ function parsePemToJwk(pemStr) {
       }
     }
 
+    // 4. If public point was not in DER but provided separately in publicKeyStr
+    if (d && (!x || !y) && publicKeyStr) {
+      try {
+        const pubDer = base64UrlToUint8Array(publicKeyStr);
+        if (pubDer.length === 65 && pubDer[0] === 0x04) {
+          x = toB64Url(pubDer.subarray(1, 33));
+          y = toB64Url(pubDer.subarray(33, 65));
+          pub = publicKeyStr;
+        }
+      } catch (e) {}
+    }
+
     if (d && x && y) {
       return { kty: "EC", crv: "P-256", x, y, d, publicKey: pub };
     }
@@ -75,13 +107,22 @@ function parsePemToJwk(pemStr) {
 
 function getVapidConfig(env = {}) {
   const subject = env.VAPID_SUBJECT || "mailto:support@ridertech.online";
-  const rawKey = (env.VAPID_JWK_JSON || env.VAPID_PRIVATE_KEY || "").trim();
+  const rawKey = (
+    env.VAPID_JWK_JSON ||
+    env.VAPID_PRIVATE_KEY ||
+    env.VAPID_KEY ||
+    env.VAPID_PEM ||
+    env.VAPID_PRIVATE ||
+    env.vapid_private_key ||
+    env.vapid_key ||
+    ""
+  ).trim();
 
   let jwk = null;
-  let publicKey = env.VAPID_PUBLIC_KEY || "";
+  let publicKey = env.VAPID_PUBLIC_KEY || env.vapid_public_key || "";
 
   if (rawKey) {
-    const parsed = parsePemToJwk(rawKey);
+    const parsed = parsePemToJwk(rawKey, publicKey);
     if (parsed) {
       jwk = { kty: "EC", crv: "P-256", x: parsed.x, y: parsed.y, d: parsed.d };
       if (parsed.publicKey && !publicKey) {
