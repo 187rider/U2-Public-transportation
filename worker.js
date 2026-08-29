@@ -409,19 +409,21 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag
   const audience = `${endpointUrl.protocol}//${endpointUrl.host}`;
   const jwt = await createVapidJwt(audience, vapidConfig.subject, vapidConfig.jwk);
 
+  const isApple = subscription.endpoint.includes("apple.com") || subscription.endpoint.includes("push.apple.com");
+
   const headers = {
     "Content-Type": "application/octet-stream",
     "Content-Encoding": "aes128gcm",
-    "TTL": "300", // 5 minutes TTL for transit arrival alerts
-    "Urgency": "high",
+    "TTL": isApple ? "300" : "3600", // Android Doze queue tolerance: 1 hour prevents FCM discarding during idle
+    "Urgency": isUrgent ? "high" : "normal", // High priority reserved for arrival / <= 2m to conserve Doze budget
     "Topic": tag || "bus-arrival",
     "Authorization": `vapid t=${jwt}, k=${vapidConfig.publicKey}`
   };
 
   // Apple APNs format support
-  if (subscription.endpoint.includes("apple.com")) {
+  if (isApple) {
     headers["apns-push-type"] = "alert";
-    headers["apns-priority"] = "10";
+    headers["apns-priority"] = isUrgent ? "10" : "5";
     headers["apns-collapse-id"] = tag || "bus-arrival";
   }
 
@@ -431,11 +433,11 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag
   };
 }
 
-async function sendWebPush(subscription, payload, env = {}, tag = "bus-arrival") {
+async function sendWebPush(subscription, payload, env = {}, tag = "bus-arrival", isUrgent = true) {
   try {
     const vapidConfig = getVapidConfig(env);
     const payloadStr = typeof payload === "string" ? payload : JSON.stringify(payload);
-    const { body, headers } = await encryptWebPushPayload(subscription, payloadStr, vapidConfig, tag);
+    const { body, headers } = await encryptWebPushPayload(subscription, payloadStr, vapidConfig, tag, isUrgent);
 
     const res = await fetch(subscription.endpoint, {
       method: "POST",
@@ -674,6 +676,7 @@ export class TransitState {
         await this.storage.put(remKey, rem);
 
         const timeWord = curTime === 1 ? "1 минуту" : curTime < 5 ? `${curTime} минуты` : `${curTime} минут`;
+        const isUrgent = curTime <= 2; // High urgency only for arrival / final approach
         const res = await sendWebPush(sub, {
           title: `🚌 Маршрут ${rnum} через ${timeWord}`,
           body: `Остановка «${stname}»`,
@@ -681,7 +684,7 @@ export class TransitState {
           sid: rem.sid,
           rid: rem.rid,
           minutes: curTime
-        }, this.env, tag);
+        }, this.env, tag, isUrgent);
 
         // Dead subscription cleanup (HTTP 403, 404, 410 from FCM/APNs)
         if (!res.ok && [403, 404, 410].includes(res.status)) {

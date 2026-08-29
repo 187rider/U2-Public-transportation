@@ -232,9 +232,6 @@ self.addEventListener('notificationclick', (event) => {
           if (sid) {
             client.postMessage({ type: 'OPEN_STATION_POPUP', sid: sid, rid: rid });
           }
-          if ('navigate' in client && targetUrl !== '/') {
-            client.navigate(targetUrl);
-          }
           return client.focus();
         }
       }
