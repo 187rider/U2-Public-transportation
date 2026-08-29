@@ -544,11 +544,10 @@ async function handleGetRouteStations(url, env = {}) {
 }
 
 // -------------------------------------------------------------
-// Rate Limiter & Global In-Memory Vehicle Cache (10s Cooldown)
+// Rate Limiter & Global In-Memory Vehicle Cache (8s Cooldown)
 // -------------------------------------------------------------
 let LAST_VEHICLE_POLL_TIME = 0;
 let LAST_VEHICLE_SNAPSHOT = null;
-let VEHICLE_FETCH_PROMISE = null;
 
 function filterAndReturnVehicles(items, requestedRids, curk) {
   const ridSet = requestedRids ? new Set(requestedRids.split(",").map((r) => r.trim()).filter(Boolean)) : null;
@@ -617,56 +616,50 @@ async function handleGetVehicles(url, env = {}) {
   const curk = url.searchParams.get("curk") || "0";
   const now = Date.now();
 
-  // 1. Strict 10-second floor cooldown: if last poll was < 10 seconds ago, return cached snapshot immediately
-  if (LAST_VEHICLE_SNAPSHOT && now - LAST_VEHICLE_POLL_TIME < 10000) {
+  // 1. Return cached snapshot if recent (< 8 seconds)
+  if (LAST_VEHICLE_SNAPSHOT && now - LAST_VEHICLE_POLL_TIME < 8000) {
     return filterAndReturnVehicles(LAST_VEHICLE_SNAPSHOT, requestedRids, curk);
   }
 
-  // 2. Coalesce concurrent in-flight requests (prevent dogpiling to upstream)
-  if (!VEHICLE_FETCH_PROMISE) {
-    VEHICLE_FETCH_PROMISE = (async () => {
-      try {
-        const cfg = getUpstreamConfig(env);
-        if (!cfg.url) return;
+  const cfg = getUpstreamConfig(env);
+  if (!cfg.url) return Response.json({ vehicles: [], next_curk: curk });
 
-        let rids = "";
-        let routes = getFromCache("all_routes_raw", 3600);
-        if (!routes) {
-          const h = await getBus62Headers(env);
-          const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, {
-            headers: h,
-            signal: AbortSignal.timeout(6000)
-          });
-          if (r.ok) {
-            routes = await r.json();
-            setInCache("all_routes_raw", routes);
-          }
-        }
-        if (Array.isArray(routes) && routes.length) {
-          rids = routes.map((rt) => rt.id).filter(Boolean).join(",");
-        }
-
-        const headers = await getBus62Headers(env);
-        const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}&rids=${rids}`;
-        const res = await fetch(apiUrl, {
-          headers,
-          signal: AbortSignal.timeout(8000)
+  try {
+    let rids = requestedRids;
+    if (!rids) {
+      let routes = getFromCache("all_routes_raw", 3600);
+      if (!routes) {
+        const h = await getBus62Headers(env);
+        const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, {
+          headers: h,
+          signal: AbortSignal.timeout(4000)
         });
-        if (res.ok) {
-          const items = await res.json();
-          if (Array.isArray(items) && items.length > 0) {
-            LAST_VEHICLE_SNAPSHOT = items;
-            LAST_VEHICLE_POLL_TIME = Date.now();
-          }
+        if (r.ok) {
+          routes = await r.json();
+          setInCache("all_routes_raw", routes);
         }
-      } catch (e) {
-      } finally {
-        VEHICLE_FETCH_PROMISE = null;
       }
-    })();
-  }
+      if (Array.isArray(routes) && routes.length) {
+        rids = routes.map((rt) => rt.id).filter(Boolean).slice(0, 50).join(",");
+      }
+    }
 
-  await VEHICLE_FETCH_PROMISE;
+    const headers = await getBus62Headers(env);
+    const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}&rids=${rids}`;
+    const res = await fetch(apiUrl, {
+      headers,
+      signal: AbortSignal.timeout(5000)
+    });
+    if (res.ok) {
+      const items = await res.json();
+      if (Array.isArray(items) && items.length > 0) {
+        LAST_VEHICLE_SNAPSHOT = items;
+        LAST_VEHICLE_POLL_TIME = Date.now();
+        return filterAndReturnVehicles(items, requestedRids, curk);
+      }
+    }
+  } catch (e) {
+  }
 
   if (LAST_VEHICLE_SNAPSHOT) {
     return filterAndReturnVehicles(LAST_VEHICLE_SNAPSHOT, requestedRids, curk);
