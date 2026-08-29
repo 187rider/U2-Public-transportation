@@ -17,4 +17,4 @@ bindings = [
 
 [[migrations]]
 tag = "v1"
-new_classes = ["TransitState"]
+new_sqlite_classes = ["TransitState"]
