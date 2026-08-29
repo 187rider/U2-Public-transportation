@@ -5011,12 +5011,14 @@ export default function App() {
                         const vehType = normalizeVehicleType(item.type, item.route);
                         const iconName = vehType === "tram" ? "tram" : (vehType === "minibus" ? "airport_shuttle" : "directions_bus");
 
-                        const targetStation = activeReminder?.stationName
-                          ? (activeReminder.currentTime != null
-                              ? `к «${activeReminder.stationName}» (${activeReminder.currentTime} мин)`
-                              : (activeReminder.lastTime
-                                  ? `к «${activeReminder.stationName}» (${activeReminder.lastTime} мин)`
-                                  : `к «${activeReminder.stationName}»`))
+                        const targetStation = activeReminder
+                          ? (activeReminder.stationName
+                              ? (activeReminder.currentTime != null
+                                  ? `к «${activeReminder.stationName}» (${activeReminder.currentTime} мин)`
+                                  : (activeReminder.lastTime
+                                      ? `к «${activeReminder.stationName}» (${activeReminder.lastTime} мин)`
+                                      : `к «${activeReminder.stationName}»`))
+                              : 'Оповещение активно')
                           : '';
 
                         const itemNextStation = (isSelected && nextStationInfo?.name) || targetStation || item.nextStation || (live && (live.nextStation || live.destination)) || '';
