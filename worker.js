@@ -1,7 +1,7 @@
 /**
  * Cloudflare Worker Backend for U2 Public Transportation
  * 100% Serverless: Edge API, AES Bus62 Decryption, RFC 8291 Web Push,
- * Durable Object Singleton (10s Global Floor + Single-Writer Reminders + Alarm Ticker)
+ * TransitState Durable Object Singleton (Global 10s Floor, Single-Writer Reminders, Dead Alarm Resuscitation)
  */
 
 // -------------------------------------------------------------
@@ -48,7 +48,7 @@ function getVapidConfig(env = {}) {
   return { subject, publicKey, jwk };
 }
 
-// Global In-Memory Cache for Static Data (Routes & Stations)
+// Global In-Memory Cache for Static Transit Data (Routes & Stations)
 const CACHE = new Map();
 function getFromCache(key, maxAgeSec) {
   const item = CACHE.get(key);
@@ -64,11 +64,11 @@ function setInCache(key, val) {
 }
 
 // -------------------------------------------------------------
-// 2. HMAC-SHA256 Client Signature Verification
+// 2. HMAC-SHA256 Client Signature Verification (Fails Closed)
 // -------------------------------------------------------------
 async function verifySignature(request, env = {}) {
   const secret = env.VITE_API_SECRET || env.API_SECRET;
-  if (!secret) return true; // If no secret configured, allow during initial setup
+  if (!secret) return false; // Fail closed: missing secret denies request
 
   const timestamp = request.headers.get("X-App-Timestamp");
   const signature = request.headers.get("X-App-Signature");
@@ -417,8 +417,9 @@ function filterAndReturnVehicles(items, requestedRids, curk) {
 // 6. Durable Object Singleton: TransitState
 // Guarantees:
 //  - Exactly 1 global instance for the 10s upstream rate limit floor
-//  - Single-writer reminder consistency (zero duplicate pushes across colos)
-//  - Background Alarm Ticker (runs every 15s instead of waiting for 1-minute cron)
+//  - Single-writer reminder consistency (zero duplicate pushes)
+//  - Background Alarm Ticker (15s cadence + cron resuscitation)
+//  - Dead subscription cleanup (HTTP 403, 404, 410 from FCM/APNs)
 // -------------------------------------------------------------
 export class TransitState {
   constructor(state, env) {
@@ -505,7 +506,7 @@ export class TransitState {
         }
       }
 
-      // Auto-lock to vehicle and persist in storage
+      // Auto-lock to specific vehicle
       if (!rem.vehid && matching && (matching.obj_id || matching.vehid)) {
         rem.vehid = String(matching.obj_id || matching.vehid);
         rem.gosNum = String(matching.gosNum || matching.gos_num || "");
@@ -571,7 +572,7 @@ export class TransitState {
         await this.storage.put(remKey, rem);
 
         const timeWord = curTime === 1 ? "1 минуту" : curTime < 5 ? `${curTime} минуты` : `${curTime} минут`;
-        await sendWebPush(sub, {
+        const res = await sendWebPush(sub, {
           title: `🚌 Маршрут ${rnum} через ${timeWord}`,
           body: `Остановка «${stname}»`,
           tag,
@@ -579,6 +580,13 @@ export class TransitState {
           rid: rem.rid,
           minutes: curTime
         }, this.env, tag);
+
+        // Dead subscription cleanup (HTTP 403, 404, 410 from FCM/APNs)
+        if (!res.ok && [403, 404, 410].includes(res.status)) {
+          await this.storage.delete(remKey);
+          this.reminders.delete(remKey);
+          continue;
+        }
       }
     }
   }
@@ -698,6 +706,15 @@ export class TransitState {
       return Response.json({ active_count: this.reminders.size });
     }
 
+    // 5. Cron Trigger Backstop & Alarm Resuscitation
+    if (url.pathname === "/api/reminders/check") {
+      await this.checkRemindersAndNotify();
+      if (this.reminders.size > 0 && (await this.storage.getAlarm()) === null) {
+        await this.storage.setAlarm(Date.now() + 15000); // Resurrect a dead alarm chain
+      }
+      return Response.json({ ok: true, checked: this.reminders.size });
+    }
+
     return new Response("Not found in DO", { status: 404 });
   }
 }
@@ -706,113 +723,6 @@ function getTransitDO(env) {
   if (!env.TRANSIT_STATE) return null;
   const id = env.TRANSIT_STATE.idFromName("ulan-ude-global-singleton");
   return env.TRANSIT_STATE.get(id);
-}
-
-let FALLBACK_VEHICLE_POLL_TIME = 0;
-let FALLBACK_VEHICLE_SNAPSHOT = null;
-
-async function handleGetVehicles(url, env = {}) {
-  const requestedRids = url.searchParams.get("rids") || "";
-  const curk = url.searchParams.get("curk") || "0";
-  const now = Date.now();
-
-  if (FALLBACK_VEHICLE_SNAPSHOT && now - FALLBACK_VEHICLE_POLL_TIME < 8000) {
-    return filterAndReturnVehicles(FALLBACK_VEHICLE_SNAPSHOT, requestedRids, curk);
-  }
-
-  const cfg = getUpstreamConfig(env);
-  if (!cfg.url) return Response.json({ vehicles: [], next_curk: curk });
-
-  try {
-    let rids = requestedRids;
-    if (!rids) {
-      let routes = getFromCache("all_routes_raw", 3600);
-      if (!routes) {
-        const h = await getBus62Headers(env);
-        const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, {
-          headers: h,
-          signal: AbortSignal.timeout(4000)
-        });
-        if (r.ok) {
-          routes = await r.json();
-          setInCache("all_routes_raw", routes);
-        }
-      }
-      if (Array.isArray(routes) && routes.length) {
-        rids = routes.map((rt) => rt.id).filter(Boolean).slice(0, 50).join(",");
-      }
-    }
-
-    const headers = await getBus62Headers(env);
-    const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}&rids=${rids}`;
-    const res = await fetch(apiUrl, {
-      headers,
-      signal: AbortSignal.timeout(6000)
-    });
-    if (res.ok) {
-      const items = await res.json();
-      if (Array.isArray(items) && items.length > 0) {
-        FALLBACK_VEHICLE_SNAPSHOT = items;
-        FALLBACK_VEHICLE_POLL_TIME = Date.now();
-        return filterAndReturnVehicles(items, requestedRids, curk);
-      }
-    }
-  } catch (e) {}
-
-  if (FALLBACK_VEHICLE_SNAPSHOT) {
-    return filterAndReturnVehicles(FALLBACK_VEHICLE_SNAPSHOT, requestedRids, curk);
-  }
-
-  return Response.json({ vehicles: [], next_curk: curk });
-}
-
-async function handleRemindersFallback(request, env = {}) {
-  const url = new URL(request.url);
-  if (url.pathname === "/api/reminders/subscribe" || (url.pathname === "/api/reminders" && request.method === "POST")) {
-    const data = await request.json();
-    const sub = data.subscription;
-    if (!sub || !sub.endpoint || !data.sid || !data.rid) {
-      return Response.json({ error: "Invalid reminder payload" }, { status: 400 });
-    }
-    const remKey = `rem_${data.sid}_${data.rid}_${encodeURIComponent(sub.endpoint.slice(-16))}`;
-    const remObj = {
-      remKey,
-      sid: String(data.sid),
-      rid: String(data.rid),
-      rnum: String(data.rnum || ""),
-      stationName: String(data.stationName || data.stname || ""),
-      vehid: data.vehid ? String(data.vehid) : null,
-      gosNum: data.gosNum ? String(data.gosNum) : null,
-      subscription: sub,
-      createdAt: Date.now(),
-      lastNotifiedTime: null
-    };
-    if (env.REMINDERS_KV) {
-      await env.REMINDERS_KV.put(remKey, JSON.stringify(remObj), { expirationTtl: 7200 });
-    }
-    return Response.json({ ok: true, status: "subscribed", key: remKey });
-  }
-
-  if (url.pathname === "/api/reminders/unsubscribe" || (url.pathname === "/api/reminders" && request.method === "DELETE")) {
-    const data = await request.json();
-    const sub = data.subscription;
-    if (sub && sub.endpoint && data.sid && data.rid && env.REMINDERS_KV) {
-      const remKey = `rem_${data.sid}_${data.rid}_${encodeURIComponent(sub.endpoint.slice(-16))}`;
-      await env.REMINDERS_KV.delete(remKey);
-    }
-    return Response.json({ ok: true, status: "unsubscribed" });
-  }
-
-  if (url.pathname === "/api/reminders" && request.method === "GET") {
-    let count = 0;
-    if (env.REMINDERS_KV) {
-      const kvList = await env.REMINDERS_KV.list({ prefix: "rem_" });
-      count = kvList.keys ? kvList.keys.length : 0;
-    }
-    return Response.json({ active_count: count });
-  }
-
-  return Response.json({ error: "Not found" }, { status: 404 });
 }
 
 // -------------------------------------------------------------
@@ -1147,7 +1057,7 @@ export default {
 
     // 1. Route API Endpoints
     if (url.pathname.startsWith("/api/")) {
-      // HMAC Signature Verification on mutating or sensitive routes
+      // Strict HMAC Signature Verification (Fails closed on sensitive endpoints)
       if (
         request.method === "POST" ||
         request.method === "DELETE" ||
@@ -1166,16 +1076,14 @@ export default {
       if (url.pathname === "/api/route_stations") return handleGetRouteStations(url, env);
 
       // Delegate /api/vehicles to the TransitState Durable Object (Global 10s Single-Writer Floor)
-      // Or fallback gracefully to worker-level handler
       if (url.pathname === "/api/vehicles") {
         const doStub = getTransitDO(env);
         if (doStub) {
           try {
-            const res = await doStub.fetch(request);
-            if (res.status === 200) return res;
+            return await doStub.fetch(request);
           } catch (e) {}
         }
-        return handleGetVehicles(url, env);
+        return Response.json({ error: "Service temporarily unavailable" }, { status: 503 });
       }
 
       if (url.pathname === "/api/forecasts" || url.pathname === "/api/station_forecasts") {
@@ -1188,7 +1096,7 @@ export default {
         return Response.json({ publicKey: vapidCfg.publicKey, public_key: vapidCfg.publicKey });
       }
 
-      // Delegate Reminders to the TransitState Durable Object or KV fallback
+      // Delegate Reminders strictly to the TransitState Durable Object (Single Source of Truth)
       if (
         url.pathname === "/api/reminders/subscribe" ||
         url.pathname === "/api/reminders/unsubscribe" ||
@@ -1197,11 +1105,10 @@ export default {
         const doStub = getTransitDO(env);
         if (doStub) {
           try {
-            const res = await doStub.fetch(request);
-            if (res.status === 200) return res;
+            return await doStub.fetch(request);
           } catch (e) {}
         }
-        return handleRemindersFallback(request, env);
+        return Response.json({ error: "Reminder service temporarily unavailable" }, { status: 503 });
       }
 
       if (url.pathname === "/api/test_push" && request.method === "POST") {
