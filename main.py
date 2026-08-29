@@ -550,21 +550,16 @@ class PushReminderManager:
             vapid_headers = vapid_obj.sign(fresh_claims) if vapid_obj else {}
 
             is_apple = "apple.com" in endpoint.lower()
-            clean_collapse = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
-
             push_headers = {
                 "Urgency": "high",
                 **vapid_headers
             }
             if is_apple:
+                clean_collapse = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
                 push_headers["apns-push-type"] = "alert"
                 push_headers["apns-priority"] = "10"
                 if clean_collapse:
                     push_headers["apns-collapse-id"] = clean_collapse
-            else:
-                push_headers["Urgency"] = "high"
-                if clean_collapse:
-                    push_headers["Topic"] = clean_collapse
 
             ttl_val = 120
 

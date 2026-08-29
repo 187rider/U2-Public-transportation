@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v79';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v80';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -166,8 +166,6 @@ self.addEventListener('push', (event) => {
   let sid = '';
   let rid = '';
   let url = '/';
-  let icon = '/apple-touch-icon.png';
-  let badge = '/favicon.svg';
 
   if (event.data) {
     try {
@@ -179,8 +177,6 @@ self.addEventListener('push', (event) => {
         if (data.sid) sid = String(data.sid);
         if (data.rid) rid = String(data.rid);
         if (data.url) url = String(data.url);
-        if (data.icon) icon = String(data.icon);
-        if (data.badge) badge = String(data.badge);
       }
     } catch {
       try {
@@ -190,66 +186,24 @@ self.addEventListener('push', (event) => {
     }
   }
 
-  const baseOptions = {
+  const isArrival = title.includes('прибыл') || body.includes('прибыл');
+  const activeTag = `${tag}_${Date.now()}`;
+
+  const options = {
     body: body,
-    tag: tag,
-    icon: icon,
-    badge: badge,
-    data: { url: url, sid: sid, rid: rid }
+    tag: activeTag,
+    icon: '/apple-touch-icon.png',
+    badge: '/apple-touch-icon.png',
+    renotify: true,
+    requireInteraction: isArrival,
+    sound: isArrival ? '/arrival-chaching.wav' : undefined,
+    vibrate: isArrival ? [400, 150, 400, 150, 600] : [250, 100, 250],
+    data: { url: url, sid: sid, rid: rid, date: Date.now() }
   };
 
-  async function handlePush() {
-    const isIOS = /iPad|iPhone|iPod/.test(self.navigator.userAgent) ||
-      (self.navigator.platform === 'MacIntel' && self.navigator.maxTouchPoints > 1);
-
-    // Universal: Explicitly close previous notification card for this exact route (iOS + Android)
-    try {
-      if (typeof self.registration.getNotifications === 'function') {
-        const existing = await self.registration.getNotifications();
-        const prefix = sid && rid ? `arrival_${sid}_${rid}` : tag;
-        for (const notif of existing) {
-          if (notif.tag && (notif.tag === tag || notif.tag === prefix || notif.tag.startsWith(prefix + '_'))) {
-            try { notif.close(); } catch {}
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('getNotifications cleanup error:', e);
-    }
-
-    if (isIOS) {
-      // iOS WebKit (PWA): standard options
-      try {
-        await self.registration.showNotification(title, {
-          body: body,
-          tag: tag,
-          data: { url: url, sid: sid, rid: rid }
-        });
-      } catch (err) {
-        console.error('iOS WebKit showNotification error:', err);
-      }
-      return;
-    }
-
-    try {
-      const richOptions = {
-        ...baseOptions,
-        renotify: true,
-        requireInteraction: true,
-        vibrate: [300, 100, 300, 100, 400]
-      };
-      await self.registration.showNotification(title, richOptions);
-    } catch (err) {
-      console.warn('Rich showNotification failed, retrying base:', err);
-      try {
-        await self.registration.showNotification(title, baseOptions);
-      } catch (finalErr) {
-        console.error('Final showNotification error:', finalErr);
-      }
-    }
-  }
-
-  event.waitUntil(handlePush());
+  event.waitUntil(
+    self.registration.showNotification(title, options)
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {
