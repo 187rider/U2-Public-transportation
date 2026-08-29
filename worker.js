@@ -629,11 +629,28 @@ async function handleGetVehicles(url, env = {}) {
         const cfg = getUpstreamConfig(env);
         if (!cfg.url) return;
 
+        let rids = "";
+        let routes = getFromCache("all_routes_raw", 3600);
+        if (!routes) {
+          const h = await getBus62Headers(env);
+          const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, {
+            headers: h,
+            signal: AbortSignal.timeout(6000)
+          });
+          if (r.ok) {
+            routes = await r.json();
+            setInCache("all_routes_raw", routes);
+          }
+        }
+        if (Array.isArray(routes) && routes.length) {
+          rids = routes.map((rt) => rt.id).filter(Boolean).join(",");
+        }
+
         const headers = await getBus62Headers(env);
-        const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}`;
+        const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}&rids=${rids}`;
         const res = await fetch(apiUrl, {
           headers,
-          signal: AbortSignal.timeout(5000)
+          signal: AbortSignal.timeout(8000)
         });
         if (res.ok) {
           const items = await res.json();
