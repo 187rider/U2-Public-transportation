@@ -2,7 +2,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // 1. Proxy /api/* to Transit Backend
+    // 1. Proxy /api/* to Transit Backend with Server-Side Edge Signature
     if (url.pathname.startsWith('/api/')) {
       const backendOrigin = env.BACKEND_URL || 'https://api.ridertech.online';
       const backendUrl = new URL(url.pathname + url.search, backendOrigin);
@@ -12,6 +12,16 @@ export default {
       if (!forwardHeaders.get('User-Agent')) {
         forwardHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36');
       }
+
+      // Edge Server-Side Signing (Keeps API_SECRET 100% hidden from client browsers)
+      const secret = env.API_SECRET || 'REDACTED_SECRET';
+      const ts = Math.floor(Date.now() / 1000).toString();
+      const msg = new TextEncoder().encode(ts + secret);
+      const hashBuf = await crypto.subtle.digest('SHA-256', msg);
+      const signature = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+      forwardHeaders.set('X-App-Timestamp', ts);
+      forwardHeaders.set('X-App-Signature', signature);
 
       const newRequest = new Request(backendUrl.toString(), {
         method: request.method,

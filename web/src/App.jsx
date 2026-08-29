@@ -4,17 +4,13 @@ import { Map as MapLibreMap, NavigationControl, GeolocateControl, Popup, Marker 
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./App.css";
 
-const API_SECRET = import.meta.env.VITE_API_SECRET || "REDACTED_SECRET";
+const API_SECRET = import.meta.env.VITE_API_SECRET || "";
 let rawBase = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 if (typeof window !== "undefined" && window.location.protocol === "https:" && rawBase.startsWith("http://")) {
   rawBase = "";
 }
 const API_BASE_URL = rawBase;
 const TILE_URL = API_BASE_URL ? `${API_BASE_URL}/tiles/{z}/{x}/{y}.pbf` : "/tiles/{z}/{x}/{y}.pbf";
-
-if (!API_SECRET && import.meta.env.DEV) {
-  console.warn("Missing VITE_API_SECRET environment variable.");
-}
 
 /** Escape HTML special chars to prevent XSS from upstream data. */
 function escapeHtml(str) {
@@ -64,13 +60,13 @@ function formatGosNum(gosNum) {
 }
 
 async function apiFetch(url, options = {}) {
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = sha256(timestamp + API_SECRET);
-  const headers = {
-    ...options.headers,
-    "X-App-Timestamp": timestamp,
-    "X-App-Signature": signature
-  };
+  const headers = { ...options.headers };
+  if (API_SECRET) {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const signature = sha256(timestamp + API_SECRET);
+    headers["X-App-Timestamp"] = timestamp;
+    headers["X-App-Signature"] = signature;
+  }
   const targetUrl = API_BASE_URL && url.startsWith("/") ? `${API_BASE_URL}${url}` : url;
   return fetch(targetUrl, { ...options, headers });
 }
