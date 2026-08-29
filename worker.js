@@ -23,7 +23,7 @@ const VAPID_CONFIG = {
   }
 };
 
-// In-Memory Global Cache (Lives across requests within the same Edge Worker instance)
+// In-Memory Global Cache
 const CACHE = new Map();
 function getFromCache(key, maxAgeSec) {
   const item = CACHE.get(key);
@@ -38,7 +38,7 @@ function setInCache(key, val) {
   CACHE.set(key, { ts: Date.now(), val });
 }
 
-// In-Memory Fallback Store for Reminders (also supports D1 if bound)
+// In-Memory Store for Reminders
 const MEMORY_REMINDERS = new Map();
 
 // -------------------------------------------------------------
@@ -281,7 +281,7 @@ async function sendWebPush(subscription, payload) {
 // -------------------------------------------------------------
 // 4. API Endpoints Implementation
 // -------------------------------------------------------------
-async function handleGetRoutes(url) {
+async function handleGetRoutes() {
   const cached = getFromCache("all_routes", 3600);
   if (cached) return Response.json(cached);
 
@@ -294,8 +294,8 @@ async function handleGetRoutes(url) {
   return Response.json(data);
 }
 
-async function handleGetStops(url) {
-  const cached = getFromCache("all_stops", 3600);
+async function handleGetStations() {
+  const cached = getFromCache("all_stations", 3600);
   if (cached) return Response.json(cached);
 
   const headers = await getBus62Headers();
@@ -303,8 +303,64 @@ async function handleGetStops(url) {
   if (!res.ok) return new Response("Failed to fetch stations", { status: 502 });
 
   const data = await res.json();
-  setInCache("all_stops", data);
+  setInCache("all_stations", data);
   return Response.json(data);
+}
+
+async function handleGetRouteNodes(url) {
+  const id = url.searchParams.get("id") || "";
+  if (!id) return Response.json({ nodes: [] });
+
+  const cacheKey = `route_nodes_${id}`;
+  const cached = getFromCache(cacheKey, 3600);
+  if (cached) return Response.json(cached);
+
+  const headers = await getBus62Headers();
+  const res = await fetch(`${BUS62_URL}/getRouteNodes.php?id=${id}&city=${BUS62_CITY}`, { headers });
+  if (!res.ok) return Response.json({ nodes: [] });
+
+  const data = await res.json();
+  const nodes = [];
+  if (Array.isArray(data)) {
+    for (const pt of data) {
+      let lat = parseFloat(pt.lat) || 0;
+      let lon = parseFloat(pt.lon || pt.lng) || 0;
+      if (Math.abs(lat) > 1000) lat /= 1000000;
+      if (Math.abs(lon) > 1000) lon /= 1000000;
+      if (lat && lon) nodes.push([lon, lat]);
+    }
+  }
+
+  const result = { nodes };
+  setInCache(cacheKey, result);
+  return Response.json(result);
+}
+
+async function handleGetRouteStations(url) {
+  const id = url.searchParams.get("id") || "";
+  if (!id) return Response.json({ stations: [] });
+
+  const cacheKey = `route_stations_${id}`;
+  const cached = getFromCache(cacheKey, 3600);
+  if (cached) return Response.json(cached);
+
+  const headers = await getBus62Headers();
+  const res = await fetch(`${BUS62_URL}/getRouteStations.php?id=${id}&city=${BUS62_CITY}`, { headers });
+  if (!res.ok) return Response.json({ stations: [] });
+
+  const data = await res.json();
+  const station_ids = [];
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      if (item && item.station_id != null) {
+        station_ids.push(String(item.station_id));
+      }
+    }
+  }
+
+  const result = { stations: station_ids };
+  setInCache(cacheKey, result);
+  return Response.json(result);
 }
 
 async function handleGetVehicles(url) {
@@ -406,7 +462,7 @@ async function handleGetVehicles(url) {
   });
 }
 
-async function handleGetForecasts(url) {
+async function handleGetStationForecasts(url) {
   const sid = url.searchParams.get("sid") || "";
   if (!sid) return Response.json({ forecasts: [], sid: "" });
 
@@ -417,14 +473,25 @@ async function handleGetForecasts(url) {
   const data = await res.json();
   const rawList = Array.isArray(data) ? data : data.forecasts || [];
 
-  const forecasts = rawList.map((f) => ({
-    rid: String(f.rid || ""),
-    rnum: String(f.rnum || f.route || ""),
-    time: parseInt(f.time || f.arrtime || 0, 10),
-    vehid: String(f.vehid || f.id || ""),
-    gosNum: String(f.gos_num || f.gosNum || ""),
-    type: String(f.type || "А")
-  }));
+  const forecasts = rawList.map((f) => {
+    const rawTime = f.arrt || f.arrtime || f.time || "";
+    let timeVal = 0;
+    try {
+      timeVal = rawTime ? Math.ceil(parseInt(rawTime, 10) / 60) : 0;
+    } catch (e) {
+      timeVal = 0;
+    }
+
+    return {
+      rid: String(f.rid || ""),
+      rnum: String(f.rnum || f.route || ""),
+      time: timeVal,
+      destination: String(f.where || f.destination || f.last || ""),
+      vehid: String(f.obj_id || f.vehid || f.id || ""),
+      gosNum: String(f.gos_num || f.gosNum || ""),
+      type: String(f.type || "А")
+    };
+  });
 
   return Response.json({ forecasts, sid });
 }
@@ -438,7 +505,22 @@ async function handleGetVehicleForecasts(url) {
   if (!res.ok) return Response.json({ forecasts: [], vehid });
 
   const data = await res.json();
-  return Response.json({ forecasts: Array.isArray(data) ? data : [], vehid });
+  const rawList = Array.isArray(data) ? data : [];
+  const forecasts = rawList.map((item) => {
+    const rawTime = item.arrt || item.time || "";
+    let timeVal = 0;
+    try {
+      timeVal = rawTime ? Math.ceil(parseInt(rawTime, 10) / 60) : 0;
+    } catch (e) {
+      timeVal = 0;
+    }
+    return {
+      stid: String(item.stid || item.station_id || ""),
+      time: timeVal
+    };
+  });
+
+  return Response.json({ forecasts, vehid });
 }
 
 // -------------------------------------------------------------
@@ -477,7 +559,6 @@ async function handleAddReminder(request, env) {
     createdAt: Date.now()
   };
 
-  // 1. Store in D1 if available
   if (env.DB) {
     await env.DB.prepare(
       `INSERT OR REPLACE INTO push_reminders 
@@ -497,10 +578,8 @@ async function handleAddReminder(request, env) {
     ).run();
   }
 
-  // 2. Also keep in Memory map
   MEMORY_REMINDERS.set(remKey, reminderRecord);
-
-  return Response.json({ success: true, key: remKey });
+  return Response.json({ success: true, status: "ok", key: remKey });
 }
 
 async function handleDeleteReminder(request, env) {
@@ -525,13 +604,12 @@ async function handleDeleteReminder(request, env) {
     }
   }
 
-  return Response.json({ success: true });
+  return Response.json({ success: true, status: "ok" });
 }
 
 async function checkRemindersAndNotify(env) {
   let reminders = [];
 
-  // Load from D1 or Memory
   if (env.DB) {
     try {
       const { results } = await env.DB.prepare("SELECT * FROM push_reminders").all();
@@ -563,7 +641,6 @@ async function checkRemindersAndNotify(env) {
   const distinctSids = Array.from(new Set(reminders.map((r) => r.sid).filter(Boolean)));
   const stationForecastsMap = new Map();
 
-  // Parallel fetch for all active stations
   await Promise.all(
     distinctSids.map(async (sid) => {
       try {
@@ -579,7 +656,6 @@ async function checkRemindersAndNotify(env) {
 
   const now = Date.now();
   for (const rem of reminders) {
-    // Evict reminders older than 2 hours
     if (now - rem.createdAt > 7200 * 1000) {
       if (env.DB) await env.DB.prepare("DELETE FROM push_reminders WHERE rem_key = ?").bind(rem.remKey).run();
       MEMORY_REMINDERS.delete(rem.remKey);
@@ -591,7 +667,7 @@ async function checkRemindersAndNotify(env) {
 
     let matching = null;
     if (rem.vehid) {
-      matching = forecasts.find((f) => String(f.vehid || f.id) === rem.vehid);
+      matching = forecasts.find((f) => String(f.obj_id || f.vehid || f.id) === rem.vehid);
     }
     if (!matching && rem.gosNum) {
       matching = forecasts.find((f) => String(f.gos_num || f.gosNum || "").toLowerCase() === rem.gosNum.toLowerCase());
@@ -599,13 +675,12 @@ async function checkRemindersAndNotify(env) {
     if (!matching && !rem.vehid && !rem.gosNum) {
       const candidates = forecasts.filter((f) => String(f.rid) === rem.rid);
       if (candidates.length) {
-        matching = candidates.reduce((min, c) => (parseInt(c.time, 10) < parseInt(min.time, 10) ? c : min), candidates[0]);
+        matching = candidates.reduce((min, c) => (parseInt(c.arrt || c.time, 10) < parseInt(min.arrt || min.time, 10) ? c : min), candidates[0]);
       }
     }
 
-    // Auto-lock to vehicle
-    if (!rem.vehid && matching && matching.vehid) {
-      rem.vehid = String(matching.vehid);
+    if (!rem.vehid && matching && (matching.obj_id || matching.vehid)) {
+      rem.vehid = String(matching.obj_id || matching.vehid);
       rem.gosNum = String(matching.gosNum || matching.gos_num || "");
       if (env.DB) {
         await env.DB.prepare("UPDATE push_reminders SET vehid = ?, gos_num = ? WHERE rem_key = ?")
@@ -632,10 +707,10 @@ async function checkRemindersAndNotify(env) {
       continue;
     }
 
-    const curTime = parseInt(matching.time || matching.arrtime || 0, 10);
+    const rawTime = matching.arrt || matching.arrtime || matching.time || 0;
+    const curTime = Math.ceil(parseInt(rawTime, 10) / 60);
     const last = rem.lastNotifiedTime;
 
-    // Arrival jump detection
     if (last !== null && last <= 3 && (curTime >= last + 2 || (last <= 1 && curTime > last))) {
       await sendWebPush(sub, {
         title: `🚌 Маршрут ${rnum} прибыл!`,
@@ -701,25 +776,31 @@ export default {
 
     // API Routing
     if (url.pathname.startsWith("/api/")) {
-      // Background reminder tracking piggybacked on active user traffic
       ctx.waitUntil(checkRemindersAndNotify(env));
 
-      if (url.pathname === "/api/routes") return handleGetRoutes(url);
-      if (url.pathname === "/api/stops") return handleGetStops(url);
+      if (url.pathname === "/api/routes") return handleGetRoutes();
+      if (url.pathname === "/api/stops" || url.pathname === "/api/stations") return handleGetStations();
+      if (url.pathname === "/api/route_nodes") return handleGetRouteNodes(url);
+      if (url.pathname === "/api/route_stations") return handleGetRouteStations(url);
       if (url.pathname === "/api/vehicles") return handleGetVehicles(url);
-      if (url.pathname === "/api/forecasts") return handleGetForecasts(url);
+      if (url.pathname === "/api/forecasts" || url.pathname === "/api/station_forecasts") {
+        return handleGetStationForecasts(url);
+      }
       if (url.pathname === "/api/vehicle_forecasts") return handleGetVehicleForecasts(url);
-      if (url.pathname === "/api/vapid_public_key") {
-        return Response.json({ publicKey: VAPID_CONFIG.publicKey });
+
+      if (url.pathname === "/api/vapid_public_key" || url.pathname === "/api/vapid-public-key") {
+        return Response.json({ publicKey: VAPID_CONFIG.publicKey, public_key: VAPID_CONFIG.publicKey });
       }
 
-      if (url.pathname === "/api/reminders") {
-        if (request.method === "POST") return handleAddReminder(request, env);
-        if (request.method === "DELETE") return handleDeleteReminder(request, env);
-        if (request.method === "GET") {
-          const list = Array.from(MEMORY_REMINDERS.values());
-          return Response.json({ reminders: list });
-        }
+      if (url.pathname === "/api/reminders/subscribe" || (url.pathname === "/api/reminders" && request.method === "POST")) {
+        return handleAddReminder(request, env);
+      }
+      if (url.pathname === "/api/reminders/unsubscribe" || (url.pathname === "/api/reminders" && request.method === "DELETE")) {
+        return handleDeleteReminder(request, env);
+      }
+      if (url.pathname === "/api/reminders" && request.method === "GET") {
+        const list = Array.from(MEMORY_REMINDERS.values());
+        return Response.json({ reminders: list });
       }
 
       if (url.pathname === "/api/test_push" && request.method === "POST") {
