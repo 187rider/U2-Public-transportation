@@ -331,74 +331,81 @@ async function handleGetRoutes(env = {}) {
   const cfg = getUpstreamConfig(env);
   if (!cfg.url) return Response.json({ count: 0, routes: [] });
 
-  const headers = await getBus62Headers(env);
-  const res = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, { headers });
-  if (!res.ok) return new Response("Failed to fetch routes", { status: 502 });
+  try {
+    const headers = await getBus62Headers(env);
+    const res = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, {
+      headers,
+      signal: AbortSignal.timeout(6000)
+    });
+    if (!res.ok) return Response.json({ count: 0, routes: [] });
 
-  const rawRoutes = await res.json();
-  if (!Array.isArray(rawRoutes)) return Response.json({ count: 0, routes: [] });
+    const rawRoutes = await res.json();
+    if (!Array.isArray(rawRoutes)) return Response.json({ count: 0, routes: [] });
 
-  const routesByNum = new Map();
-  for (const rt of rawRoutes) {
-    const num = String(rt.number || "").trim();
-    const name = String(rt.name || "").trim();
-    const rawType = String(rt.type || "").trim();
+    const routesByNum = new Map();
+    for (const rt of rawRoutes) {
+      const num = String(rt.number || "").trim();
+      const name = String(rt.name || "").trim();
+      const rawType = String(rt.type || "").trim();
 
-    let rtType = "bus";
-    if (["Т", "Тм", "Трамвай"].includes(rawType) || name.startsWith("Т-") || name.startsWith("Тм-")) {
-      rtType = "tram";
-    } else if (["М", "М-"].includes(rawType) || name.startsWith("М-")) {
-      rtType = "minibus";
-    }
+      let rtType = "bus";
+      if (["Т", "Тм", "Трамвай"].includes(rawType) || name.startsWith("Т-") || name.startsWith("Тм-")) {
+        rtType = "tram";
+      } else if (["М", "М-"].includes(rawType) || name.startsWith("М-")) {
+        rtType = "minibus";
+      }
 
-    const key = `${rtType}_${num}`;
-    const rtId = String(rt.id || "").trim();
-    const fromSt = String(rt.from_station_name || rt.from_station || "").trim();
-    const toSt = String(rt.to_station_name || rt.to_station || "").trim();
+      const key = `${rtType}_${num}`;
+      const rtId = String(rt.id || "").trim();
+      const fromSt = String(rt.from_station_name || rt.from_station || "").trim();
+      const toSt = String(rt.to_station_name || rt.to_station || "").trim();
 
-    if (!routesByNum.has(key)) {
-      routesByNum.set(key, {
-        id: rtId ? [rtId] : [],
+      if (!routesByNum.has(key)) {
+        routesByNum.set(key, {
+          id: rtId ? [rtId] : [],
+          number: num,
+          name,
+          type: rtType,
+          from_station: fromSt,
+          to_station: toSt,
+          subroutes: []
+        });
+      } else {
+        const item = routesByNum.get(key);
+        if (rtId && !item.id.includes(rtId)) item.id.push(rtId);
+        if (!item.from_station && fromSt) item.from_station = fromSt;
+        if (!item.to_station && toSt) item.to_station = toSt;
+      }
+
+      routesByNum.get(key).subroutes.push({
+        id: rtId,
         number: num,
         name,
         type: rtType,
         from_station: fromSt,
-        to_station: toSt,
-        subroutes: []
+        to_station: toSt
       });
-    } else {
-      const item = routesByNum.get(key);
-      if (rtId && !item.id.includes(rtId)) item.id.push(rtId);
-      if (!item.from_station && fromSt) item.from_station = fromSt;
-      if (!item.to_station && toSt) item.to_station = toSt;
     }
 
-    routesByNum.get(key).subroutes.push({
-      id: rtId,
-      number: num,
-      name,
-      type: rtType,
-      from_station: fromSt,
-      to_station: toSt
+    const formattedRoutes = Array.from(routesByNum.values()).map((r) => ({
+      ...r,
+      id: r.id.join(",")
+    }));
+
+    formattedRoutes.sort((a, b) => {
+      const typeOrder = { bus: 0, tram: 1, minibus: 2 };
+      if (typeOrder[a.type] !== typeOrder[b.type]) return typeOrder[a.type] - typeOrder[b.type];
+      const numA = parseInt(a.number, 10), numB = parseInt(b.number, 10);
+      if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+      return a.number.localeCompare(b.number);
     });
+
+    const result = { count: formattedRoutes.length, routes: formattedRoutes };
+    setInCache("routes_grouped_v3", result);
+    return Response.json(result);
+  } catch (e) {
+    return Response.json({ count: 0, routes: [] });
   }
-
-  const formattedRoutes = Array.from(routesByNum.values()).map((r) => ({
-    ...r,
-    id: r.id.join(",")
-  }));
-
-  formattedRoutes.sort((a, b) => {
-    const typeOrder = { bus: 0, tram: 1, minibus: 2 };
-    if (typeOrder[a.type] !== typeOrder[b.type]) return typeOrder[a.type] - typeOrder[b.type];
-    const numA = parseInt(a.number, 10), numB = parseInt(b.number, 10);
-    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-    return a.number.localeCompare(b.number);
-  });
-
-  const result = { count: formattedRoutes.length, routes: formattedRoutes };
-  setInCache("routes_grouped_v3", result);
-  return Response.json(result);
 }
 
 async function handleGetStations(env = {}) {
@@ -408,49 +415,56 @@ async function handleGetStations(env = {}) {
   const cfg = getUpstreamConfig(env);
   if (!cfg.url) return Response.json({ type: "FeatureCollection", features: [] });
 
-  const headers = await getBus62Headers(env);
-  const res = await fetch(`${cfg.url}/getAllStations.php?city=${cfg.city}`, { headers });
-  if (!res.ok) return new Response("Failed to fetch stations", { status: 502 });
+  try {
+    const headers = await getBus62Headers(env);
+    const res = await fetch(`${cfg.url}/getAllStations.php?city=${cfg.city}`, {
+      headers,
+      signal: AbortSignal.timeout(6000)
+    });
+    if (!res.ok) return Response.json({ type: "FeatureCollection", features: [] });
 
-  const rawStations = await res.json();
-  if (!Array.isArray(rawStations)) return Response.json({ type: "FeatureCollection", features: [] });
+    const rawStations = await res.json();
+    if (!Array.isArray(rawStations)) return Response.json({ type: "FeatureCollection", features: [] });
 
-  const features = [];
-  for (const station of rawStations) {
-    const stType = String(station.type) === "0" ? "bus" : "tram";
-    const stName = String(station.name || "").trim();
-    const stId = String(station.id || "");
-    const isWarm = String(station.is_warm || station.warm || "0");
-    const description = String(station.description || station.descr || "").trim();
+    const features = [];
+    for (const station of rawStations) {
+      const stType = String(station.type) === "0" ? "bus" : "tram";
+      const stName = String(station.name || "").trim();
+      const stId = String(station.id || "");
+      const isWarm = String(station.is_warm || station.warm || "0");
+      const description = String(station.description || station.descr || "").trim();
 
-    const l0 = parseFloat(station.lon0 || 0) / 1000000.0;
-    const a0 = parseFloat(station.lat0 || 0) / 1000000.0;
-    const l1 = parseFloat(station.lon1 || 0) / 1000000.0;
-    const a1 = parseFloat(station.lat1 || 0) / 1000000.0;
+      const l0 = parseFloat(station.lon0 || 0) / 1000000.0;
+      const a0 = parseFloat(station.lat0 || 0) / 1000000.0;
+      const l1 = parseFloat(station.lon1 || 0) / 1000000.0;
+      const a1 = parseFloat(station.lat1 || 0) / 1000000.0;
 
-    let coords = null;
-    if (l0 && a0 && l1 && a1) coords = [(l0 + l1) / 2.0, (a0 + a1) / 2.0];
-    else if (l0 && a0) coords = [l0, a0];
-    else if (l1 && a1) coords = [l1, a1];
+      let coords = null;
+      if (l0 && a0 && l1 && a1) coords = [(l0 + l1) / 2.0, (a0 + a1) / 2.0];
+      else if (l0 && a0) coords = [l0, a0];
+      else if (l1 && a1) coords = [l1, a1];
 
-    if (coords && coords[1] > 50.0 && coords[1] < 55.0 && coords[0] > 100.0 && coords[0] < 115.0) {
-      features.push({
-        type: "Feature",
-        geometry: { type: "Point", coordinates: coords },
-        properties: {
-          id: stId,
-          name: stName,
-          type: stType,
-          is_warm: isWarm,
-          description: description
-        }
-      });
+      if (coords && coords[1] > 50.0 && coords[1] < 55.0 && coords[0] > 100.0 && coords[0] < 115.0) {
+        features.push({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: coords },
+          properties: {
+            id: stId,
+            name: stName,
+            type: stType,
+            is_warm: isWarm,
+            description: description
+          }
+        });
+      }
     }
-  }
 
-  const result = { type: "FeatureCollection", features };
-  setInCache("stations_geojson_v3", result);
-  return Response.json(result);
+    const result = { type: "FeatureCollection", features };
+    setInCache("stations_geojson_v3", result);
+    return Response.json(result);
+  } catch (e) {
+    return Response.json({ type: "FeatureCollection", features: [] });
+  }
 }
 
 async function handleGetRouteNodes(url, env = {}) {
@@ -464,25 +478,32 @@ async function handleGetRouteNodes(url, env = {}) {
   const cfg = getUpstreamConfig(env);
   if (!cfg.url) return Response.json({ nodes: [] });
 
-  const headers = await getBus62Headers(env);
-  const res = await fetch(`${cfg.url}/getRouteNodes.php?id=${id}&city=${cfg.city}`, { headers });
-  if (!res.ok) return Response.json({ nodes: [] });
+  try {
+    const headers = await getBus62Headers(env);
+    const res = await fetch(`${cfg.url}/getRouteNodes.php?id=${id}&city=${cfg.city}`, {
+      headers,
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!res.ok) return Response.json({ nodes: [] });
 
-  const data = await res.json();
-  const nodes = [];
-  if (Array.isArray(data)) {
-    for (const pt of data) {
-      let lat = parseFloat(pt.lat) || 0;
-      let lon = parseFloat(pt.lon || pt.lng) || 0;
-      if (Math.abs(lat) > 1000) lat /= 1000000;
-      if (Math.abs(lon) > 1000) lon /= 1000000;
-      if (lat && lon) nodes.push([lon, lat]);
+    const data = await res.json();
+    const nodes = [];
+    if (Array.isArray(data)) {
+      for (const pt of data) {
+        let lat = parseFloat(pt.lat) || 0;
+        let lon = parseFloat(pt.lon || pt.lng) || 0;
+        if (Math.abs(lat) > 1000) lat /= 1000000;
+        if (Math.abs(lon) > 1000) lon /= 1000000;
+        if (lat && lon) nodes.push([lon, lat]);
+      }
     }
-  }
 
-  const result = { nodes };
-  setInCache(cacheKey, result);
-  return Response.json(result);
+    const result = { nodes };
+    setInCache(cacheKey, result);
+    return Response.json(result);
+  } catch (e) {
+    return Response.json({ nodes: [] });
+  }
 }
 
 async function handleGetRouteStations(url, env = {}) {
@@ -496,23 +517,30 @@ async function handleGetRouteStations(url, env = {}) {
   const cfg = getUpstreamConfig(env);
   if (!cfg.url) return Response.json({ stations: [] });
 
-  const headers = await getBus62Headers(env);
-  const res = await fetch(`${cfg.url}/getRouteStations.php?id=${id}&city=${cfg.city}`, { headers });
-  if (!res.ok) return Response.json({ stations: [] });
+  try {
+    const headers = await getBus62Headers(env);
+    const res = await fetch(`${cfg.url}/getRouteStations.php?id=${id}&city=${cfg.city}`, {
+      headers,
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!res.ok) return Response.json({ stations: [] });
 
-  const data = await res.json();
-  const station_ids = [];
-  if (Array.isArray(data)) {
-    for (const item of data) {
-      if (item && item.station_id != null) {
-        station_ids.push(String(item.station_id));
+    const data = await res.json();
+    const station_ids = [];
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (item && item.station_id != null) {
+          station_ids.push(String(item.station_id));
+        }
       }
     }
-  }
 
-  const result = { stations: station_ids };
-  setInCache(cacheKey, result);
-  return Response.json(result);
+    const result = { stations: station_ids };
+    setInCache(cacheKey, result);
+    return Response.json(result);
+  } catch (e) {
+    return Response.json({ stations: [] });
+  }
 }
 
 // -------------------------------------------------------------
@@ -605,7 +633,10 @@ async function handleGetVehicles(url, env = {}) {
         let routes = getFromCache("all_routes_raw", 3600);
         if (!routes) {
           const h = await getBus62Headers(env);
-          const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, { headers: h });
+          const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, {
+            headers: h,
+            signal: AbortSignal.timeout(5000)
+          });
           if (r.ok) {
             routes = await r.json();
             setInCache("all_routes_raw", routes);
@@ -617,7 +648,10 @@ async function handleGetVehicles(url, env = {}) {
 
         const headers = await getBus62Headers(env);
         const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}&rids=${rids}`;
-        const res = await fetch(apiUrl, { headers });
+        const res = await fetch(apiUrl, {
+          headers,
+          signal: AbortSignal.timeout(6000)
+        });
         if (res.ok) {
           const items = await res.json();
           if (Array.isArray(items) && items.length > 0) {
@@ -652,36 +686,43 @@ async function handleGetStationForecasts(url, env = {}) {
   const cfg = getUpstreamConfig(env);
   if (!cfg.url) return Response.json({ forecasts: [], sid });
 
-  const headers = await getBus62Headers(env);
-  const res = await fetch(`${cfg.url}/getStationForecasts.php?sid=${sid}&city=${cfg.city}`, { headers });
-  if (!res.ok) return Response.json({ forecasts: [], sid });
+  try {
+    const headers = await getBus62Headers(env);
+    const res = await fetch(`${cfg.url}/getStationForecasts.php?sid=${sid}&city=${cfg.city}`, {
+      headers,
+      signal: AbortSignal.timeout(4000)
+    });
+    if (!res.ok) return Response.json({ forecasts: [], sid });
 
-  const data = await res.json();
-  const rawList = Array.isArray(data) ? data : data.forecasts || [];
+    const data = await res.json();
+    const rawList = Array.isArray(data) ? data : data.forecasts || [];
 
-  const forecasts = rawList.map((f) => {
-    const rawTime = f.arrt || f.arrtime || f.time || "";
-    let timeVal = 0;
-    try {
-      timeVal = rawTime ? Math.ceil(parseInt(rawTime, 10) / 60) : 0;
-    } catch (e) {
-      timeVal = 0;
-    }
+    const forecasts = rawList.map((f) => {
+      const rawTime = f.arrt || f.arrtime || f.time || "";
+      let timeVal = 0;
+      try {
+        timeVal = rawTime ? Math.ceil(parseInt(rawTime, 10) / 60) : 0;
+      } catch (e) {
+        timeVal = 0;
+      }
 
-    return {
-      rid: String(f.rid || ""),
-      rnum: String(f.rnum || f.route || ""),
-      time: timeVal,
-      destination: String(f.where || f.destination || f.last || ""),
-      vehid: String(f.obj_id || f.vehid || f.id || ""),
-      gosNum: String(f.gos_num || f.gosNum || ""),
-      type: String(f.type || "А")
-    };
-  });
+      return {
+        rid: String(f.rid || ""),
+        rnum: String(f.rnum || f.route || ""),
+        time: timeVal,
+        destination: String(f.where || f.destination || f.last || ""),
+        vehid: String(f.obj_id || f.vehid || f.id || ""),
+        gosNum: String(f.gos_num || f.gosNum || ""),
+        type: String(f.type || "А")
+      };
+    });
 
-  const result = { forecasts, sid };
-  setInCache(cacheKey, result);
-  return Response.json(result);
+    const result = { forecasts, sid };
+    setInCache(cacheKey, result);
+    return Response.json(result);
+  } catch (e) {
+    return Response.json({ forecasts: [], sid });
+  }
 }
 
 async function handleGetVehicleForecasts(url, env = {}) {
@@ -695,29 +736,36 @@ async function handleGetVehicleForecasts(url, env = {}) {
   const cfg = getUpstreamConfig(env);
   if (!cfg.url) return Response.json({ forecasts: [], vehid });
 
-  const headers = await getBus62Headers(env);
-  const res = await fetch(`${cfg.url}/getVehicleForecasts.php?vehid=${vehid}&city=${cfg.city}`, { headers });
-  if (!res.ok) return Response.json({ forecasts: [], vehid });
+  try {
+    const headers = await getBus62Headers(env);
+    const res = await fetch(`${cfg.url}/getVehicleForecasts.php?vehid=${vehid}&city=${cfg.city}`, {
+      headers,
+      signal: AbortSignal.timeout(4000)
+    });
+    if (!res.ok) return Response.json({ forecasts: [], vehid });
 
-  const data = await res.json();
-  const rawList = Array.isArray(data) ? data : [];
-  const forecasts = rawList.map((item) => {
-    const rawTime = item.arrt || item.time || "";
-    let timeVal = 0;
-    try {
-      timeVal = rawTime ? Math.ceil(parseInt(rawTime, 10) / 60) : 0;
-    } catch (e) {
-      timeVal = 0;
-    }
-    return {
-      stid: String(item.stid || item.station_id || ""),
-      time: timeVal
-    };
-  });
+    const data = await res.json();
+    const rawList = Array.isArray(data) ? data : [];
+    const forecasts = rawList.map((item) => {
+      const rawTime = item.arrt || item.time || "";
+      let timeVal = 0;
+      try {
+        timeVal = rawTime ? Math.ceil(parseInt(rawTime, 10) / 60) : 0;
+      } catch (e) {
+        timeVal = 0;
+      }
+      return {
+        stid: String(item.stid || item.station_id || ""),
+        time: timeVal
+      };
+    });
 
-  const result = { forecasts, vehid };
-  setInCache(cacheKey, result);
-  return Response.json(result);
+    const result = { forecasts, vehid };
+    setInCache(cacheKey, result);
+    return Response.json(result);
+  } catch (e) {
+    return Response.json({ forecasts: [], vehid });
+  }
 }
 
 // -------------------------------------------------------------
