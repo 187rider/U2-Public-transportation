@@ -308,7 +308,8 @@ async function handleGetStops(url) {
 }
 
 async function handleGetVehicles(url) {
-  let rids = url.searchParams.get("rids") || "";
+  const requestedRids = url.searchParams.get("rids") || "";
+  let rids = requestedRids;
   const curk = url.searchParams.get("curk") || "0";
 
   // If no specific routes requested, fetch all known city route IDs
@@ -344,7 +345,7 @@ async function handleGetVehicles(url) {
     return Response.json({ vehicles: [], next_curk: curk });
   }
 
-  const ridSet = rids ? new Set(rids.split(",").map((r) => r.trim()).filter(Boolean)) : null;
+  const ridSet = requestedRids ? new Set(requestedRids.split(",").map((r) => r.trim()).filter(Boolean)) : null;
   let maxCurk = parseInt(curk, 10) || 0;
   const vehicles = [];
 
@@ -392,7 +393,7 @@ async function handleGetVehicles(url) {
       dir: (parseFloat(item.dir) || 0) % 360,
       speed: parseFloat(item.speed) || 0,
       gosNum: String(item.gos_num || item.gosNum || ""),
-      type: String(item.type || "А"),
+      type: String(item.type || item.rtype || "А"),
       rid: vehRid,
       anim_key: String(animKey || maxCurk),
       animPoints: animPoints.slice(-2)
