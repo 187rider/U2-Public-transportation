@@ -651,13 +651,14 @@ class PushReminderManager:
 
                     rem_rids = set(r.strip() for r in str(rem.get("rid", "")).split(",") if r.strip())
                     rem_vehid = str(rem.get("vehid", "")).strip()
+                    rem_gos = str(rem.get("gosNum", "")).strip().lower()
                     matching_fc = None
                     if rem_vehid:
                         matching_fc = next((f for f in forecasts if str(f.get("vehid", "")).strip() == rem_vehid), None)
-                    if not matching_fc and rem.get("gosNum"):
-                        g_clean = str(rem.get("gosNum", "")).strip().lower()
-                        matching_fc = next((f for f in forecasts if str(f.get("gosNum", "")).strip().lower() == g_clean), None)
-                    if not matching_fc:
+                    if not matching_fc and rem_gos:
+                        matching_fc = next((f for f in forecasts if str(f.get("gosNum", "")).strip().lower() == rem_gos), None)
+                    # Only fallback to route search if reminder was never bound to a vehicle
+                    if not matching_fc and not rem_vehid and not rem_gos:
                         candidate_fcs = [f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids]
                         if candidate_fcs:
                             matching_fc = min(candidate_fcs, key=lambda x: int(x.get("time", 999)) if str(x.get("time", "")).isdigit() else 999)

@@ -1381,7 +1381,12 @@ export default function App() {
             if (rem.vehid) {
               match = forecasts.find(f => String(f.vehid) === String(rem.vehid));
             }
-            if (!match) {
+            if (!match && rem.gosNum) {
+              const cleanG = formatGosNum(rem.gosNum).toLowerCase();
+              match = forecasts.find(f => f.gosNum && formatGosNum(f.gosNum).toLowerCase() === cleanG);
+            }
+            // Only fallback to route match if the reminder was NEVER bound to a specific vehicle
+            if (!match && !rem.vehid && !rem.gosNum) {
               match = forecasts.find(f => String(f.rid) === String(rem.rid));
             }
             // Only enrich gosNum from exact vehid match, not rid fallback
