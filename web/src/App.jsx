@@ -1394,12 +1394,18 @@ export default function App() {
               const cleanG = formatGosNum(rem.gosNum).toLowerCase();
               match = forecasts.find(f => f.gosNum && formatGosNum(f.gosNum).toLowerCase() === cleanG);
             }
-            // Only fallback to route match if the reminder was NEVER bound to a specific vehicle
-            if (!match && !rem.vehid && !rem.gosNum) {
-              match = forecasts.find(f => String(f.rid) === String(rem.rid));
+            // Re-lock fallback: If vehicle dropped out of forecast and was not close to arrival, re-lock to nearest live bus on same route (Worker v11 parity)
+            if (!match) {
+              const candidates = forecasts.filter(f => String(f.rid) === String(rem.rid));
+              if (candidates.length) {
+                if (rem.lastNotifiedTime == null || rem.lastNotifiedTime > 3) {
+                  match = candidates.reduce((min, c) => (parseInt(c.time || c.arrt, 10) < parseInt(min.time || min.arrt, 10) ? c : min), candidates[0]);
+                  rem.vehid = String(match.vehid || match.obj_id || "");
+                  rem.gosNum = String(match.gosNum || match.gos_num || "");
+                }
+              }
             }
-            // Only enrich gosNum from exact vehid match, not rid fallback
-            if (match && match.gosNum && !rem.gosNum && match.vehid && String(match.vehid) === String(rem.vehid)) {
+            if (match && match.gosNum && !rem.gosNum) {
               rem.gosNum = match.gosNum;
             }
 
@@ -1424,8 +1430,9 @@ export default function App() {
                 });
                 setTimeout(() => setAlertToast(null), 8000);
               }
-              // Always clean up the reminder if it is no longer in forecast
+              // Clean up reminder from UI state and unregister from server
               setReminders(prev => prev.filter(r => r.id !== rem.id));
+              cancelArrivalReminder(rem.id, rem.rnum);
               return;
             }
 
