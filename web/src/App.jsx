@@ -1259,7 +1259,8 @@ export default function App() {
       vehid: String(vehid || ""),
       gosNum: String(gosNum || ""),
       createdAt: Date.now(),
-      initialTime: String(initialTime),
+      initialTime: !isNaN(initialNum) ? initialNum : 10,
+      currentTime: !isNaN(initialNum) ? initialNum : 10,
       triggered: false,
       lastTime: initialTime || "",
       lastNotifiedTime: !isNaN(initialNum) ? initialNum : null
@@ -5009,7 +5010,16 @@ export default function App() {
 
                         const vehType = normalizeVehicleType(item.type, item.route);
                         const iconName = vehType === "tram" ? "tram" : (vehType === "minibus" ? "airport_shuttle" : "directions_bus");
-                        const itemNextStation = (isSelected && nextStationInfo?.name) || (activeReminder && activeReminder.stationName ? (activeReminder.currentTime != null ? `к «${activeReminder.stationName}» (${activeReminder.currentTime} мин)` : (activeReminder.lastTime ? `к «${activeReminder.stationName}» (${activeReminder.lastTime} мин)` : `к «${activeReminder.stationName}»`)) : '') || item.nextStation || (live && (live.nextStation || live.destination)) || '';
+
+                        const targetStation = activeReminder?.stationName
+                          ? (activeReminder.currentTime != null
+                              ? `к «${activeReminder.stationName}» (${activeReminder.currentTime} мин)`
+                              : (activeReminder.lastTime
+                                  ? `к «${activeReminder.stationName}» (${activeReminder.lastTime} мин)`
+                                  : `к «${activeReminder.stationName}»`))
+                          : '';
+
+                        const itemNextStation = (isSelected && nextStationInfo?.name) || targetStation || item.nextStation || (live && (live.nextStation || live.destination)) || '';
                         const isNextStLong = (itemNextStation || "").length > 13;
 
                         const itemProgress = (() => {
@@ -5018,11 +5028,14 @@ export default function App() {
                           }
                           if (activeReminder) {
                             const initM = parseInt(activeReminder.initialTime, 10) || 10;
-                            const curM = typeof activeReminder.currentTime === 'number' ? activeReminder.currentTime : (parseInt(activeReminder.lastTime || activeReminder.lastNotifiedTime, 10) || initM);
+                            const curM = typeof activeReminder.currentTime === 'number'
+                              ? activeReminder.currentTime
+                              : (parseInt(activeReminder.lastTime || activeReminder.lastNotifiedTime, 10) || initM);
                             if (initM > 0) {
-                              return Math.min(95, Math.max(10, Math.round(((initM - Math.min(curM, initM)) / initM) * 100)));
+                              const pct = Math.round(((initM - Math.min(curM, initM)) / initM) * 100);
+                              return Math.min(95, Math.max(15, pct));
                             }
-                            return 35;
+                            return 40;
                           }
                           const target = live || item;
                           if (target) {
