@@ -308,11 +308,31 @@ async function handleGetStops(url) {
 }
 
 async function handleGetVehicles(url) {
-  const rids = url.searchParams.get("rids") || "";
+  let rids = url.searchParams.get("rids") || "";
   const curk = url.searchParams.get("curk") || "0";
 
+  // If no specific routes requested, fetch all known city route IDs
+  if (!rids) {
+    let routes = getFromCache("all_routes", 3600);
+    if (!routes) {
+      const h = await getBus62Headers();
+      const r = await fetch(`${BUS62_URL}/getAllRoutes.php?city=${BUS62_CITY}`, { headers: h });
+      if (r.ok) {
+        routes = await r.json();
+        setInCache("all_routes", routes);
+      }
+    }
+    if (Array.isArray(routes) && routes.length) {
+      rids = routes.map((rt) => rt.id).filter(Boolean).join(",");
+    }
+  }
+
+  if (!rids) {
+    return Response.json({ vehicles: [], next_curk: curk });
+  }
+
   const headers = await getBus62Headers();
-  const apiUrl = `${BUS62_URL}/getVehicleAnimations.php?curk=${curk}&city=${BUS62_CITY}&rids=${encodeURIComponent(rids)}`;
+  const apiUrl = `${BUS62_URL}/getVehicleAnimations.php?curk=${curk}&city=${BUS62_CITY}&rids=${rids}`;
   const res = await fetch(apiUrl, { headers });
 
   if (!res.ok) {
