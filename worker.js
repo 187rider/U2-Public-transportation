@@ -18,24 +18,66 @@ function getUpstreamConfig(env = {}) {
 
 const DEFAULT_VAPID_PUBLIC_KEY = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
 
+function parsePemToJwk(pemStr) {
+  try {
+    const b64 = pemStr.replace(/-----[^\n]+-----/g, "").replace(/\s+/g, "");
+    const raw = atob(b64);
+    const der = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) der[i] = raw.charCodeAt(i);
+
+    const toB64Url = (buf) => {
+      let bin = "";
+      for (let i = 0; i < buf.byteLength; i++) bin += String.fromCharCode(buf[i]);
+      return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    };
+
+    let d = null, x = null, y = null, pub = null;
+    for (let i = 0; i < der.length - 34; i++) {
+      if (der[i] === 0x04 && der[i + 1] === 0x20) {
+        d = toB64Url(der.subarray(i + 2, i + 34));
+        break;
+      }
+    }
+
+    for (let i = 0; i < der.length - 66; i++) {
+      if (der[i] === 0x03 && der[i + 1] === 0x42 && der[i + 2] === 0x00 && der[i + 3] === 0x04) {
+        pub = toB64Url(der.subarray(i + 3, i + 68));
+        x = toB64Url(der.subarray(i + 4, i + 36));
+        y = toB64Url(der.subarray(i + 36, i + 68));
+        break;
+      }
+    }
+
+    if (d) {
+      return { kty: "EC", crv: "P-256", x, y, d, publicKey: pub };
+    }
+  } catch (e) {}
+  return null;
+}
+
 function getVapidConfig(env = {}) {
   const subject = env.VAPID_SUBJECT || "mailto:support@ridertech.online";
-  const publicKey = env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
+  let publicKey = env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
 
   let jwk = null;
-  const rawKey = env.VAPID_JWK_JSON || env.VAPID_PRIVATE_KEY || "";
+  const rawKey = (env.VAPID_JWK_JSON || env.VAPID_PRIVATE_KEY || "").trim();
 
-  if (rawKey.trim().startsWith("{")) {
+  if (rawKey.startsWith("{")) {
     try {
       jwk = JSON.parse(rawKey);
     } catch (e) {}
+  } else if (rawKey.includes("-----BEGIN")) {
+    const parsed = parsePemToJwk(rawKey);
+    if (parsed) {
+      jwk = { kty: "EC", crv: "P-256", x: parsed.x, y: parsed.y, d: parsed.d };
+      if (parsed.publicKey && !env.VAPID_PUBLIC_KEY) {
+        publicKey = parsed.publicKey;
+      }
+    }
   }
 
-  if (!jwk) {
-    let d = rawKey.trim();
-    if (d.includes("-----BEGIN")) {
-      d = d.replace(/-----[^\n]+-----/g, "").replace(/\s+/g, "");
-    }
+  if (!jwk && rawKey) {
+    const d = rawKey.replace(/-----[^\n]+-----/g, "").replace(/\s+/g, "");
     jwk = {
       kty: "EC",
       x: env.VAPID_PUBLIC_X || "hfMOOmwHUy0jDRcpYhkb7m6AzCqqPeWSm3PIUB4xsE8",
@@ -45,9 +87,14 @@ function getVapidConfig(env = {}) {
     };
   }
 
-  // Fail loudly if private key is missing
   if (!jwk || !jwk.d) {
     throw new Error("VAPID private key is missing. Set VAPID_PRIVATE_KEY in Worker secrets.");
+  }
+
+  // Auto-fill x and y from DEFAULT_VAPID_PUBLIC_KEY if omitted
+  if (!jwk.x || !jwk.y) {
+    jwk.x = env.VAPID_PUBLIC_X || "hfMOOmwHUy0jDRcpYhkb7m6AzCqqPeWSm3PIUB4xsE8";
+    jwk.y = env.VAPID_PUBLIC_Y || "kWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
   }
 
   return { subject, publicKey, jwk };
