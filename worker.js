@@ -4,24 +4,38 @@
  */
 
 // -------------------------------------------------------------
-// 1. Constants & VAPID Configuration
+// 1. Constants & Dynamic VAPID Configuration
 // -------------------------------------------------------------
 const BUS62_URL = "https://api9.bus62.ru";
 const BUS62_CITY = "ulanude";
 const BUS62_KEY = "maps.bus62.ru:80";
 const BUS62_IV = "Content-MD5-Hash";
 
-const VAPID_CONFIG = {
-  subject: "mailto:support@ridertech.online",
-  publicKey: "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE",
-  jwk: {
-    kty: "EC",
-    x: "hfMOOmwHUy0jDRcpYhkb7m6AzCqqPeWSm3PIUB4xsE8",
-    y: "kWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE",
-    crv: "P-256",
-    d: "REDACTED_VAPID_PRIVATE_KEY"
+const DEFAULT_VAPID_PUBLIC_KEY = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
+
+function getVapidConfig(env = {}) {
+  const subject = env.VAPID_SUBJECT || "mailto:support@ridertech.online";
+  const publicKey = env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
+
+  let jwk = null;
+  if (env.VAPID_JWK_JSON) {
+    try {
+      jwk = JSON.parse(env.VAPID_JWK_JSON);
+    } catch (e) {}
   }
-};
+
+  if (!jwk) {
+    jwk = {
+      kty: "EC",
+      x: env.VAPID_PUBLIC_X || "hfMOOmwHUy0jDRcpYhkb7m6AzCqqPeWSm3PIUB4xsE8",
+      y: env.VAPID_PUBLIC_Y || "kWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE",
+      crv: "P-256",
+      d: env.VAPID_PRIVATE_KEY || "REDACTED_VAPID_PRIVATE_KEY"
+    };
+  }
+
+  return { subject, publicKey, jwk };
+}
 
 // In-Memory Global Cache
 const CACHE = new Map();
@@ -275,10 +289,11 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig) {
   };
 }
 
-async function sendWebPush(subscription, payload) {
+async function sendWebPush(subscription, payload, env = {}) {
   try {
+    const vapidConfig = getVapidConfig(env);
     const payloadStr = typeof payload === "string" ? payload : JSON.stringify(payload);
-    const { body, headers } = await encryptWebPushPayload(subscription, payloadStr, VAPID_CONFIG);
+    const { body, headers } = await encryptWebPushPayload(subscription, payloadStr, vapidConfig);
 
     const res = await fetch(subscription.endpoint, {
       method: "POST",
@@ -853,7 +868,7 @@ async function checkRemindersAndNotify(env) {
           tag: `arrival_${rem.sid}_${rem.rid}`,
           sid: rem.sid,
           rid: rem.rid
-        });
+        }, env);
         if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(rem.remKey).catch(() => {});
         MEMORY_REMINDERS.delete(rem.remKey);
       }
@@ -871,7 +886,7 @@ async function checkRemindersAndNotify(env) {
         tag: `arrival_${rem.sid}_${rem.rid}`,
         sid: rem.sid,
         rid: rem.rid
-      });
+      }, env);
       if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(rem.remKey).catch(() => {});
       MEMORY_REMINDERS.delete(rem.remKey);
       continue;
@@ -898,7 +913,7 @@ async function checkRemindersAndNotify(env) {
           tag: `arrival_${rem.sid}_${rem.rid}`,
           sid: rem.sid,
           rid: rem.rid
-        });
+        }, env);
         if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(rem.remKey).catch(() => {});
         MEMORY_REMINDERS.delete(rem.remKey);
       } else {
@@ -910,7 +925,7 @@ async function checkRemindersAndNotify(env) {
           sid: rem.sid,
           rid: rem.rid,
           minutes: curTime
-        });
+        }, env);
       }
     }
   }
@@ -942,7 +957,8 @@ export default {
       if (url.pathname === "/api/vehicle_forecasts") return handleGetVehicleForecasts(url);
 
       if (url.pathname === "/api/vapid_public_key" || url.pathname === "/api/vapid-public-key") {
-        return Response.json({ publicKey: VAPID_CONFIG.publicKey, public_key: VAPID_CONFIG.publicKey });
+        const vapidCfg = getVapidConfig(env);
+        return Response.json({ publicKey: vapidCfg.publicKey, public_key: vapidCfg.publicKey });
       }
 
       if (url.pathname === "/api/reminders/subscribe" || (url.pathname === "/api/reminders" && request.method === "POST")) {
@@ -958,7 +974,7 @@ export default {
 
       if (url.pathname === "/api/test_push" && request.method === "POST") {
         const body = await request.json();
-        const res = await sendWebPush(body.subscription, body.payload || { title: "Тестовое уведомление" });
+        const res = await sendWebPush(body.subscription, body.payload || { title: "Тестовое уведомление" }, env);
         return Response.json(res);
       }
 
