@@ -73,7 +73,7 @@ VEHICLES_API_URL = f"{BUS62_URL}/getVehicleAnimations.php"
 VEHICLES_API9_URL = os.getenv("VEHICLES_API9_URL", "https://api9.bus62.ru/getVehicleAnimations.php")
 
 KEY = os.getenv("BUS62_KEY", "maps.bus62.ru:80").encode('utf-8')
-IV = os.getenv("BUS62_IV", "3277864329765431").encode('utf-8')
+IV = os.getenv("BUS62_IV", "Content-MD5-Hash").encode('utf-8')
 UPSTREAM_SEMAPHORE = asyncio.Semaphore(6)
 
 
