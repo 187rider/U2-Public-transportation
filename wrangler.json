@@ -11,18 +11,10 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "TRANSIT_STATE",
-        "class_name": "TransitState"
-      }
-    ]
-  },
-  "migrations": [
+  "kv_namespaces": [
     {
-      "tag": "v1",
-      "new_sqlite_classes": ["TransitState"]
+      "binding": "REMINDERS_KV",
+      "id": "REMINDERS_KV"
     }
   ]
 }

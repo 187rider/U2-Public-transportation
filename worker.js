@@ -1086,6 +1086,199 @@ async function handleGetVehicleForecasts(url, env = {}) {
   }
 }
 
+let LAST_KV_CHECK_TIME = 0;
+
+async function checkRemindersAndNotifyKV(env = {}) {
+  if (!env.REMINDERS_KV) return;
+  const now = Date.now();
+  if (now - LAST_KV_CHECK_TIME < 12000) return;
+  LAST_KV_CHECK_TIME = now;
+
+  try {
+    const listRes = await env.REMINDERS_KV.list({ prefix: "rem_" });
+    if (!listRes.keys || listRes.keys.length === 0) return;
+
+    const reminders = [];
+    for (const k of listRes.keys) {
+      const raw = await env.REMINDERS_KV.get(k.name);
+      if (raw) {
+        try {
+          reminders.push(JSON.parse(raw));
+        } catch (e) {}
+      }
+    }
+
+    if (reminders.length === 0) return;
+
+    const distinctSids = Array.from(new Set(reminders.map((r) => r.sid).filter(Boolean)));
+    const stationForecastsMap = new Map();
+    const cfg = getUpstreamConfig(env);
+
+    if (cfg.url && distinctSids.length > 0) {
+      await Promise.all(
+        distinctSids.map(async (sid) => {
+          try {
+            const headers = await getBus62Headers(env);
+            const res = await fetch(`${cfg.url}/getStationForecasts.php?sid=${sid}&city=${cfg.city}`, {
+              headers,
+              signal: AbortSignal.timeout(4000)
+            });
+            if (res.ok) {
+              const json = await res.json();
+              stationForecastsMap.set(sid, Array.isArray(json) ? json : json.forecasts || []);
+            }
+          } catch (e) {}
+        })
+      );
+    }
+
+    for (const rem of reminders) {
+      const remKey = rem.remKey;
+      if (now - rem.createdAt > 7200 * 1000) {
+        await env.REMINDERS_KV.delete(remKey);
+        continue;
+      }
+
+      const forecasts = stationForecastsMap.get(rem.sid);
+      if (!forecasts) continue;
+
+      let matching = null;
+      if (rem.vehid) {
+        matching = forecasts.find((f) => String(f.obj_id || f.vehid || f.id) === rem.vehid);
+      }
+      if (!matching && rem.gosNum) {
+        matching = forecasts.find((f) => String(f.gos_num || f.gosNum || "").toLowerCase() === rem.gosNum.toLowerCase());
+      }
+      if (!matching && !rem.vehid && !rem.gosNum) {
+        const candidates = forecasts.filter((f) => String(f.rid) === rem.rid);
+        if (candidates.length) {
+          matching = candidates.reduce((min, c) => (parseInt(c.arrt || c.time, 10) < parseInt(min.arrt || min.time, 10) ? c : min), candidates[0]);
+        }
+      }
+
+      if (!rem.vehid && matching && (matching.obj_id || matching.vehid)) {
+        rem.vehid = String(matching.obj_id || matching.vehid);
+        rem.gosNum = String(matching.gosNum || matching.gos_num || "");
+        await env.REMINDERS_KV.put(remKey, JSON.stringify(rem), { expirationTtl: 7200 });
+      }
+
+      const rnum = rem.rnum;
+      const stname = rem.stationName;
+      const sub = rem.subscription;
+      const tag = `arrival_${rem.sid}_${rem.rid}`;
+
+      if (!matching) {
+        if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 3) {
+          await sendWebPush(sub, {
+            title: `🚌 Маршрут ${rnum} прибыл!`,
+            body: `Остановка «${stname}»`,
+            tag,
+            sid: rem.sid,
+            rid: rem.rid
+          }, env, tag);
+          await env.REMINDERS_KV.delete(remKey);
+        }
+        continue;
+      }
+
+      const rawTime = matching.arrt || matching.arrtime || matching.time || 0;
+      const curTime = Math.ceil(parseInt(rawTime, 10) / 60);
+      const last = rem.lastNotifiedTime;
+
+      if (curTime <= 0 || (last !== null && last <= 3 && curTime >= last + 2)) {
+        await sendWebPush(sub, {
+          title: `🚌 Маршрут ${rnum} прибыл!`,
+          body: `Остановка «${stname}»`,
+          tag,
+          sid: rem.sid,
+          rid: rem.rid
+        }, env, tag);
+        await env.REMINDERS_KV.delete(remKey);
+        continue;
+      }
+
+      let shouldFire = false;
+      if (last === null) {
+        shouldFire = true;
+      } else if (last > 10 && curTime <= 10) {
+        shouldFire = true;
+      } else if (curTime > 10 && curTime <= last - 5) {
+        shouldFire = true;
+      } else if (curTime <= 10 && curTime < last) {
+        shouldFire = true;
+      }
+
+      if (shouldFire) {
+        rem.lastNotifiedTime = curTime;
+        await env.REMINDERS_KV.put(remKey, JSON.stringify(rem), { expirationTtl: 7200 });
+
+        const timeWord = curTime === 1 ? "1 минуту" : curTime < 5 ? `${curTime} минуты` : `${curTime} минут`;
+        const res = await sendWebPush(sub, {
+          title: `🚌 Маршрут ${rnum} через ${timeWord}`,
+          body: `Остановка «${stname}»`,
+          tag,
+          sid: rem.sid,
+          rid: rem.rid,
+          minutes: curTime
+        }, env, tag);
+
+        if (!res.ok && [403, 404, 410].includes(res.status)) {
+          await env.REMINDERS_KV.delete(remKey);
+        }
+      }
+    }
+  } catch (e) {}
+}
+
+async function handleRemindersKV(request, env = {}) {
+  const url = new URL(request.url);
+  if (url.pathname === "/api/reminders/subscribe" || (url.pathname === "/api/reminders" && request.method === "POST")) {
+    const data = await request.json();
+    const sub = data.subscription;
+    if (!sub || !sub.endpoint || !data.sid || !data.rid) {
+      return Response.json({ error: "Invalid reminder payload" }, { status: 400 });
+    }
+    const remKey = `rem_${data.sid}_${data.rid}_${encodeURIComponent(sub.endpoint.slice(-16))}`;
+    const remObj = {
+      remKey,
+      sid: String(data.sid),
+      rid: String(data.rid),
+      rnum: String(data.rnum || ""),
+      stationName: String(data.stationName || data.stname || ""),
+      vehid: data.vehid ? String(data.vehid) : null,
+      gosNum: data.gosNum ? String(data.gosNum) : null,
+      subscription: sub,
+      createdAt: Date.now(),
+      lastNotifiedTime: null
+    };
+    if (env.REMINDERS_KV) {
+      await env.REMINDERS_KV.put(remKey, JSON.stringify(remObj), { expirationTtl: 7200 });
+    }
+    return Response.json({ ok: true, status: "subscribed", key: remKey });
+  }
+
+  if (url.pathname === "/api/reminders/unsubscribe" || (url.pathname === "/api/reminders" && request.method === "DELETE")) {
+    const data = await request.json();
+    const sub = data.subscription;
+    if (sub && sub.endpoint && data.sid && data.rid && env.REMINDERS_KV) {
+      const remKey = `rem_${data.sid}_${data.rid}_${encodeURIComponent(sub.endpoint.slice(-16))}`;
+      await env.REMINDERS_KV.delete(remKey);
+    }
+    return Response.json({ ok: true, status: "unsubscribed" });
+  }
+
+  if (url.pathname === "/api/reminders" && request.method === "GET") {
+    let count = 0;
+    if (env.REMINDERS_KV) {
+      const kvList = await env.REMINDERS_KV.list({ prefix: "rem_" });
+      count = kvList.keys ? kvList.keys.length : 0;
+    }
+    return Response.json({ active_count: count });
+  }
+
+  return Response.json({ error: "Not found" }, { status: 404 });
+}
+
 // -------------------------------------------------------------
 // 8. Main Worker Fetch & Scheduled Handlers
 // -------------------------------------------------------------
@@ -1094,11 +1287,18 @@ export default {
     const doStub = getTransitDO(env);
     if (doStub) {
       ctx.waitUntil(doStub.fetch("https://transit.internal/api/reminders/check"));
+    } else {
+      ctx.waitUntil(checkRemindersAndNotifyKV(env));
     }
   },
 
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    // Background sweep for reminders if on KV
+    if (!env.TRANSIT_STATE && env.REMINDERS_KV) {
+      ctx.waitUntil(checkRemindersAndNotifyKV(env));
+    }
 
     // 1. Route API Endpoints
     if (url.pathname.startsWith("/api/")) {
@@ -1145,7 +1345,7 @@ export default {
         }
       }
 
-      // Delegate Reminders strictly to the TransitState Durable Object (Single Source of Truth)
+      // Delegate Reminders to TransitState Durable Object or KV
       if (
         url.pathname === "/api/reminders/subscribe" ||
         url.pathname === "/api/reminders/unsubscribe" ||
@@ -1157,7 +1357,7 @@ export default {
             return await doStub.fetch(request);
           } catch (e) {}
         }
-        return Response.json({ error: "Reminder service temporarily unavailable" }, { status: 503 });
+        return handleRemindersKV(request, env);
       }
 
       if (url.pathname === "/api/test_push" && request.method === "POST") {
