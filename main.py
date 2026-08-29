@@ -726,24 +726,17 @@ class PushReminderManager:
                         self.remove_reminder(rem.get("subscription", {}).get("endpoint", ""), sid, rem.get("rid", ""), rem_vehid)
                         continue
 
+                    # Strictly monotonic countdown:
+                    # Once time M (e.g. 3m) is notified, never notify M or anything >= M again!
+                    # Delays in traffic (3 -> 4 -> 3) NEVER re-trigger 3 min duplicate notifications.
                     should_fire = False
 
                     if cur_time <= 0:
                         should_fire = True
                     elif last is None:
                         self.update_last_notified(rem_key, cur_time)
-                    elif cur_time > last:
-                        # If bus was slightly delayed by traffic (<= 2 min drift), update baseline
-                        self.update_last_notified(rem_key, cur_time)
-                    elif last >= 10 and cur_time >= 10:
-                        if cur_time <= last - 5:
-                            should_fire = True
-                    elif last >= 10 and cur_time < 10:
-                        if cur_time <= last - 5 or cur_time <= 9:
-                            should_fire = True
-                    elif cur_time < 10:
-                        if cur_time <= last - 1:
-                            should_fire = True
+                    elif cur_time < last:
+                        should_fire = True
 
                     if should_fire:
                         self.update_last_notified(rem_key, cur_time)
