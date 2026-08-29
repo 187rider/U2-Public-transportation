@@ -390,6 +390,16 @@ def get_reminders_db():
 class PushReminderManager:
     def __init__(self):
         self._running = False
+        self._vapid_obj = None
+
+    def _get_vapid(self):
+        if self._vapid_obj is None:
+            try:
+                from pywebpush import Vapid
+                self._vapid_obj = Vapid.from_file(VAPID_KEY_FILE)
+            except Exception as e:
+                logger.error("Failed to load VAPID key file: %s", e)
+        return self._vapid_obj
 
     def get_all_reminders(self) -> dict[str, dict]:
         try:
@@ -522,8 +532,11 @@ class PushReminderManager:
             "url": f"/?sid={sid}" if sid else "/"
         }
         endpoint = sub.get("endpoint", "")
+        if not endpoint:
+            return False
+
         try:
-            from pywebpush import webpush, WebPushException
+            from pywebpush import WebPusher
             from urllib.parse import urlparse
 
             parsed_url = urlparse(endpoint)
@@ -533,11 +546,15 @@ class PushReminderManager:
                 "aud": aud
             }
 
+            vapid_obj = self._get_vapid()
+            vapid_headers = vapid_obj.sign(fresh_claims) if vapid_obj else {}
+
             is_apple = "apple.com" in endpoint.lower()
             clean_collapse = "".join(c for c in tag if (c.isalnum() or c in "-_") and ord(c) < 128)[:32]
 
             push_headers = {
-                "Urgency": "high"
+                "Urgency": "high",
+                **vapid_headers
             }
             if is_apple:
                 push_headers["apns-push-type"] = "alert"
@@ -551,37 +568,41 @@ class PushReminderManager:
 
             ttl_val = 120
 
-            loop = asyncio.get_running_loop()
-            resp = await loop.run_in_executor(
-                None,
-                lambda: webpush(
-                    subscription_info=sub,
-                    data=json.dumps(payload),
-                    vapid_private_key=VAPID_KEY_FILE,
-                    vapid_claims=fresh_claims,
-                    headers=push_headers,
-                    ttl=ttl_val
-                )
+            # 1. CPU-bound ECE encryption without thread pool / disk I/O
+            wp = WebPusher(subscription_info=sub)
+            send_data = wp._prepare_send_data(
+                data=json.dumps(payload),
+                headers=push_headers,
+                ttl=ttl_val
             )
-            status = getattr(resp, "status_code", 200)
-            logger.info("Sent background WebPush (HTTP %s): %s - %s to %s", status, title, body, aud)
-            return True
+
+            # 2. Native Non-blocking Asynchronous HTTP dispatch via httpx connection pool
+            resp = await async_client.post(
+                url=send_data["endpoint"],
+                content=send_data["data"],
+                headers=dict(send_data["headers"]),
+                timeout=10.0
+            )
+
+            status = resp.status_code
+            if status in (200, 201, 202):
+                logger.info("Sent native async WebPush (HTTP %s): %s - %s to %s", status, title, body, aud)
+                return True
+            elif status in (404, 410):
+                logger.info("Pruning dead/revoked WebPush subscription (HTTP %s): %s", status, endpoint[:60])
+                self.remove_by_endpoint(endpoint)
+                return False
+            else:
+                logger.warning("WebPush push server returned HTTP %s: %s", status, resp.text[:200])
+                return False
         except Exception as e:
-            # Auto-prune dead/revoked subscriptions (410 Gone / 404 Not Found)
-            from pywebpush import WebPushException
-            if isinstance(e, WebPushException) and getattr(e, "response", None) is not None:
-                status_code = getattr(e.response, "status_code", None)
-                if status_code in (404, 410):
-                    logger.info("Pruning dead/revoked WebPush subscription (HTTP %s): %s", status_code, endpoint[:60])
-                    self.remove_by_endpoint(endpoint)
-                    return False
-            logger.warning("WebPush send error (%s): %s", type(e).__name__, e)
+            logger.warning("Native async WebPush send error (%s): %s", type(e).__name__, e)
             return False
 
     async def run_loop(self):
         self._running = True
-        fetch_sem = asyncio.Semaphore(4)    # Bound concurrent upstream station forecast calls to 4
-        push_sem = asyncio.Semaphore(15)    # Bound concurrent push HTTPS sends to 15
+        fetch_sem = asyncio.Semaphore(6)     # Bound concurrent upstream station forecast calls to 6
+        push_sem = asyncio.Semaphore(50)     # Native async non-blocking push dispatch pool for 50 concurrent sends
 
         while self._running:
             try:
