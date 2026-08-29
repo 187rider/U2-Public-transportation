@@ -1,6 +1,7 @@
 /**
  * Cloudflare Worker Backend for U2 Public Transportation
- * 100% Serverless: Edge API, AES Bus62 Decryption, RFC 8291 Web Push & Static Assets
+ * 100% Serverless: Edge API, AES Bus62 Decryption, RFC 8291 Web Push,
+ * Durable Object Singleton (10s Global Floor + Single-Writer Reminders + Alarm Ticker)
  */
 
 // -------------------------------------------------------------
@@ -39,10 +40,15 @@ function getVapidConfig(env = {}) {
     };
   }
 
+  // Fail loudly if private key is missing
+  if (!jwk || !jwk.d) {
+    throw new Error("VAPID private key is missing. Set VAPID_PRIVATE_KEY or VAPID_JWK_JSON in Worker secrets.");
+  }
+
   return { subject, publicKey, jwk };
 }
 
-// In-Memory Global Cache
+// Global In-Memory Cache for Static Data (Routes & Stations)
 const CACHE = new Map();
 function getFromCache(key, maxAgeSec) {
   const item = CACHE.get(key);
@@ -57,11 +63,38 @@ function setInCache(key, val) {
   CACHE.set(key, { ts: Date.now(), val });
 }
 
-// In-Memory Store for Reminders
-const MEMORY_REMINDERS = new Map();
+// -------------------------------------------------------------
+// 2. HMAC-SHA256 Client Signature Verification
+// -------------------------------------------------------------
+async function verifySignature(request, env = {}) {
+  const secret = env.VITE_API_SECRET || env.API_SECRET;
+  if (!secret) return true; // If no secret configured, allow during initial setup
+
+  const timestamp = request.headers.get("X-App-Timestamp");
+  const signature = request.headers.get("X-App-Signature");
+  if (!timestamp || !signature) {
+    return false;
+  }
+
+  const ts = parseInt(timestamp, 10);
+  if (isNaN(ts)) return false;
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (Math.abs(nowSec - ts) > 180) {
+    return false; // Expired request window (>3 minutes)
+  }
+
+  const enc = new TextEncoder();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", enc.encode(timestamp + secret));
+  const expectedHex = Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  return signature.toLowerCase() === expectedHex.toLowerCase();
+}
 
 // -------------------------------------------------------------
-// 2. Native AES-128-CBC Decryption & Hash Generator
+// 3. Native AES-128-CBC Upstream Token Generator
 // -------------------------------------------------------------
 async function generateBus62Hash(env = {}) {
   const cfg = getUpstreamConfig(env);
@@ -113,7 +146,7 @@ async function getBus62Headers(env = {}) {
 }
 
 // -------------------------------------------------------------
-// 3. RFC 8291 Web Push Engine (Pure Web Crypto)
+// 4. RFC 8291 Web Push Encryption Engine (Pure Web Crypto)
 // -------------------------------------------------------------
 function base64UrlToUint8Array(base64Url) {
   const padding = "=".repeat((4 - (base64Url.length % 4)) % 4);
@@ -192,7 +225,7 @@ async function hkdfExpand(prk, info, length) {
   return new Uint8Array(hash).slice(0, length);
 }
 
-async function encryptWebPushPayload(subscription, payloadText, vapidConfig) {
+async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag = "bus-arrival") {
   const userPublicKeyBytes = base64UrlToUint8Array(subscription.keys.p256dh);
   const userAuthBytes = base64UrlToUint8Array(subscription.keys.auth);
 
@@ -250,21 +283,20 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig) {
     ["encrypt"]
   );
 
-  const encryptedBuffer = await crypto.subtle.encrypt(
+  const ciphertextBuffer = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv: nonce },
     aesKey,
     record
   );
-  const ciphertext = new Uint8Array(encryptedBuffer);
+  const ciphertext = new Uint8Array(ciphertextBuffer);
 
-  const rs = 4096;
-  const header = new Uint8Array(16 + 4 + 1 + 65);
+  const header = new Uint8Array(21 + localPublicKeyRaw.length);
   header.set(salt, 0);
-  header[16] = (rs >> 24) & 0xff;
-  header[17] = (rs >> 16) & 0xff;
-  header[18] = (rs >> 8) & 0xff;
-  header[19] = rs & 0xff;
-  header[20] = 65;
+  header[16] = 0x00;
+  header[17] = 0x00;
+  header[18] = 0x10;
+  header[19] = 0x00;
+  header[20] = localPublicKeyRaw.length;
   header.set(localPublicKeyRaw, 21);
 
   const body = new Uint8Array(header.length + ciphertext.length);
@@ -278,17 +310,17 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig) {
   const headers = {
     "Content-Type": "application/octet-stream",
     "Content-Encoding": "aes128gcm",
-    "TTL": "86400",
+    "TTL": "300", // 5 minutes TTL for transit arrival alerts
     "Urgency": "high",
-    "Topic": "bus-arrival",
-    "Authorization": `vapid t=${jwt}, k=${vapidConfig.publicKey}`,
-    "Crypto-Key": `p256ecdsa=${vapidConfig.publicKey}`
+    "Topic": tag || "bus-arrival",
+    "Authorization": `vapid t=${jwt}, k=${vapidConfig.publicKey}`
   };
 
   // Apple APNs format support
   if (subscription.endpoint.includes("apple.com")) {
     headers["apns-push-type"] = "alert";
     headers["apns-priority"] = "10";
+    headers["apns-collapse-id"] = tag || "bus-arrival";
   }
 
   return {
@@ -297,11 +329,11 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig) {
   };
 }
 
-async function sendWebPush(subscription, payload, env = {}) {
+async function sendWebPush(subscription, payload, env = {}, tag = "bus-arrival") {
   try {
     const vapidConfig = getVapidConfig(env);
     const payloadStr = typeof payload === "string" ? payload : JSON.stringify(payload);
-    const { body, headers } = await encryptWebPushPayload(subscription, payloadStr, vapidConfig);
+    const { body, headers } = await encryptWebPushPayload(subscription, payloadStr, vapidConfig, tag);
 
     const res = await fetch(subscription.endpoint, {
       method: "POST",
@@ -309,7 +341,6 @@ async function sendWebPush(subscription, payload, env = {}) {
       body
     });
 
-    console.log(`WebPush to ${subscription.endpoint.slice(0, 45)}... status: ${res.status}`);
     return { ok: res.ok, status: res.status };
   } catch (err) {
     console.warn("WebPush send error:", err);
@@ -318,7 +349,367 @@ async function sendWebPush(subscription, payload, env = {}) {
 }
 
 // -------------------------------------------------------------
-// 4. API Endpoints Implementation
+// 5. Shared Helper for Formatting Vehicles
+// -------------------------------------------------------------
+function filterAndReturnVehicles(items, requestedRids, curk) {
+  const ridSet = requestedRids ? new Set(requestedRids.split(",").map((r) => r.trim()).filter(Boolean)) : null;
+  let maxCurk = parseInt(curk, 10) || 0;
+  const vehicles = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+
+    let lat = parseFloat(item.lat) || 0;
+    let lng = parseFloat(item.lng || item.lon) || 0;
+    if (Math.abs(lat) > 1000) lat /= 1000000;
+    if (Math.abs(lng) > 1000) lng /= 1000000;
+
+    const animKey = item.anim_key;
+    if (animKey && !isNaN(animKey)) {
+      maxCurk = Math.max(maxCurk, parseInt(animKey, 10));
+    }
+
+    const rawAnimPoints = Array.isArray(item.anim_points) ? item.anim_points : [];
+    const animPoints = [];
+    for (const pt of rawAnimPoints) {
+      let ptLat = parseFloat(pt.lat) || 0;
+      let ptLng = parseFloat(pt.lon || pt.lng) || 0;
+      if (Math.abs(ptLat) > 1000) ptLat /= 1000000;
+      if (Math.abs(ptLng) > 1000) ptLng /= 1000000;
+      animPoints.push({
+        percent: parseFloat(pt.percent) || 0,
+        lat: ptLat,
+        lng: ptLng,
+        dir: (parseFloat(pt.dir) || 0) % 360
+      });
+    }
+
+    const vehId = String(item.vehid || item.id || "");
+    if (!vehId) continue;
+
+    const vehRid = String(item.rid || "").trim();
+    if (ridSet && (!vehRid || !ridSet.has(vehRid))) {
+      continue;
+    }
+
+    vehicles.push({
+      id: vehId,
+      lat,
+      lng,
+      route: String(item.route || item.rnum || ""),
+      dir: (parseFloat(item.dir) || 0) % 360,
+      speed: parseFloat(item.speed) || 0,
+      gosNum: String(item.gos_num || item.gosNum || ""),
+      type: String(item.type || item.rtype || "А"),
+      rid: vehRid,
+      anim_key: String(animKey || maxCurk),
+      animPoints: animPoints.slice(-2)
+    });
+  }
+
+  return Response.json({
+    vehicles,
+    next_curk: String(maxCurk)
+  });
+}
+
+// -------------------------------------------------------------
+// 6. Durable Object Singleton: TransitState
+// Guarantees:
+//  - Exactly 1 global instance for the 10s upstream rate limit floor
+//  - Single-writer reminder consistency (zero duplicate pushes across colos)
+//  - Background Alarm Ticker (runs every 15s instead of waiting for 1-minute cron)
+// -------------------------------------------------------------
+export class TransitState {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.storage = state.storage;
+
+    this.lastVehiclePollTime = 0;
+    this.lastVehicleSnapshot = null;
+    this.vehicleFetchPromise = null;
+
+    this.reminders = new Map();
+    this.loadedFromStorage = false;
+  }
+
+  async ensureLoaded() {
+    if (!this.loadedFromStorage) {
+      const stored = await this.storage.list({ prefix: "rem_" });
+      for (const [key, val] of stored.entries()) {
+        this.reminders.set(key, val);
+      }
+      this.loadedFromStorage = true;
+    }
+  }
+
+  async alarm() {
+    await this.ensureLoaded();
+    await this.checkRemindersAndNotify();
+
+    // Reschedule alarm every 15 seconds if active reminders exist
+    if (this.reminders.size > 0) {
+      await this.storage.setAlarm(Date.now() + 15000);
+    }
+  }
+
+  async checkRemindersAndNotify() {
+    const now = Date.now();
+    if (this.reminders.size === 0) return;
+
+    const distinctSids = Array.from(new Set(Array.from(this.reminders.values()).map((r) => r.sid).filter(Boolean)));
+    const stationForecastsMap = new Map();
+    const cfg = getUpstreamConfig(this.env);
+
+    if (cfg.url && distinctSids.length > 0) {
+      await Promise.all(
+        distinctSids.map(async (sid) => {
+          try {
+            const headers = await getBus62Headers(this.env);
+            const res = await fetch(`${cfg.url}/getStationForecasts.php?sid=${sid}&city=${cfg.city}`, {
+              headers,
+              signal: AbortSignal.timeout(4000)
+            });
+            if (res.ok) {
+              const json = await res.json();
+              stationForecastsMap.set(sid, Array.isArray(json) ? json : json.forecasts || []);
+            }
+          } catch (e) {}
+        })
+      );
+    }
+
+    for (const [remKey, rem] of Array.from(this.reminders.entries())) {
+      // 1. Evict reminders older than 2 hours
+      if (now - rem.createdAt > 7200 * 1000) {
+        await this.storage.delete(remKey);
+        this.reminders.delete(remKey);
+        continue;
+      }
+
+      const forecasts = stationForecastsMap.get(rem.sid);
+      if (!forecasts) continue;
+
+      let matching = null;
+      if (rem.vehid) {
+        matching = forecasts.find((f) => String(f.obj_id || f.vehid || f.id) === rem.vehid);
+      }
+      if (!matching && rem.gosNum) {
+        matching = forecasts.find((f) => String(f.gos_num || f.gosNum || "").toLowerCase() === rem.gosNum.toLowerCase());
+      }
+      if (!matching && !rem.vehid && !rem.gosNum) {
+        const candidates = forecasts.filter((f) => String(f.rid) === rem.rid);
+        if (candidates.length) {
+          matching = candidates.reduce((min, c) => (parseInt(c.arrt || c.time, 10) < parseInt(min.arrt || min.time, 10) ? c : min), candidates[0]);
+        }
+      }
+
+      // Auto-lock to vehicle and persist in storage
+      if (!rem.vehid && matching && (matching.obj_id || matching.vehid)) {
+        rem.vehid = String(matching.obj_id || matching.vehid);
+        rem.gosNum = String(matching.gosNum || matching.gos_num || "");
+        await this.storage.put(remKey, rem);
+      }
+
+      const rnum = rem.rnum;
+      const stname = rem.stationName;
+      const sub = rem.subscription;
+      const tag = `arrival_${rem.sid}_${rem.rid}`;
+
+      // Vehicle vanished after being close (<= 3 min) -> Arrival event!
+      if (!matching) {
+        if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 3) {
+          await sendWebPush(sub, {
+            title: `🚌 Маршрут ${rnum} прибыл!`,
+            body: `Остановка «${stname}»`,
+            tag,
+            sid: rem.sid,
+            rid: rem.rid
+          }, this.env, tag);
+          await this.storage.delete(remKey);
+          this.reminders.delete(remKey);
+        }
+        continue;
+      }
+
+      const rawTime = matching.arrt || matching.arrtime || matching.time || 0;
+      const curTime = Math.ceil(parseInt(rawTime, 10) / 60);
+      const last = rem.lastNotifiedTime;
+
+      // Arrival threshold: 0 minutes or departure bounce
+      if (curTime <= 0 || (last !== null && last <= 3 && curTime >= last + 2)) {
+        await sendWebPush(sub, {
+          title: `🚌 Маршрут ${rnum} прибыл!`,
+          body: `Остановка «${stname}»`,
+          tag,
+          sid: rem.sid,
+          rid: rem.rid
+        }, this.env, tag);
+        await this.storage.delete(remKey);
+        this.reminders.delete(remKey);
+        continue;
+      }
+
+      // Exact VPS cadence rules:
+      // - If curTime > 10: notify every 5 minutes (e.g. 25, 20, 15, 10) or on initial registration
+      // - If crossing from > 10 to <= 10: notify
+      // - If curTime <= 10: notify every single minute when time decreases
+      let shouldFire = false;
+      if (last === null) {
+        shouldFire = true;
+      } else if (last > 10 && curTime <= 10) {
+        shouldFire = true;
+      } else if (curTime > 10 && curTime <= last - 5) {
+        shouldFire = true;
+      } else if (curTime <= 10 && curTime < last) {
+        shouldFire = true;
+      }
+
+      if (shouldFire) {
+        rem.lastNotifiedTime = curTime;
+        await this.storage.put(remKey, rem);
+
+        const timeWord = curTime === 1 ? "1 минуту" : curTime < 5 ? `${curTime} минуты` : `${curTime} минут`;
+        await sendWebPush(sub, {
+          title: `🚌 Маршрут ${rnum} через ${timeWord}`,
+          body: `Остановка «${stname}»`,
+          tag,
+          sid: rem.sid,
+          rid: rem.rid,
+          minutes: curTime
+        }, this.env, tag);
+      }
+    }
+  }
+
+  async fetch(request) {
+    await this.ensureLoaded();
+    const url = new URL(request.url);
+
+    // 1. Vehicles endpoint with 10s global floor
+    if (url.pathname === "/api/vehicles") {
+      const requestedRids = url.searchParams.get("rids") || "";
+      const curk = url.searchParams.get("curk") || "0";
+      const now = Date.now();
+
+      // Return cached snapshot if polled < 10 seconds ago
+      if (this.lastVehicleSnapshot && now - this.lastVehiclePollTime < 10000) {
+        return filterAndReturnVehicles(this.lastVehicleSnapshot, requestedRids, curk);
+      }
+
+      if (!this.vehicleFetchPromise) {
+        this.vehicleFetchPromise = (async () => {
+          try {
+            const cfg = getUpstreamConfig(this.env);
+            if (!cfg.url) return;
+
+            let rids = requestedRids;
+            if (!rids) {
+              const h = await getBus62Headers(this.env);
+              const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, {
+                headers: h,
+                signal: AbortSignal.timeout(4000)
+              });
+              if (r.ok) {
+                const routes = await r.json();
+                if (Array.isArray(routes)) {
+                  rids = routes.map((rt) => rt.id).filter(Boolean).slice(0, 50).join(",");
+                }
+              }
+            }
+
+            const headers = await getBus62Headers(this.env);
+            const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}&rids=${rids}`;
+            const res = await fetch(apiUrl, {
+              headers,
+              signal: AbortSignal.timeout(6000)
+            });
+            if (res.ok) {
+              const items = await res.json();
+              if (Array.isArray(items) && items.length > 0) {
+                this.lastVehicleSnapshot = items;
+                this.lastVehiclePollTime = Date.now();
+              }
+            }
+          } catch (e) {
+          } finally {
+            this.vehicleFetchPromise = null;
+          }
+        })();
+      }
+
+      await this.vehicleFetchPromise;
+
+      if (this.lastVehicleSnapshot) {
+        return filterAndReturnVehicles(this.lastVehicleSnapshot, requestedRids, curk);
+      }
+      return Response.json({ vehicles: [], next_curk: curk });
+    }
+
+    // 2. Reminders Subscribe
+    if (url.pathname === "/api/reminders/subscribe" || (url.pathname === "/api/reminders" && request.method === "POST")) {
+      const data = await request.json();
+      const sub = data.subscription;
+      if (!sub || !sub.endpoint || !data.sid || !data.rid) {
+        return Response.json({ error: "Invalid reminder payload" }, { status: 400 });
+      }
+
+      const remKey = `rem_${data.sid}_${data.rid}_${encodeURIComponent(sub.endpoint.slice(-16))}`;
+      const remObj = {
+        remKey,
+        sid: String(data.sid),
+        rid: String(data.rid),
+        rnum: String(data.rnum || ""),
+        stationName: String(data.stationName || data.stname || ""),
+        vehid: data.vehid ? String(data.vehid) : null,
+        gosNum: data.gosNum ? String(data.gosNum) : null,
+        subscription: sub,
+        createdAt: Date.now(),
+        lastNotifiedTime: null
+      };
+
+      this.reminders.set(remKey, remObj);
+      await this.storage.put(remKey, remObj);
+
+      // Start alarm immediately if not scheduled
+      const currentAlarm = await this.storage.getAlarm();
+      if (currentAlarm === null) {
+        await this.storage.setAlarm(Date.now() + 1000);
+      }
+
+      return Response.json({ ok: true, status: "subscribed", key: remKey });
+    }
+
+    // 3. Reminders Unsubscribe
+    if (url.pathname === "/api/reminders/unsubscribe" || (url.pathname === "/api/reminders" && request.method === "DELETE")) {
+      const data = await request.json();
+      const sub = data.subscription;
+      if (sub && sub.endpoint && data.sid && data.rid) {
+        const remKey = `rem_${data.sid}_${data.rid}_${encodeURIComponent(sub.endpoint.slice(-16))}`;
+        this.reminders.delete(remKey);
+        await this.storage.delete(remKey);
+      }
+      return Response.json({ ok: true, status: "unsubscribed" });
+    }
+
+    // 4. Reminders List
+    if (url.pathname === "/api/reminders" && request.method === "GET") {
+      return Response.json({ reminders: Array.from(this.reminders.values()) });
+    }
+
+    return new Response("Not found in DO", { status: 404 });
+  }
+}
+
+function getTransitDO(env) {
+  if (!env.TRANSIT_STATE) return null;
+  const id = env.TRANSIT_STATE.idFromName("ulan-ude-global-singleton");
+  return env.TRANSIT_STATE.get(id);
+}
+
+// -------------------------------------------------------------
+// 7. Edge API Endpoints (Cached in Worker isolates)
 // -------------------------------------------------------------
 async function handleGetRoutes(env = {}) {
   const cached = getFromCache("routes_grouped_v3", 3600);
@@ -440,6 +831,7 @@ async function handleGetStations(env = {}) {
       else if (l0 && a0) coords = [l0, a0];
       else if (l1 && a1) coords = [l1, a1];
 
+      // Bounding box filter for Ulan-Ude region (50–55°N, 100–115°E)
       if (coords && coords[1] > 50.0 && coords[1] < 55.0 && coords[0] > 100.0 && coords[0] < 115.0) {
         features.push({
           type: "Feature",
@@ -539,137 +931,12 @@ async function handleGetRouteStations(url, env = {}) {
   }
 }
 
-// -------------------------------------------------------------
-// Rate Limiter & Global In-Memory Vehicle Cache (8s Cooldown)
-// -------------------------------------------------------------
-let LAST_VEHICLE_POLL_TIME = 0;
-let LAST_VEHICLE_SNAPSHOT = null;
-
-function filterAndReturnVehicles(items, requestedRids, curk) {
-  const ridSet = requestedRids ? new Set(requestedRids.split(",").map((r) => r.trim()).filter(Boolean)) : null;
-  let maxCurk = parseInt(curk, 10) || 0;
-  const vehicles = [];
-
-  for (const item of items) {
-    if (!item || typeof item !== "object") continue;
-
-    let lat = parseFloat(item.lat) || 0;
-    let lng = parseFloat(item.lng || item.lon) || 0;
-    if (Math.abs(lat) > 1000) lat /= 1000000;
-    if (Math.abs(lng) > 1000) lng /= 1000000;
-
-    const animKey = item.anim_key;
-    if (animKey && !isNaN(animKey)) {
-      maxCurk = Math.max(maxCurk, parseInt(animKey, 10));
-    }
-
-    const rawAnimPoints = Array.isArray(item.anim_points) ? item.anim_points : [];
-    const animPoints = [];
-    for (const pt of rawAnimPoints) {
-      let ptLat = parseFloat(pt.lat) || 0;
-      let ptLng = parseFloat(pt.lon || pt.lng) || 0;
-      if (Math.abs(ptLat) > 1000) ptLat /= 1000000;
-      if (Math.abs(ptLng) > 1000) ptLng /= 1000000;
-      animPoints.push({
-        percent: parseFloat(pt.percent) || 0,
-        lat: ptLat,
-        lng: ptLng,
-        dir: (parseFloat(pt.dir) || 0) % 360
-      });
-    }
-
-    const vehId = String(item.vehid || item.id || "");
-    if (!vehId) continue;
-
-    const vehRid = String(item.rid || "").trim();
-    if (ridSet && (!vehRid || !ridSet.has(vehRid))) {
-      continue;
-    }
-
-    vehicles.push({
-      id: vehId,
-      lat,
-      lng,
-      route: String(item.route || item.rnum || ""),
-      dir: (parseFloat(item.dir) || 0) % 360,
-      speed: parseFloat(item.speed) || 0,
-      gosNum: String(item.gos_num || item.gosNum || ""),
-      type: String(item.type || item.rtype || "А"),
-      rid: vehRid,
-      anim_key: String(animKey || maxCurk),
-      animPoints: animPoints.slice(-2)
-    });
-  }
-
-  return Response.json({
-    vehicles,
-    next_curk: String(maxCurk)
-  });
-}
-
-async function handleGetVehicles(url, env = {}) {
-  const requestedRids = url.searchParams.get("rids") || "";
-  const curk = url.searchParams.get("curk") || "0";
-  const now = Date.now();
-
-  // 1. Return cached snapshot if recent (< 8 seconds)
-  if (LAST_VEHICLE_SNAPSHOT && now - LAST_VEHICLE_POLL_TIME < 8000) {
-    return filterAndReturnVehicles(LAST_VEHICLE_SNAPSHOT, requestedRids, curk);
-  }
-
-  const cfg = getUpstreamConfig(env);
-  if (!cfg.url) return Response.json({ vehicles: [], next_curk: curk });
-
-  try {
-    let rids = requestedRids;
-    if (!rids) {
-      let routes = getFromCache("all_routes_raw", 3600);
-      if (!routes) {
-        const h = await getBus62Headers(env);
-        const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, {
-          headers: h,
-          signal: AbortSignal.timeout(4000)
-        });
-        if (r.ok) {
-          routes = await r.json();
-          setInCache("all_routes_raw", routes);
-        }
-      }
-      if (Array.isArray(routes) && routes.length) {
-        rids = routes.map((rt) => rt.id).filter(Boolean).slice(0, 50).join(",");
-      }
-    }
-
-    const headers = await getBus62Headers(env);
-    const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}&rids=${rids}`;
-    const res = await fetch(apiUrl, {
-      headers,
-      signal: AbortSignal.timeout(5000)
-    });
-    if (res.ok) {
-      const items = await res.json();
-      if (Array.isArray(items) && items.length > 0) {
-        LAST_VEHICLE_SNAPSHOT = items;
-        LAST_VEHICLE_POLL_TIME = Date.now();
-        return filterAndReturnVehicles(items, requestedRids, curk);
-      }
-    }
-  } catch (e) {
-  }
-
-  if (LAST_VEHICLE_SNAPSHOT) {
-    return filterAndReturnVehicles(LAST_VEHICLE_SNAPSHOT, requestedRids, curk);
-  }
-
-  return Response.json({ vehicles: [], next_curk: curk });
-}
-
 async function handleGetStationForecasts(url, env = {}) {
   const sid = url.searchParams.get("sid") || "";
   if (!sid) return Response.json({ forecasts: [], sid: "" });
 
   const cacheKey = `forecasts_sid_${sid}`;
-  const cached = getFromCache(cacheKey, 8); // 8-second cache
+  const cached = getFromCache(cacheKey, 8);
   if (cached) return Response.json(cached);
 
   const cfg = getUpstreamConfig(env);
@@ -719,7 +986,7 @@ async function handleGetVehicleForecasts(url, env = {}) {
   if (!vehid) return Response.json({ forecasts: [], vehid: "" });
 
   const cacheKey = `vehicle_forecasts_${vehid}`;
-  const cached = getFromCache(cacheKey, 8); // 8-second cache
+  const cached = getFromCache(cacheKey, 8);
   if (cached) return Response.json(cached);
 
   const cfg = getUpstreamConfig(env);
@@ -758,275 +1025,48 @@ async function handleGetVehicleForecasts(url, env = {}) {
 }
 
 // -------------------------------------------------------------
-// 5. Push Reminders & Background Tracker (Cloudflare KV & Web Push)
-// -------------------------------------------------------------
-async function handleAddReminder(request, env) {
-  const data = await request.json();
-  const sub = data.subscription;
-  if (!sub || !sub.endpoint) {
-    return Response.json({ error: "Invalid subscription" }, { status: 400 });
-  }
-
-  const endpoint = sub.endpoint;
-  const sid = String(data.sid || "");
-  const rid = String(data.rid || "");
-  const vehid = String(data.vehid || "");
-  const gosNum = String(data.gosNum || "");
-  const remKey = `rem_${endpoint}_${sid}_${rid}`;
-
-  let initNum = null;
-  if (data.initialTime != null) {
-    const match = String(data.initialTime).match(/\d+/);
-    if (match) initNum = parseInt(match[0], 10);
-  }
-
-  const reminderRecord = {
-    remKey,
-    subscription: sub,
-    sid,
-    stationName: String(data.stationName || ""),
-    rid,
-    rnum: String(data.rnum || ""),
-    vehid,
-    gosNum,
-    lastNotifiedTime: initNum,
-    createdAt: Date.now()
-  };
-
-  // 1. Store in Cloudflare KV with 2-hour auto-expiration
-  if (env.REMINDERS_KV) {
-    try {
-      await env.REMINDERS_KV.put(remKey, JSON.stringify(reminderRecord), {
-        expirationTtl: 7200 // 2 hours
-      });
-    } catch (e) {
-      console.warn("KV put error:", e);
-    }
-  }
-
-  // 2. Also keep in-memory for immediate ticks
-  MEMORY_REMINDERS.set(remKey, reminderRecord);
-
-  return Response.json({ success: true, status: "ok", key: remKey });
-}
-
-async function handleDeleteReminder(request, env) {
-  const data = await request.json();
-  const ep = data.endpoint || (data.subscription && data.subscription.endpoint);
-  const sid = String(data.sid || "");
-  const rid = String(data.rid || "");
-
-  if (env.REMINDERS_KV && ep) {
-    try {
-      if (sid && rid) {
-        await env.REMINDERS_KV.delete(`rem_${ep}_${sid}_${rid}`);
-      } else {
-        const list = await env.REMINDERS_KV.list({ prefix: `rem_${ep}` });
-        for (const key of list.keys || []) {
-          await env.REMINDERS_KV.delete(key.name);
-        }
-      }
-    } catch (e) {
-      console.warn("KV delete error:", e);
-    }
-  }
-
-  for (const [key, rem] of MEMORY_REMINDERS.entries()) {
-    if (rem.subscription.endpoint === ep) {
-      if (!sid || (rem.sid === sid && rem.rid === rid)) {
-        MEMORY_REMINDERS.delete(key);
-      }
-    }
-  }
-
-  return Response.json({ success: true, status: "ok" });
-}
-
-let LAST_REMINDER_CHECK_TIME = 0;
-
-async function checkRemindersAndNotify(env) {
-  const now = Date.now();
-  // Global 10-second cooldown: never check upstream more than once per 10 seconds
-  if (now - LAST_REMINDER_CHECK_TIME < 10000) {
-    return;
-  }
-  LAST_REMINDER_CHECK_TIME = now;
-
-  let reminders = [];
-
-  // 1. Fetch all active reminders from Cloudflare KV
-  if (env.REMINDERS_KV) {
-    try {
-      const list = await env.REMINDERS_KV.list({ prefix: "rem_" });
-      for (const key of list.keys || []) {
-        try {
-          const raw = await env.REMINDERS_KV.get(key.name);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            reminders.push(parsed);
-          }
-        } catch (e) {}
-      }
-    } catch (e) {
-      console.warn("KV list error:", e);
-    }
-  }
-
-  // 2. If KV returned nothing or is not bound, check memory
-  if (!reminders.length && MEMORY_REMINDERS.size > 0) {
-    reminders = Array.from(MEMORY_REMINDERS.values());
-  }
-
-  if (!reminders.length) return;
-
-  const distinctSids = Array.from(new Set(reminders.map((r) => r.sid).filter(Boolean)));
-  const stationForecastsMap = new Map();
-  const cfg = getUpstreamConfig(env);
-
-  if (cfg.url) {
-    await Promise.all(
-      distinctSids.map(async (sid) => {
-        try {
-          const headers = await getBus62Headers(env);
-          const res = await fetch(`${cfg.url}/getStationForecasts.php?sid=${sid}&city=${cfg.city}`, { headers });
-          if (res.ok) {
-            const json = await res.json();
-            stationForecastsMap.set(sid, Array.isArray(json) ? json : json.forecasts || []);
-          }
-        } catch (e) {}
-      })
-    );
-  }
-
-  for (const rem of reminders) {
-    // Evict reminders older than 2 hours
-    if (now - rem.createdAt > 7200 * 1000) {
-      if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(rem.remKey).catch(() => {});
-      MEMORY_REMINDERS.delete(rem.remKey);
-      continue;
-    }
-
-    const forecasts = stationForecastsMap.get(rem.sid);
-    if (!forecasts) continue;
-
-    let matching = null;
-    if (rem.vehid) {
-      matching = forecasts.find((f) => String(f.obj_id || f.vehid || f.id) === rem.vehid);
-    }
-    if (!matching && rem.gosNum) {
-      matching = forecasts.find((f) => String(f.gos_num || f.gosNum || "").toLowerCase() === rem.gosNum.toLowerCase());
-    }
-    if (!matching && !rem.vehid && !rem.gosNum) {
-      const candidates = forecasts.filter((f) => String(f.rid) === rem.rid);
-      if (candidates.length) {
-        matching = candidates.reduce((min, c) => (parseInt(c.arrt || c.time, 10) < parseInt(min.arrt || min.time, 10) ? c : min), candidates[0]);
-      }
-    }
-
-    // Auto-lock to vehicle and persist in KV
-    if (!rem.vehid && matching && (matching.obj_id || matching.vehid)) {
-      rem.vehid = String(matching.obj_id || matching.vehid);
-      rem.gosNum = String(matching.gosNum || matching.gos_num || "");
-      if (env.REMINDERS_KV) {
-        await env.REMINDERS_KV.put(rem.remKey, JSON.stringify(rem), { expirationTtl: 7200 }).catch(() => {});
-      }
-    }
-
-    const rnum = rem.rnum;
-    const stname = rem.stationName;
-    const sub = rem.subscription;
-
-    if (!matching) {
-      if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 3) {
-        await sendWebPush(sub, {
-          title: `🚌 Маршрут ${rnum} прибыл!`,
-          body: `Остановка «${stname}»`,
-          tag: `arrival_${rem.sid}_${rem.rid}`,
-          sid: rem.sid,
-          rid: rem.rid
-        }, env);
-        if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(rem.remKey).catch(() => {});
-        MEMORY_REMINDERS.delete(rem.remKey);
-      }
-      continue;
-    }
-
-    const rawTime = matching.arrt || matching.arrtime || matching.time || 0;
-    const curTime = Math.ceil(parseInt(rawTime, 10) / 60);
-    const last = rem.lastNotifiedTime;
-
-    if (last !== null && last <= 3 && (curTime >= last + 2 || (last <= 1 && curTime > last))) {
-      await sendWebPush(sub, {
-        title: `🚌 Маршрут ${rnum} прибыл!`,
-        body: `Остановка «${stname}»`,
-        tag: `arrival_${rem.sid}_${rem.rid}`,
-        sid: rem.sid,
-        rid: rem.rid
-      }, env);
-      if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(rem.remKey).catch(() => {});
-      MEMORY_REMINDERS.delete(rem.remKey);
-      continue;
-    }
-
-    let shouldFire = false;
-    if (curTime <= 0) {
-      shouldFire = true;
-    } else if (last === null) {
-      rem.lastNotifiedTime = curTime;
-      if (env.REMINDERS_KV) await env.REMINDERS_KV.put(rem.remKey, JSON.stringify(rem), { expirationTtl: 7200 }).catch(() => {});
-    } else if (curTime < last) {
-      shouldFire = true;
-    }
-
-    if (shouldFire) {
-      rem.lastNotifiedTime = curTime;
-      if (env.REMINDERS_KV) await env.REMINDERS_KV.put(rem.remKey, JSON.stringify(rem), { expirationTtl: 7200 }).catch(() => {});
-
-      if (curTime <= 0) {
-        await sendWebPush(sub, {
-          title: `🚌 Маршрут ${rnum} прибыл!`,
-          body: `Остановка «${stname}»`,
-          tag: `arrival_${rem.sid}_${rem.rid}`,
-          sid: rem.sid,
-          rid: rem.rid
-        }, env);
-        if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(rem.remKey).catch(() => {});
-        MEMORY_REMINDERS.delete(rem.remKey);
-      } else {
-        const timeWord = curTime === 1 ? "1 минуту" : curTime < 5 ? `${curTime} минуты` : `${curTime} минут`;
-        await sendWebPush(sub, {
-          title: `🚌 Маршрут ${rnum} через ${timeWord}`,
-          body: `Остановка «${stname}»`,
-          tag: `arrival_${rem.sid}_${rem.rid}`,
-          sid: rem.sid,
-          rid: rem.rid,
-          minutes: curTime
-        }, env);
-      }
-    }
-  }
-}
-
-// -------------------------------------------------------------
-// 6. Main Worker Fetch & Scheduled Handlers
+// 8. Main Worker Fetch & Scheduled Handlers
 // -------------------------------------------------------------
 export default {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(checkRemindersAndNotify(env));
+    const doStub = getTransitDO(env);
+    if (doStub) {
+      ctx.waitUntil(doStub.fetch("https://transit.internal/api/reminders/check"));
+    }
   },
 
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // API Routing
+    // 1. Route API Endpoints
     if (url.pathname.startsWith("/api/")) {
-      ctx.waitUntil(checkRemindersAndNotify(env));
+      // HMAC Signature Verification on mutating or sensitive routes
+      if (
+        request.method === "POST" ||
+        request.method === "DELETE" ||
+        url.pathname === "/api/test_push" ||
+        url.pathname === "/api/reminders/subscribe" ||
+        url.pathname === "/api/reminders/unsubscribe"
+      ) {
+        const isValid = await verifySignature(request, env);
+        if (!isValid) {
+          return Response.json({ error: "Unauthorized: invalid signature or timestamp" }, { status: 403 });
+        }
+      }
 
       if (url.pathname === "/api/routes") return handleGetRoutes(env);
-      if (url.pathname === "/api/stops" || url.pathname === "/api/stations") return handleGetStations(env);
+      if (url.pathname === "/api/stations") return handleGetStations(env);
       if (url.pathname === "/api/route_nodes") return handleGetRouteNodes(url, env);
       if (url.pathname === "/api/route_stations") return handleGetRouteStations(url, env);
-      if (url.pathname === "/api/vehicles") return handleGetVehicles(url, env);
+
+      // Delegate /api/vehicles to the TransitState Durable Object (Global 10s Single-Writer Floor)
+      if (url.pathname === "/api/vehicles") {
+        const doStub = getTransitDO(env);
+        if (doStub) {
+          return doStub.fetch(request);
+        }
+      }
+
       if (url.pathname === "/api/forecasts" || url.pathname === "/api/station_forecasts") {
         return handleGetStationForecasts(url, env);
       }
@@ -1037,20 +1077,23 @@ export default {
         return Response.json({ publicKey: vapidCfg.publicKey, public_key: vapidCfg.publicKey });
       }
 
-      if (url.pathname === "/api/reminders/subscribe" || (url.pathname === "/api/reminders" && request.method === "POST")) {
-        return handleAddReminder(request, env);
-      }
-      if (url.pathname === "/api/reminders/unsubscribe" || (url.pathname === "/api/reminders" && request.method === "DELETE")) {
-        return handleDeleteReminder(request, env);
-      }
-      if (url.pathname === "/api/reminders" && request.method === "GET") {
-        const list = Array.from(MEMORY_REMINDERS.values());
-        return Response.json({ reminders: list });
+      // Delegate Reminders to the TransitState Durable Object
+      if (
+        url.pathname === "/api/reminders/subscribe" ||
+        url.pathname === "/api/reminders/unsubscribe" ||
+        url.pathname === "/api/reminders"
+      ) {
+        const doStub = getTransitDO(env);
+        if (doStub) {
+          return doStub.fetch(request);
+        }
+        return Response.json({ error: "Durable Object not bound" }, { status: 500 });
       }
 
       if (url.pathname === "/api/test_push" && request.method === "POST") {
         const body = await request.json();
-        const res = await sendWebPush(body.subscription, body.payload || { title: "Тестовое уведомление" }, env);
+        const tag = body.tag || "test_push";
+        const res = await sendWebPush(body.subscription, body.payload || { title: "Тестовое уведомление" }, env, tag);
         return Response.json(res);
       }
 
@@ -1060,11 +1103,10 @@ export default {
       });
     }
 
-    // 2. Map Tiles Handler (Cloudflare R2 / Static Assets)
+    // 2. Map Tiles Handler (Cloudflare R2 / Static Assets with protobuf & gzip encoding)
     if (url.pathname.startsWith("/tiles/")) {
       const tileKey = url.pathname.replace(/^\/tiles\//, "");
 
-      // 1. Check Cloudflare R2 bucket if bound
       if (env.TILES_BUCKET) {
         try {
           const obj = await env.TILES_BUCKET.get(tileKey);
@@ -1079,7 +1121,6 @@ export default {
         } catch (e) {}
       }
 
-      // 2. Fallback to Cloudflare Workers Static Assets
       try {
         const assetRes = await env.ASSETS.fetch(request);
         const contentType = assetRes.headers.get("Content-Type") || "";
@@ -1106,7 +1147,7 @@ export default {
       return new Response("Asset not found", { status: 404 });
     }
 
-    // Force anti-cache for sw.js, index.html and root
+    // Permanent Anti-Cache for shell assets
     if (url.pathname === "/sw.js" || url.pathname === "/" || url.pathname === "/index.html") {
       const newHeaders = new Headers(response.headers);
       newHeaders.set("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0");
