@@ -1216,7 +1216,7 @@ async def get_station_forecasts(sid: str = ""):
                     time_val = 0
                 rid = str(item.get("rid") or "")
                 dest = str(item.get("where") or "")
-                veh_id = str(item.get("vehid") or item.get("vid") or item.get("id") or "")
+                veh_id = str(item.get("obj_id") or item.get("vehid") or item.get("vid") or item.get("id") or "").strip()
                 gos_num = str(item.get("gosNum") or item.get("gos_num") or "")
 
                 # If upstream forecast didn't include gosNum, enrich from vehicle_poller cache

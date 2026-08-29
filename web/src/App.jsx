@@ -1342,11 +1342,11 @@ export default function App() {
         // Must match the specific station (sid)
         if (String(r.sid) !== cleanSid) return false;
 
-        // If both have vehid, match vehid
-        if (cleanVehid && r.vehid) {
-          return String(r.vehid) === cleanVehid;
+        // If specific vehicle ID is known, match vehicle ID
+        if (cleanVehid || r.vehid) {
+          return Boolean(cleanVehid && r.vehid && String(r.vehid) === cleanVehid);
         }
-        // If rid matches
+        // Fallback for route-level reminder without vehicle ID
         if (cleanRid && r.rid) {
           return String(r.rid) === cleanRid;
         }
