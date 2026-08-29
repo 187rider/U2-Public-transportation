@@ -603,11 +603,11 @@ export class TransitState {
       if (!matching && rem.gosNum) {
         matching = forecasts.find((f) => String(f.gos_num || f.gosNum || "").toLowerCase() === rem.gosNum.toLowerCase());
       }
-      // Re-lock fallback: If locked vehicle dropped out of forecast and was not close to arrival, re-lock to nearest live bus on same route
+      // Re-lock fallback: If locked vehicle dropped out of forecast and was not close to arrival (last > 4), re-lock to nearest live bus on same route
       if (!matching) {
         const candidates = forecasts.filter((f) => String(f.rid) === rem.rid);
         if (candidates.length) {
-          if (rem.lastNotifiedTime === null || rem.lastNotifiedTime > 3) {
+          if (rem.lastNotifiedTime === null || rem.lastNotifiedTime > 4) {
             matching = candidates.reduce((min, c) => (parseInt(c.arrt || c.time, 10) < parseInt(min.arrt || min.time, 10) ? c : min), candidates[0]);
             rem.vehid = String(matching.obj_id || matching.vehid || "");
             rem.gosNum = String(matching.gosNum || matching.gos_num || "");
@@ -628,16 +628,16 @@ export class TransitState {
       const sub = rem.subscription;
       const tag = `arrival_${rem.sid}_${rem.rid}`;
 
-      // Vehicle vanished after being close (<= 3 min) -> Arrival event!
+      // Vehicle vanished after being close (<= 4 min) -> Arrival event!
       if (!matching) {
-        if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 3) {
+        if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 4) {
           await sendWebPush(sub, {
             title: `🚌 Маршрут ${rnum} прибыл!`,
             body: `Остановка «${stname}»`,
             tag,
             sid: rem.sid,
             rid: rem.rid
-          }, this.env, tag);
+          }, this.env, tag, true);
           await this.storage.delete(remKey);
           this.reminders.delete(remKey);
         }
@@ -648,15 +648,15 @@ export class TransitState {
       const curTime = Math.ceil(parseInt(rawTime, 10) / 60);
       const last = rem.lastNotifiedTime;
 
-      // Arrival threshold: 0 minutes or departure bounce
-      if (curTime <= 0 || (last !== null && last <= 3 && curTime >= last + 2)) {
+      // Arrival threshold: 0 minutes or departure bounce (time jumped by >= 2 min while close)
+      if (curTime <= 0 || (last !== null && last <= 4 && curTime >= last + 2)) {
         await sendWebPush(sub, {
           title: `🚌 Маршрут ${rnum} прибыл!`,
           body: `Остановка «${stname}»`,
           tag,
           sid: rem.sid,
           rid: rem.rid
-        }, this.env, tag);
+        }, this.env, tag, true);
         await this.storage.delete(remKey);
         this.reminders.delete(remKey);
         continue;
