@@ -654,7 +654,7 @@ async function handleGetVehicleForecasts(url) {
 }
 
 // -------------------------------------------------------------
-// 5. Push Reminders & Background Tracker
+// 5. Push Reminders & Background Tracker (Cloudflare KV & Web Push)
 // -------------------------------------------------------------
 async function handleAddReminder(request, env) {
   const data = await request.json();
@@ -668,7 +668,7 @@ async function handleAddReminder(request, env) {
   const rid = String(data.rid || "");
   const vehid = String(data.vehid || "");
   const gosNum = String(data.gosNum || "");
-  const remKey = `${endpoint}_${sid}_${rid}`;
+  const remKey = `rem_${endpoint}_${sid}_${rid}`;
 
   let initNum = null;
   if (data.initialTime != null) {
@@ -689,26 +689,20 @@ async function handleAddReminder(request, env) {
     createdAt: Date.now()
   };
 
-  if (env.DB) {
-    await env.DB.prepare(
-      `INSERT OR REPLACE INTO push_reminders 
-       (rem_key, subscription_json, sid, station_name, rid, rnum, vehid, gos_num, last_notified_time, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      remKey,
-      JSON.stringify(sub),
-      sid,
-      reminderRecord.stationName,
-      rid,
-      reminderRecord.rnum,
-      vehid,
-      gosNum,
-      initNum,
-      Date.now() / 1000
-    ).run();
+  // 1. Store in Cloudflare KV with 2-hour auto-expiration
+  if (env.REMINDERS_KV) {
+    try {
+      await env.REMINDERS_KV.put(remKey, JSON.stringify(reminderRecord), {
+        expirationTtl: 7200 // 2 hours
+      });
+    } catch (e) {
+      console.warn("KV put error:", e);
+    }
   }
 
+  // 2. Also keep in-memory for immediate ticks
   MEMORY_REMINDERS.set(remKey, reminderRecord);
+
   return Response.json({ success: true, status: "ok", key: remKey });
 }
 
@@ -718,11 +712,18 @@ async function handleDeleteReminder(request, env) {
   const sid = String(data.sid || "");
   const rid = String(data.rid || "");
 
-  if (env.DB && ep) {
-    if (sid && rid) {
-      await env.DB.prepare("DELETE FROM push_reminders WHERE rem_key = ?").bind(`${ep}_${sid}_${rid}`).run();
-    } else {
-      await env.DB.prepare("DELETE FROM push_reminders WHERE rem_key LIKE ?").bind(`${ep}%`).run();
+  if (env.REMINDERS_KV && ep) {
+    try {
+      if (sid && rid) {
+        await env.REMINDERS_KV.delete(`rem_${ep}_${sid}_${rid}`);
+      } else {
+        const list = await env.REMINDERS_KV.list({ prefix: `rem_${ep}` });
+        for (const key of list.keys || []) {
+          await env.REMINDERS_KV.delete(key.name);
+        }
+      }
+    } catch (e) {
+      console.warn("KV delete error:", e);
     }
   }
 
@@ -740,29 +741,26 @@ async function handleDeleteReminder(request, env) {
 async function checkRemindersAndNotify(env) {
   let reminders = [];
 
-  if (env.DB) {
+  // 1. Fetch all active reminders from Cloudflare KV
+  if (env.REMINDERS_KV) {
     try {
-      const { results } = await env.DB.prepare("SELECT * FROM push_reminders").all();
-      for (const r of results || []) {
+      const list = await env.REMINDERS_KV.list({ prefix: "rem_" });
+      for (const key of list.keys || []) {
         try {
-          reminders.push({
-            remKey: r.rem_key,
-            subscription: JSON.parse(r.subscription_json),
-            sid: String(r.sid),
-            stationName: String(r.station_name),
-            rid: String(r.rid),
-            rnum: String(r.rnum),
-            vehid: String(r.vehid || ""),
-            gosNum: String(r.gos_num || ""),
-            lastNotifiedTime: r.last_notified_time,
-            createdAt: r.created_at * 1000
-          });
+          const raw = await env.REMINDERS_KV.get(key.name);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            reminders.push(parsed);
+          }
         } catch (e) {}
       }
     } catch (e) {
-      reminders = Array.from(MEMORY_REMINDERS.values());
+      console.warn("KV list error:", e);
     }
-  } else {
+  }
+
+  // 2. If KV returned nothing or is not bound, check memory
+  if (!reminders.length && MEMORY_REMINDERS.size > 0) {
     reminders = Array.from(MEMORY_REMINDERS.values());
   }
 
@@ -786,8 +784,9 @@ async function checkRemindersAndNotify(env) {
 
   const now = Date.now();
   for (const rem of reminders) {
+    // Evict reminders older than 2 hours
     if (now - rem.createdAt > 7200 * 1000) {
-      if (env.DB) await env.DB.prepare("DELETE FROM push_reminders WHERE rem_key = ?").bind(rem.remKey).run();
+      if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(rem.remKey).catch(() => {});
       MEMORY_REMINDERS.delete(rem.remKey);
       continue;
     }
@@ -809,12 +808,12 @@ async function checkRemindersAndNotify(env) {
       }
     }
 
+    // Auto-lock to vehicle and persist in KV
     if (!rem.vehid && matching && (matching.obj_id || matching.vehid)) {
       rem.vehid = String(matching.obj_id || matching.vehid);
       rem.gosNum = String(matching.gosNum || matching.gos_num || "");
-      if (env.DB) {
-        await env.DB.prepare("UPDATE push_reminders SET vehid = ?, gos_num = ? WHERE rem_key = ?")
-          .bind(rem.vehid, rem.gosNum, rem.remKey).run();
+      if (env.REMINDERS_KV) {
+        await env.REMINDERS_KV.put(rem.remKey, JSON.stringify(rem), { expirationTtl: 7200 }).catch(() => {});
       }
     }
 
@@ -831,7 +830,7 @@ async function checkRemindersAndNotify(env) {
           sid: rem.sid,
           rid: rem.rid
         });
-        if (env.DB) await env.DB.prepare("DELETE FROM push_reminders WHERE rem_key = ?").bind(rem.remKey).run();
+        if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(rem.remKey).catch(() => {});
         MEMORY_REMINDERS.delete(rem.remKey);
       }
       continue;
@@ -849,7 +848,7 @@ async function checkRemindersAndNotify(env) {
         sid: rem.sid,
         rid: rem.rid
       });
-      if (env.DB) await env.DB.prepare("DELETE FROM push_reminders WHERE rem_key = ?").bind(rem.remKey).run();
+      if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(rem.remKey).catch(() => {});
       MEMORY_REMINDERS.delete(rem.remKey);
       continue;
     }
@@ -859,14 +858,14 @@ async function checkRemindersAndNotify(env) {
       shouldFire = true;
     } else if (last === null) {
       rem.lastNotifiedTime = curTime;
-      if (env.DB) await env.DB.prepare("UPDATE push_reminders SET last_notified_time = ? WHERE rem_key = ?").bind(curTime, rem.remKey).run();
+      if (env.REMINDERS_KV) await env.REMINDERS_KV.put(rem.remKey, JSON.stringify(rem), { expirationTtl: 7200 }).catch(() => {});
     } else if (curTime < last) {
       shouldFire = true;
     }
 
     if (shouldFire) {
       rem.lastNotifiedTime = curTime;
-      if (env.DB) await env.DB.prepare("UPDATE push_reminders SET last_notified_time = ? WHERE rem_key = ?").bind(curTime, rem.remKey).run();
+      if (env.REMINDERS_KV) await env.REMINDERS_KV.put(rem.remKey, JSON.stringify(rem), { expirationTtl: 7200 }).catch(() => {});
 
       if (curTime <= 0) {
         await sendWebPush(sub, {
@@ -876,7 +875,7 @@ async function checkRemindersAndNotify(env) {
           sid: rem.sid,
           rid: rem.rid
         });
-        if (env.DB) await env.DB.prepare("DELETE FROM push_reminders WHERE rem_key = ?").bind(rem.remKey).run();
+        if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(rem.remKey).catch(() => {});
         MEMORY_REMINDERS.delete(rem.remKey);
       } else {
         const timeWord = curTime === 1 ? "1 минуту" : curTime < 5 ? `${curTime} минуты` : `${curTime} минут`;
