@@ -4,7 +4,7 @@ export default {
 
     // 1. Proxy /api/* to Transit Backend
     if (url.pathname.startsWith('/api/')) {
-      const backendOrigin = env.BACKEND_URL || 'https://bus.ridertech.online';
+      const backendOrigin = env.BACKEND_URL || 'https://api.ridertech.online';
       const backendUrl = new URL(url.pathname + url.search, backendOrigin);
       const forwardHeaders = new Headers(request.headers);
       forwardHeaders.set('X-Forwarded-Host', url.host);
@@ -21,7 +21,7 @@ export default {
 
     // 2. Proxy /tiles/* to Map Tiles Backend
     if (url.pathname.startsWith('/tiles/')) {
-      const backendOrigin = env.BACKEND_URL || 'https://bus.ridertech.online';
+      const backendOrigin = env.BACKEND_URL || 'https://api.ridertech.online';
       const backendUrl = new URL(url.pathname + url.search, backendOrigin);
       return fetch(new Request(backendUrl.toString(), request));
     }
