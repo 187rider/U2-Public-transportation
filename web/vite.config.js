@@ -20,6 +20,10 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
+    build: {
+      outDir: "../dist",
+      emptyOutDir: true
+    },
     preview: {
       host: "0.0.0.0",
       port: 5173,
