@@ -249,15 +249,29 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig) {
   const audience = `${endpointUrl.protocol}//${endpointUrl.host}`;
   const jwt = await createVapidJwt(audience, vapidConfig.subject, vapidConfig.jwk);
 
+  const headers = {
+    "Content-Type": "application/octet-stream",
+    "Content-Encoding": "aes128gcm",
+    "TTL": "120",
+    "Urgency": "high",
+    "Authorization": `vapid t=${jwt}, k=${vapidConfig.publicKey}`,
+    "Crypto-Key": `p256ecdsa=${vapidConfig.publicKey}`
+  };
+
+  // Google FCM format support
+  if (subscription.endpoint.includes("fcm.googleapis.com")) {
+    headers["Authorization"] = `WebPush ${jwt}`;
+  }
+
+  // Apple APNs format support
+  if (subscription.endpoint.includes("apple.com")) {
+    headers["apns-push-type"] = "alert";
+    headers["apns-priority"] = "10";
+  }
+
   return {
     body,
-    headers: {
-      "Content-Type": "application/octet-stream",
-      "Content-Encoding": "aes128gcm",
-      "TTL": "60",
-      "Urgency": "high",
-      "Authorization": `vapid t=${jwt}, k=${vapidConfig.publicKey}`
-    }
+    headers
   };
 }
 
@@ -272,8 +286,10 @@ async function sendWebPush(subscription, payload) {
       body
     });
 
+    console.log(`WebPush to ${subscription.endpoint.slice(0, 45)}... status: ${res.status}`);
     return { ok: res.ok, status: res.status };
   } catch (err) {
+    console.warn("WebPush send error:", err);
     return { ok: false, error: err.message };
   }
 }
