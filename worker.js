@@ -693,9 +693,9 @@ export class TransitState {
       return Response.json({ ok: true, status: "unsubscribed" });
     }
 
-    // 4. Reminders List
+    // 4. Reminders Stats (Sanitized - Zero Credentials / Zero PII)
     if (url.pathname === "/api/reminders" && request.method === "GET") {
-      return Response.json({ reminders: Array.from(this.reminders.values()) });
+      return Response.json({ active_count: this.reminders.size });
     }
 
     return new Response("Not found in DO", { status: 404 });
@@ -804,15 +804,12 @@ async function handleRemindersFallback(request, env = {}) {
   }
 
   if (url.pathname === "/api/reminders" && request.method === "GET") {
-    const list = [];
+    let count = 0;
     if (env.REMINDERS_KV) {
       const kvList = await env.REMINDERS_KV.list({ prefix: "rem_" });
-      for (const k of kvList.keys || []) {
-        const item = await env.REMINDERS_KV.get(k.name);
-        if (item) list.push(JSON.parse(item));
-      }
+      count = kvList.keys ? kvList.keys.length : 0;
     }
-    return Response.json({ reminders: list });
+    return Response.json({ active_count: count });
   }
 
   return Response.json({ error: "Not found" }, { status: 404 });
@@ -1154,9 +1151,8 @@ export default {
       if (
         request.method === "POST" ||
         request.method === "DELETE" ||
-        url.pathname === "/api/test_push" ||
-        url.pathname === "/api/reminders/subscribe" ||
-        url.pathname === "/api/reminders/unsubscribe"
+        url.pathname.startsWith("/api/reminders") ||
+        url.pathname === "/api/test_push"
       ) {
         const isValid = await verifySignature(request, env);
         if (!isValid) {
