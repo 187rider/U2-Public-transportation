@@ -5000,13 +5000,13 @@ export default function App() {
                             return candidates.length > 0 ? candidates[0] : null;
                           })();
                         })();
-                        const isLiveOnMap = !!live && (Date.now() - (live._lastSeen || 0) < 60000);
-                        const isSelected = selectedVehicle?.id === item.id || (live && selectedVehicle?.id === live.id);
                         const activeReminder = getActiveReminderForVehicle(item, live);
+                        const isLiveOnMap = (!!live && (Date.now() - (live._lastSeen || 0) < 60000)) || !!activeReminder;
+                        const isSelected = selectedVehicle?.id === item.id || (live && selectedVehicle?.id === live.id);
 
                         const vehType = normalizeVehicleType(item.type, item.route);
                         const iconName = vehType === "tram" ? "tram" : (vehType === "minibus" ? "airport_shuttle" : "directions_bus");
-                        const itemNextStation = (isSelected && nextStationInfo?.name) || item.nextStation;
+                        const itemNextStation = (isSelected && nextStationInfo?.name) || item.nextStation || (live && (live.nextStation || live.destination)) || (activeReminder && activeReminder.stationName ? (activeReminder.currentTime != null ? `${activeReminder.stationName} (${activeReminder.currentTime} мин)` : activeReminder.stationName) : '');
                         const isNextStLong = (itemNextStation || "").length > 13;
 
                         const itemProgress = (() => {
@@ -5014,22 +5014,24 @@ export default function App() {
                             return routeProgressPercent;
                           }
                           const target = live || item;
-                          if (!target) return null;
-
-                          // 1. Terminal stop -> 100%
-                          if (itemNextStation?.includes("Конечная") || target.isTerminal) {
-                            return 100;
+                          if (target) {
+                            if (itemNextStation?.includes("Конечная") || target.isTerminal) {
+                              return 100;
+                            }
+                            if (typeof target.progress === "number" && !isNaN(target.progress)) {
+                              return Math.min(100, Math.max(0, Math.round(target.progress)));
+                            }
+                            if (typeof item.progress === "number" && !isNaN(item.progress)) {
+                              return Math.min(100, Math.max(0, Math.round(item.progress)));
+                            }
                           }
-
-                          // 2. Saved progress on item or target
-                          if (typeof target.progress === "number" && !isNaN(target.progress)) {
-                            return Math.min(100, Math.max(0, Math.round(target.progress)));
+                          if (activeReminder) {
+                            const initM = parseInt(activeReminder.initialTime, 10) || 10;
+                            const curM = typeof activeReminder.currentTime === 'number' ? activeReminder.currentTime : (parseInt(activeReminder.lastTime, 10) || initM);
+                            if (initM > 0) {
+                              return Math.min(95, Math.max(10, Math.round(((initM - Math.min(curM, initM)) / initM) * 100)));
+                            }
                           }
-                          if (typeof item.progress === "number" && !isNaN(item.progress)) {
-                            return Math.min(100, Math.max(0, Math.round(item.progress)));
-                          }
-
-                          // 3. Compute from route stations cache using stops passed vs remaining
                           if (itemNextStation) {
                             const cleanNext = normalizeStationCompareName(itemNextStation);
                             const rids = resolveRidsForItem(item, live);
@@ -5048,8 +5050,7 @@ export default function App() {
                               }
                             }
                           }
-
-                          return null;
+                          return activeReminder ? 40 : null;
                         })();
 
                         return (
