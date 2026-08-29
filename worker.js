@@ -25,12 +25,13 @@ function getVapidConfig(env = {}) {
   }
 
   if (!jwk) {
+    const d = env.VAPID_PRIVATE_KEY || "";
     jwk = {
       kty: "EC",
       x: env.VAPID_PUBLIC_X || "hfMOOmwHUy0jDRcpYhkb7m6AzCqqPeWSm3PIUB4xsE8",
       y: env.VAPID_PUBLIC_Y || "kWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE",
       crv: "P-256",
-      d: env.VAPID_PRIVATE_KEY || "REDACTED_VAPID_PRIVATE_KEY"
+      d
     };
   }
 
