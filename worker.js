@@ -16,8 +16,6 @@ function getUpstreamConfig(env = {}) {
   };
 }
 
-const DEFAULT_VAPID_PUBLIC_KEY = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
-
 function parsePemToJwk(pemStr) {
   try {
     const b64 = pemStr.replace(/-----[^\n]+-----/g, "").replace(/\s+/g, "");
@@ -48,7 +46,7 @@ function parsePemToJwk(pemStr) {
       }
     }
 
-    if (d) {
+    if (d && x && y) {
       return { kty: "EC", crv: "P-256", x, y, d, publicKey: pub };
     }
   } catch (e) {}
@@ -57,10 +55,10 @@ function parsePemToJwk(pemStr) {
 
 function getVapidConfig(env = {}) {
   const subject = env.VAPID_SUBJECT || "mailto:support@ridertech.online";
-  let publicKey = env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
+  const rawKey = (env.VAPID_JWK_JSON || env.VAPID_PRIVATE_KEY || "").trim();
 
   let jwk = null;
-  const rawKey = (env.VAPID_JWK_JSON || env.VAPID_PRIVATE_KEY || "").trim();
+  let publicKey = env.VAPID_PUBLIC_KEY || "";
 
   if (rawKey.startsWith("{")) {
     try {
@@ -70,31 +68,26 @@ function getVapidConfig(env = {}) {
     const parsed = parsePemToJwk(rawKey);
     if (parsed) {
       jwk = { kty: "EC", crv: "P-256", x: parsed.x, y: parsed.y, d: parsed.d };
-      if (parsed.publicKey && !env.VAPID_PUBLIC_KEY) {
+      if (parsed.publicKey && !publicKey) {
         publicKey = parsed.publicKey;
       }
     }
   }
 
-  if (!jwk && rawKey) {
-    const d = rawKey.replace(/-----[^\n]+-----/g, "").replace(/\s+/g, "");
-    jwk = {
-      kty: "EC",
-      x: env.VAPID_PUBLIC_X || "hfMOOmwHUy0jDRcpYhkb7m6AzCqqPeWSm3PIUB4xsE8",
-      y: env.VAPID_PUBLIC_Y || "kWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE",
-      crv: "P-256",
-      d
-    };
+  // Fail closed if missing or invalid key pair (Zero hardcoded x/y mixups)
+  if (!jwk || !jwk.d || !jwk.x || !jwk.y) {
+    throw new Error("Invalid or missing VAPID key pair. Set VAPID_PRIVATE_KEY (PEM) or VAPID_JWK_JSON (JSON) in Worker secrets.");
   }
 
-  if (!jwk || !jwk.d) {
-    throw new Error("VAPID private key is missing. Set VAPID_PRIVATE_KEY in Worker secrets.");
-  }
-
-  // Auto-fill x and y from DEFAULT_VAPID_PUBLIC_KEY if omitted
-  if (!jwk.x || !jwk.y) {
-    jwk.x = env.VAPID_PUBLIC_X || "hfMOOmwHUy0jDRcpYhkb7m6AzCqqPeWSm3PIUB4xsE8";
-    jwk.y = env.VAPID_PUBLIC_Y || "kWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
+  // Derive uncompressed public key if not explicitly set
+  if (!publicKey) {
+    const xBytes = base64UrlToUint8Array(jwk.x);
+    const yBytes = base64UrlToUint8Array(jwk.y);
+    const fullPub = new Uint8Array(1 + xBytes.length + yBytes.length);
+    fullPub[0] = 0x04;
+    fullPub.set(xBytes, 1);
+    fullPub.set(yBytes, 1 + xBytes.length);
+    publicKey = uint8ArrayToBase64Url(fullPub);
   }
 
   return { subject, publicKey, jwk };
@@ -777,73 +770,6 @@ function getTransitDO(env) {
   return env.TRANSIT_STATE.get(id);
 }
 
-let EDGE_VEHICLE_POLL_TIME = 0;
-let EDGE_VEHICLE_SNAPSHOT = null;
-let EDGE_VEHICLE_FETCH_PROMISE = null;
-
-async function handleGetVehicles(url, env = {}) {
-  const requestedRids = url.searchParams.get("rids") || "";
-  const curk = url.searchParams.get("curk") || "0";
-  const now = Date.now();
-
-  if (EDGE_VEHICLE_SNAPSHOT && now - EDGE_VEHICLE_POLL_TIME < 8000) {
-    return filterAndReturnVehicles(EDGE_VEHICLE_SNAPSHOT, requestedRids, curk);
-  }
-
-  if (!EDGE_VEHICLE_FETCH_PROMISE) {
-    EDGE_VEHICLE_FETCH_PROMISE = (async () => {
-      try {
-        const cfg = getUpstreamConfig(env);
-        if (!cfg.url) return;
-
-        let rids = requestedRids;
-        if (!rids) {
-          let routes = getFromCache("all_routes_raw", 3600);
-          if (!routes) {
-            const h = await getBus62Headers(env);
-            const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, {
-              headers: h,
-              signal: AbortSignal.timeout(4000)
-            });
-            if (r.ok) {
-              routes = await r.json();
-              setInCache("all_routes_raw", routes);
-            }
-          }
-          if (Array.isArray(routes) && routes.length) {
-            rids = routes.map((rt) => rt.id).filter(Boolean).slice(0, 50).join(",");
-          }
-        }
-
-        const headers = await getBus62Headers(env);
-        const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}&rids=${rids}`;
-        const res = await fetch(apiUrl, {
-          headers,
-          signal: AbortSignal.timeout(6000)
-        });
-        if (res.ok) {
-          const items = await res.json();
-          if (Array.isArray(items) && items.length > 0) {
-            EDGE_VEHICLE_SNAPSHOT = items;
-            EDGE_VEHICLE_POLL_TIME = Date.now();
-          }
-        }
-      } catch (e) {
-      } finally {
-        EDGE_VEHICLE_FETCH_PROMISE = null;
-      }
-    })();
-  }
-
-  await EDGE_VEHICLE_FETCH_PROMISE;
-
-  if (EDGE_VEHICLE_SNAPSHOT) {
-    return filterAndReturnVehicles(EDGE_VEHICLE_SNAPSHOT, requestedRids, curk);
-  }
-
-  return Response.json({ vehicles: [], next_curk: curk });
-}
-
 // -------------------------------------------------------------
 // 7. Edge API Endpoints (Cached in Worker isolates)
 // -------------------------------------------------------------
@@ -1199,11 +1125,10 @@ export default {
         const doStub = getTransitDO(env);
         if (doStub) {
           try {
-            const res = await doStub.fetch(request);
-            if (res.status === 200) return res;
+            return await doStub.fetch(request);
           } catch (e) {}
         }
-        return handleGetVehicles(url, env);
+        return Response.json({ error: "Service temporarily unavailable" }, { status: 503 });
       }
 
       if (url.pathname === "/api/forecasts" || url.pathname === "/api/station_forecasts") {
@@ -1212,8 +1137,12 @@ export default {
       if (url.pathname === "/api/vehicle_forecasts") return handleGetVehicleForecasts(url, env);
 
       if (url.pathname === "/api/vapid_public_key" || url.pathname === "/api/vapid-public-key") {
-        const vapidCfg = getVapidConfig(env);
-        return Response.json({ publicKey: vapidCfg.publicKey, public_key: vapidCfg.publicKey });
+        try {
+          const vapidCfg = getVapidConfig(env);
+          return Response.json({ publicKey: vapidCfg.publicKey, public_key: vapidCfg.publicKey });
+        } catch (e) {
+          return Response.json({ error: "VAPID service unavailable: " + e.message }, { status: 503 });
+        }
       }
 
       // Delegate Reminders strictly to the TransitState Durable Object (Single Source of Truth)
