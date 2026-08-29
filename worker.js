@@ -725,6 +725,73 @@ function getTransitDO(env) {
   return env.TRANSIT_STATE.get(id);
 }
 
+let EDGE_VEHICLE_POLL_TIME = 0;
+let EDGE_VEHICLE_SNAPSHOT = null;
+let EDGE_VEHICLE_FETCH_PROMISE = null;
+
+async function handleGetVehicles(url, env = {}) {
+  const requestedRids = url.searchParams.get("rids") || "";
+  const curk = url.searchParams.get("curk") || "0";
+  const now = Date.now();
+
+  if (EDGE_VEHICLE_SNAPSHOT && now - EDGE_VEHICLE_POLL_TIME < 8000) {
+    return filterAndReturnVehicles(EDGE_VEHICLE_SNAPSHOT, requestedRids, curk);
+  }
+
+  if (!EDGE_VEHICLE_FETCH_PROMISE) {
+    EDGE_VEHICLE_FETCH_PROMISE = (async () => {
+      try {
+        const cfg = getUpstreamConfig(env);
+        if (!cfg.url) return;
+
+        let rids = requestedRids;
+        if (!rids) {
+          let routes = getFromCache("all_routes_raw", 3600);
+          if (!routes) {
+            const h = await getBus62Headers(env);
+            const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, {
+              headers: h,
+              signal: AbortSignal.timeout(4000)
+            });
+            if (r.ok) {
+              routes = await r.json();
+              setInCache("all_routes_raw", routes);
+            }
+          }
+          if (Array.isArray(routes) && routes.length) {
+            rids = routes.map((rt) => rt.id).filter(Boolean).slice(0, 50).join(",");
+          }
+        }
+
+        const headers = await getBus62Headers(env);
+        const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}&rids=${rids}`;
+        const res = await fetch(apiUrl, {
+          headers,
+          signal: AbortSignal.timeout(6000)
+        });
+        if (res.ok) {
+          const items = await res.json();
+          if (Array.isArray(items) && items.length > 0) {
+            EDGE_VEHICLE_SNAPSHOT = items;
+            EDGE_VEHICLE_POLL_TIME = Date.now();
+          }
+        }
+      } catch (e) {
+      } finally {
+        EDGE_VEHICLE_FETCH_PROMISE = null;
+      }
+    })();
+  }
+
+  await EDGE_VEHICLE_FETCH_PROMISE;
+
+  if (EDGE_VEHICLE_SNAPSHOT) {
+    return filterAndReturnVehicles(EDGE_VEHICLE_SNAPSHOT, requestedRids, curk);
+  }
+
+  return Response.json({ vehicles: [], next_curk: curk });
+}
+
 // -------------------------------------------------------------
 // 7. Edge API Endpoints (Cached in Worker isolates)
 // -------------------------------------------------------------
@@ -1080,10 +1147,11 @@ export default {
         const doStub = getTransitDO(env);
         if (doStub) {
           try {
-            return await doStub.fetch(request);
+            const res = await doStub.fetch(request);
+            if (res.status === 200) return res;
           } catch (e) {}
         }
-        return Response.json({ error: "Service temporarily unavailable" }, { status: 503 });
+        return handleGetVehicles(url, env);
       }
 
       if (url.pathname === "/api/forecasts" || url.pathname === "/api/station_forecasts") {
