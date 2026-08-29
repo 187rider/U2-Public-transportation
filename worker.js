@@ -325,7 +325,7 @@ async function sendWebPush(subscription, payload, env = {}) {
 // 4. API Endpoints Implementation
 // -------------------------------------------------------------
 async function handleGetRoutes(env = {}) {
-  const cached = getFromCache("all_routes_grouped", 3600);
+  const cached = getFromCache("routes_grouped_v3", 3600);
   if (cached) return Response.json(cached);
 
   const cfg = getUpstreamConfig(env);
@@ -397,12 +397,12 @@ async function handleGetRoutes(env = {}) {
   });
 
   const result = { count: formattedRoutes.length, routes: formattedRoutes };
-  setInCache("all_routes_grouped", result);
+  setInCache("routes_grouped_v3", result);
   return Response.json(result);
 }
 
 async function handleGetStations(env = {}) {
-  const cached = getFromCache("all_stations_geojson", 3600);
+  const cached = getFromCache("stations_geojson_v3", 3600);
   if (cached) return Response.json(cached);
 
   const cfg = getUpstreamConfig(env);
@@ -449,7 +449,7 @@ async function handleGetStations(env = {}) {
   }
 
   const result = { type: "FeatureCollection", features };
-  setInCache("all_stations_geojson", result);
+  setInCache("stations_geojson_v3", result);
   return Response.json(result);
 }
 
