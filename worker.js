@@ -1175,7 +1175,8 @@ export default {
         const doStub = getTransitDO(env);
         if (doStub) {
           try {
-            return await doStub.fetch(request);
+            const res = await doStub.fetch(request);
+            if (res.status === 200) return res;
           } catch (e) {}
         }
         return handleGetVehicles(url, env);
@@ -1200,7 +1201,8 @@ export default {
         const doStub = getTransitDO(env);
         if (doStub) {
           try {
-            return await doStub.fetch(request);
+            const res = await doStub.fetch(request);
+            if (res.status === 200) return res;
           } catch (e) {}
         }
         return handleRemindersFallback(request, env);
