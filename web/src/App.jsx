@@ -1801,13 +1801,32 @@ export default function App() {
       }
 
       const nowTime = Date.now();
-      const liveItems = (vehicleHistoryRef.current || []).filter(item => {
-        if (!item || !item.id) return false;
-        // Dedup: skip actively selected vehicle because it has its own dedicated forecast loop
-        if (item.id === selectedVehicleRef.current?.id) return false;
-        const live = knownVehiclesRef.current[item.id];
-        return !!live && (nowTime - (live._lastSeen || 0) < 60000);
-      });
+      const liveItems = (vehicleHistoryRef.current || []).map(item => {
+        if (!item || !item.id) return null;
+        if (item.id === selectedVehicleRef.current?.id) return null;
+        const itemPlate = formatGosNum(item.gosNum).toLowerCase();
+        const itemRoute = String(item.route || '').trim().toLowerCase();
+
+        let live = (item.id && !String(item.id).includes('_') && knownVehiclesRef.current[item.id]) || null;
+        if (!live) {
+          live = Object.values(knownVehiclesRef.current).find(v => {
+            const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+            if (itemRoute && vRoute && itemRoute !== vRoute) return false;
+            if (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) return true;
+            if (item.id && !String(item.id).includes('_') && v.id && String(v.id) === String(item.id)) return true;
+            return false;
+          }) || Object.values(knownVehiclesRef.current).find(v => {
+            const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+            return itemRoute && vRoute && itemRoute === vRoute;
+          }) || null;
+        }
+
+        const isLive = !!live && (nowTime - (live._lastSeen || 0) < 60000);
+        const queryVehId = (live && live.id && !String(live.id).includes('_')) ? live.id : (!String(item.id).includes('_') ? item.id : null);
+        if (!queryVehId && !isLive) return null;
+
+        return { item, live, queryVehId };
+      }).filter(Boolean);
 
       if (liveItems.length === 0) {
         if (isPollingActive) pollTimer = setTimeout(pollHistoryForecasts, 10000);
@@ -1816,56 +1835,57 @@ export default function App() {
 
       const updates = {};
       await Promise.all(
-        liveItems.map(async (item) => {
+        liveItems.map(async ({ item, live, queryVehId }) => {
           try {
-            const res = await apiFetch(`/api/vehicle_forecasts?vehid=${encodeURIComponent(item.id)}`);
-            const data = await res.json();
-            if (!isPollingActive) return;
+            if (queryVehId) {
+              const res = await apiFetch(`/api/vehicle_forecasts?vehid=${encodeURIComponent(queryVehId)}`);
+              const data = await res.json();
+              if (!isPollingActive) return;
 
-            if (data.forecasts && data.forecasts.length > 0) {
-              const unique = [];
-              const seen = new Set();
-              data.forecasts.forEach(f => {
-                if (!seen.has(f.stid)) {
-                  seen.add(f.stid);
-                  unique.push(f);
-                }
-              });
-              unique.sort((a, b) => (parseInt(a.time, 10) || 0) - (parseInt(b.time, 10) || 0));
+              if (data.forecasts && data.forecasts.length > 0) {
+                const unique = [];
+                const seen = new Set();
+                data.forecasts.forEach(f => {
+                  if (!seen.has(f.stid)) {
+                    seen.add(f.stid);
+                    unique.push(f);
+                  }
+                });
+                unique.sort((a, b) => (parseInt(a.time, 10) || 0) - (parseInt(b.time, 10) || 0));
 
-              if (unique.length > 0) {
-                const nextF = unique[0];
-                const st = stationsByIdRef.current.get(nextF.stid);
-                if (st?.properties?.name) {
-                  const u = {
-                    nextStation: st.properties.name,
-                    stid: String(nextF.stid),
-                    isTerminal: false
-                  };
-                  const rids = resolveRidsForItem(item, knownVehiclesRef.current[item.id]);
-                  for (const rid of rids) {
-                    const sIds = routeStationsCacheRef.current[rid];
-                    if (Array.isArray(sIds) && sIds.length > 1) {
-                      const idx = sIds.indexOf(String(nextF.stid));
-                      if (idx !== -1) {
-                        u.progress = Math.min(100, Math.max(0, Math.round((idx / (sIds.length - 1)) * 100)));
-                        break;
+                if (unique.length > 0) {
+                  const nextF = unique[0];
+                  const st = stationsByIdRef.current.get(nextF.stid);
+                  if (st?.properties?.name) {
+                    const u = {
+                      nextStation: st.properties.name,
+                      stid: String(nextF.stid),
+                      isTerminal: false
+                    };
+                    const rids = resolveRidsForItem(item, live);
+                    for (const rid of rids) {
+                      const sIds = routeStationsCacheRef.current[rid];
+                      if (Array.isArray(sIds) && sIds.length > 1) {
+                        const idx = sIds.indexOf(String(nextF.stid));
+                        if (idx !== -1) {
+                          u.progress = Math.min(100, Math.max(0, Math.round((idx / (sIds.length - 1)) * 100)));
+                          break;
+                        }
                       }
                     }
+                    updates[item.id] = u;
                   }
-                  updates[item.id] = u;
                 }
-              }
-            } else {
-              // Empty forecasts: only mark terminal if vehicle is actually near terminal stop
-              const liveVeh = knownVehiclesRef.current[item.id];
-              if (liveVeh && isNearTerminalStopRef.current && isNearTerminalStopRef.current(liveVeh)) {
-                updates[item.id] = {
-                  nextStation: "Конечная (ожидает)",
-                  stid: null,
-                  isTerminal: true,
-                  progress: 100
-                };
+              } else {
+                // Empty forecasts: only mark terminal if vehicle is actually near terminal stop
+                if (live && isNearTerminalStopRef.current && isNearTerminalStopRef.current(live)) {
+                  updates[item.id] = {
+                    nextStation: "Конечная (ожидает)",
+                    stid: null,
+                    isTerminal: true,
+                    progress: 100
+                  };
+                }
               }
             }
           } catch { }
