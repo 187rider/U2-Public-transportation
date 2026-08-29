@@ -4,12 +4,16 @@
  */
 
 // -------------------------------------------------------------
-// 1. Constants & Dynamic VAPID Configuration
+// 1. Upstream Transit & Dynamic VAPID Configuration
 // -------------------------------------------------------------
-const BUS62_URL = "https://api9.bus62.ru";
-const BUS62_CITY = "ulanude";
-const BUS62_KEY = "maps.bus62.ru:80";
-const BUS62_IV = "Content-MD5-Hash";
+function getUpstreamConfig(env = {}) {
+  return {
+    url: env.BUS62_URL || env.UPSTREAM_URL || "",
+    city: env.BUS62_CITY || env.UPSTREAM_CITY || "ulanude",
+    key: env.BUS62_KEY || env.UPSTREAM_KEY || "",
+    iv: env.BUS62_IV || env.UPSTREAM_IV || ""
+  };
+}
 
 const DEFAULT_VAPID_PUBLIC_KEY = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
 
@@ -57,9 +61,12 @@ function setInCache(key, val) {
 const MEMORY_REMINDERS = new Map();
 
 // -------------------------------------------------------------
-// 2. Bus62 API AES-128-CBC Header Generator
+// 2. Native AES-128-CBC Decryption & Hash Generator
 // -------------------------------------------------------------
-async function generateBus62Hash() {
+async function generateBus62Hash(env = {}) {
+  const cfg = getUpstreamConfig(env);
+  if (!cfg.key || !cfg.iv) return "";
+
   const d = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   const s = pad(d.getUTCSeconds());
@@ -73,14 +80,14 @@ async function generateBus62Hash() {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
-    enc.encode(BUS62_KEY),
+    enc.encode(cfg.key),
     { name: "AES-CBC" },
     false,
     ["encrypt"]
   );
 
   const encrypted = await crypto.subtle.encrypt(
-    { name: "AES-CBC", iv: enc.encode(BUS62_IV) },
+    { name: "AES-CBC", iv: enc.encode(cfg.iv) },
     key,
     enc.encode(str)
   );
@@ -90,15 +97,19 @@ async function generateBus62Hash() {
     .join("");
 }
 
-async function getBus62Headers() {
-  const hash = await generateBus62Hash();
-  return {
-    "Content-MD5-Hash": hash,
+async function getBus62Headers(env = {}) {
+  const hash = await generateBus62Hash(env);
+  const cfg = getUpstreamConfig(env);
+  const headers = {
     "User-Agent": "ios_BE690AAB-3365-4C72-9975-C71A288BF57E_f3d999a6",
     "Accept": "*/*",
     "Accept-Language": "ru",
     "Accept-Encoding": "gzip, deflate"
   };
+  if (cfg.iv && hash) {
+    headers[cfg.iv] = hash;
+  }
+  return headers;
 }
 
 // -------------------------------------------------------------
@@ -313,12 +324,15 @@ async function sendWebPush(subscription, payload, env = {}) {
 // -------------------------------------------------------------
 // 4. API Endpoints Implementation
 // -------------------------------------------------------------
-async function handleGetRoutes() {
+async function handleGetRoutes(env = {}) {
   const cached = getFromCache("all_routes_grouped", 3600);
   if (cached) return Response.json(cached);
 
-  const headers = await getBus62Headers();
-  const res = await fetch(`${BUS62_URL}/getAllRoutes.php?city=${BUS62_CITY}`, { headers });
+  const cfg = getUpstreamConfig(env);
+  if (!cfg.url) return Response.json({ count: 0, routes: [] });
+
+  const headers = await getBus62Headers(env);
+  const res = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, { headers });
   if (!res.ok) return new Response("Failed to fetch routes", { status: 502 });
 
   const rawRoutes = await res.json();
@@ -361,35 +375,29 @@ async function handleGetRoutes() {
 
     routesByNum.get(key).subroutes.push({
       id: rtId,
+      number: num,
+      name,
+      type: rtType,
       from_station: fromSt,
       to_station: toSt
     });
   }
 
-  const formattedRoutes = Array.from(routesByNum.values()).map((r) => ({
-    ...r,
-    id: r.id.join(",")
-  }));
-
-  formattedRoutes.sort((a, b) => {
-    const typeOrder = { bus: 0, tram: 1, minibus: 2 };
-    if (typeOrder[a.type] !== typeOrder[b.type]) return typeOrder[a.type] - typeOrder[b.type];
-    const numA = parseInt(a.number, 10), numB = parseInt(b.number, 10);
-    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-    return a.number.localeCompare(b.number);
-  });
-
-  const result = { count: formattedRoutes.length, routes: formattedRoutes };
+  const routes = Array.from(routesByNum.values());
+  const result = { count: routes.length, routes };
   setInCache("all_routes_grouped", result);
   return Response.json(result);
 }
 
-async function handleGetStations() {
+async function handleGetStations(env = {}) {
   const cached = getFromCache("all_stations_geojson", 3600);
   if (cached) return Response.json(cached);
 
-  const headers = await getBus62Headers();
-  const res = await fetch(`${BUS62_URL}/getAllStations.php?city=${BUS62_CITY}`, { headers });
+  const cfg = getUpstreamConfig(env);
+  if (!cfg.url) return Response.json({ type: "FeatureCollection", features: [] });
+
+  const headers = await getBus62Headers(env);
+  const res = await fetch(`${cfg.url}/getAllStations.php?city=${cfg.city}`, { headers });
   if (!res.ok) return new Response("Failed to fetch stations", { status: 502 });
 
   const rawStations = await res.json();
@@ -397,11 +405,11 @@ async function handleGetStations() {
 
   const features = [];
   for (const station of rawStations) {
-    const stType = String(station.type) === "0" ? "bus" : "tram";
-    const stName = String(station.name || "").trim();
     const stId = String(station.id || "");
-    const isWarm = String(station.is_warm || "0");
-    const description = String(station.description || "").trim();
+    const stName = String(station.name || "").trim();
+    const stType = String(station.type || "bus");
+    const isWarm = Boolean(station.is_warm || station.warm || false);
+    const description = String(station.descr || station.description || "").trim();
 
     const l0 = parseFloat(station.lon0 || 0) / 1000000.0;
     const a0 = parseFloat(station.lat0 || 0) / 1000000.0;
@@ -433,7 +441,7 @@ async function handleGetStations() {
   return Response.json(result);
 }
 
-async function handleGetRouteNodes(url) {
+async function handleGetRouteNodes(url, env = {}) {
   const id = url.searchParams.get("id") || "";
   if (!id) return Response.json({ nodes: [] });
 
@@ -441,8 +449,11 @@ async function handleGetRouteNodes(url) {
   const cached = getFromCache(cacheKey, 3600);
   if (cached) return Response.json(cached);
 
-  const headers = await getBus62Headers();
-  const res = await fetch(`${BUS62_URL}/getRouteNodes.php?id=${id}&city=${BUS62_CITY}`, { headers });
+  const cfg = getUpstreamConfig(env);
+  if (!cfg.url) return Response.json({ nodes: [] });
+
+  const headers = await getBus62Headers(env);
+  const res = await fetch(`${cfg.url}/getRouteNodes.php?id=${id}&city=${cfg.city}`, { headers });
   if (!res.ok) return Response.json({ nodes: [] });
 
   const data = await res.json();
@@ -462,7 +473,7 @@ async function handleGetRouteNodes(url) {
   return Response.json(result);
 }
 
-async function handleGetRouteStations(url) {
+async function handleGetRouteStations(url, env = {}) {
   const id = url.searchParams.get("id") || "";
   if (!id) return Response.json({ stations: [] });
 
@@ -470,8 +481,11 @@ async function handleGetRouteStations(url) {
   const cached = getFromCache(cacheKey, 3600);
   if (cached) return Response.json(cached);
 
-  const headers = await getBus62Headers();
-  const res = await fetch(`${BUS62_URL}/getRouteStations.php?id=${id}&city=${BUS62_CITY}`, { headers });
+  const cfg = getUpstreamConfig(env);
+  if (!cfg.url) return Response.json({ stations: [] });
+
+  const headers = await getBus62Headers(env);
+  const res = await fetch(`${cfg.url}/getRouteStations.php?id=${id}&city=${cfg.city}`, { headers });
   if (!res.ok) return Response.json({ stations: [] });
 
   const data = await res.json();
@@ -558,7 +572,7 @@ function filterAndReturnVehicles(items, requestedRids, curk) {
   });
 }
 
-async function handleGetVehicles(url) {
+async function handleGetVehicles(url, env = {}) {
   const requestedRids = url.searchParams.get("rids") || "";
   const curk = url.searchParams.get("curk") || "0";
   const now = Date.now();
@@ -568,15 +582,18 @@ async function handleGetVehicles(url) {
     return filterAndReturnVehicles(LAST_VEHICLE_SNAPSHOT, requestedRids, curk);
   }
 
-  // 2. Coalesce concurrent in-flight requests (prevent dogpiling to api9.bus62.ru)
+  // 2. Coalesce concurrent in-flight requests (prevent dogpiling to upstream)
   if (!VEHICLE_FETCH_PROMISE) {
     VEHICLE_FETCH_PROMISE = (async () => {
       try {
+        const cfg = getUpstreamConfig(env);
+        if (!cfg.url) return;
+
         let rids = "";
         let routes = getFromCache("all_routes_raw", 3600);
         if (!routes) {
-          const h = await getBus62Headers();
-          const r = await fetch(`${BUS62_URL}/getAllRoutes.php?city=${BUS62_CITY}`, { headers: h });
+          const h = await getBus62Headers(env);
+          const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, { headers: h });
           if (r.ok) {
             routes = await r.json();
             setInCache("all_routes_raw", routes);
@@ -586,8 +603,8 @@ async function handleGetVehicles(url) {
           rids = routes.map((rt) => rt.id).filter(Boolean).join(",");
         }
 
-        const headers = await getBus62Headers();
-        const apiUrl = `${BUS62_URL}/getVehicleAnimations.php?curk=0&city=${BUS62_CITY}&rids=${rids}`;
+        const headers = await getBus62Headers(env);
+        const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}&rids=${rids}`;
         const res = await fetch(apiUrl, { headers });
         if (res.ok) {
           const items = await res.json();
@@ -612,7 +629,7 @@ async function handleGetVehicles(url) {
   return Response.json({ vehicles: [], next_curk: curk });
 }
 
-async function handleGetStationForecasts(url) {
+async function handleGetStationForecasts(url, env = {}) {
   const sid = url.searchParams.get("sid") || "";
   if (!sid) return Response.json({ forecasts: [], sid: "" });
 
@@ -620,8 +637,11 @@ async function handleGetStationForecasts(url) {
   const cached = getFromCache(cacheKey, 8); // 8-second cache
   if (cached) return Response.json(cached);
 
-  const headers = await getBus62Headers();
-  const res = await fetch(`${BUS62_URL}/getStationForecasts.php?sid=${sid}&city=${BUS62_CITY}`, { headers });
+  const cfg = getUpstreamConfig(env);
+  if (!cfg.url) return Response.json({ forecasts: [], sid });
+
+  const headers = await getBus62Headers(env);
+  const res = await fetch(`${cfg.url}/getStationForecasts.php?sid=${sid}&city=${cfg.city}`, { headers });
   if (!res.ok) return Response.json({ forecasts: [], sid });
 
   const data = await res.json();
@@ -652,7 +672,7 @@ async function handleGetStationForecasts(url) {
   return Response.json(result);
 }
 
-async function handleGetVehicleForecasts(url) {
+async function handleGetVehicleForecasts(url, env = {}) {
   const vehid = url.searchParams.get("vehid") || "";
   if (!vehid) return Response.json({ forecasts: [], vehid: "" });
 
@@ -660,8 +680,11 @@ async function handleGetVehicleForecasts(url) {
   const cached = getFromCache(cacheKey, 8); // 8-second cache
   if (cached) return Response.json(cached);
 
-  const headers = await getBus62Headers();
-  const res = await fetch(`${BUS62_URL}/getVehicleForecasts.php?vehid=${vehid}&city=${BUS62_CITY}`, { headers });
+  const cfg = getUpstreamConfig(env);
+  if (!cfg.url) return Response.json({ forecasts: [], vehid });
+
+  const headers = await getBus62Headers(env);
+  const res = await fetch(`${cfg.url}/getVehicleForecasts.php?vehid=${vehid}&city=${cfg.city}`, { headers });
   if (!res.ok) return Response.json({ forecasts: [], vehid });
 
   const data = await res.json();
@@ -809,19 +832,22 @@ async function checkRemindersAndNotify(env) {
 
   const distinctSids = Array.from(new Set(reminders.map((r) => r.sid).filter(Boolean)));
   const stationForecastsMap = new Map();
+  const cfg = getUpstreamConfig(env);
 
-  await Promise.all(
-    distinctSids.map(async (sid) => {
-      try {
-        const headers = await getBus62Headers();
-        const res = await fetch(`${BUS62_URL}/getStationForecasts.php?sid=${sid}&city=${BUS62_CITY}`, { headers });
-        if (res.ok) {
-          const json = await res.json();
-          stationForecastsMap.set(sid, Array.isArray(json) ? json : json.forecasts || []);
-        }
-      } catch (e) {}
-    })
-  );
+  if (cfg.url) {
+    await Promise.all(
+      distinctSids.map(async (sid) => {
+        try {
+          const headers = await getBus62Headers(env);
+          const res = await fetch(`${cfg.url}/getStationForecasts.php?sid=${sid}&city=${cfg.city}`, { headers });
+          if (res.ok) {
+            const json = await res.json();
+            stationForecastsMap.set(sid, Array.isArray(json) ? json : json.forecasts || []);
+          }
+        } catch (e) {}
+      })
+    );
+  }
 
   for (const rem of reminders) {
     // Evict reminders older than 2 hours
@@ -947,15 +973,15 @@ export default {
     if (url.pathname.startsWith("/api/")) {
       ctx.waitUntil(checkRemindersAndNotify(env));
 
-      if (url.pathname === "/api/routes") return handleGetRoutes();
-      if (url.pathname === "/api/stops" || url.pathname === "/api/stations") return handleGetStations();
-      if (url.pathname === "/api/route_nodes") return handleGetRouteNodes(url);
-      if (url.pathname === "/api/route_stations") return handleGetRouteStations(url);
-      if (url.pathname === "/api/vehicles") return handleGetVehicles(url);
+      if (url.pathname === "/api/routes") return handleGetRoutes(env);
+      if (url.pathname === "/api/stops" || url.pathname === "/api/stations") return handleGetStations(env);
+      if (url.pathname === "/api/route_nodes") return handleGetRouteNodes(url, env);
+      if (url.pathname === "/api/route_stations") return handleGetRouteStations(url, env);
+      if (url.pathname === "/api/vehicles") return handleGetVehicles(url, env);
       if (url.pathname === "/api/forecasts" || url.pathname === "/api/station_forecasts") {
-        return handleGetStationForecasts(url);
+        return handleGetStationForecasts(url, env);
       }
-      if (url.pathname === "/api/vehicle_forecasts") return handleGetVehicleForecasts(url);
+      if (url.pathname === "/api/vehicle_forecasts") return handleGetVehicleForecasts(url, env);
 
       if (url.pathname === "/api/vapid_public_key" || url.pathname === "/api/vapid-public-key") {
         const vapidCfg = getVapidConfig(env);
