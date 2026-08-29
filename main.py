@@ -490,6 +490,19 @@ class PushReminderManager:
         except Exception as e:
             logger.error("Failed to remove reminders by endpoint: %s", e)
 
+    def bind_vehicle(self, rem_key: str, vehid: str, gos_num: str = ""):
+        if not rem_key or not vehid:
+            return
+        try:
+            with get_reminders_db() as conn:
+                conn.execute(
+                    "UPDATE push_reminders SET vehid = ?, gos_num = ? WHERE rem_key = ?",
+                    (str(vehid), str(gos_num), rem_key)
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error("Failed to bind vehicle in DB: %s", e)
+
     def update_last_notified(self, rem_key: str, last_time: int):
         try:
             with get_reminders_db() as conn:
@@ -632,6 +645,14 @@ class PushReminderManager:
                         candidate_fcs = [f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids]
                         if candidate_fcs:
                             matching_fc = min(candidate_fcs, key=lambda x: int(x.get("time", 999)) if str(x.get("time", "")).isdigit() else 999)
+
+                    # Auto-lock to this specific physical vehicle so subsequent ticks stick to it
+                    if not rem_vehid and matching_fc and matching_fc.get("vehid"):
+                        rem_vehid = str(matching_fc.get("vehid", "")).strip()
+                        rem["vehid"] = rem_vehid
+                        if not rem.get("gosNum") and matching_fc.get("gosNum"):
+                            rem["gosNum"] = str(matching_fc.get("gosNum", "")).strip()
+                        self.bind_vehicle(rem_key, rem_vehid, rem.get("gosNum", ""))
 
                     rnum = rem.get("rnum", "")
                     gos_num = rem.get("gosNum", "")
