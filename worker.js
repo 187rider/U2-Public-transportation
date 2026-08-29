@@ -105,15 +105,6 @@ function parsePemToJwk(pemStr, publicKeyStr = "") {
   return null;
 }
 
-const VPS_VAPID_JWK = {
-  kty: "EC",
-  crv: "P-256",
-  x: "hfMOOmwHUy0jDRcpYhkb7m6AzCqqPeWSm3PIUB4xsE8",
-  y: "kWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE",
-  d: "A9BYjsebNnRzQNgYLKEQLZCiKAxn_DT1m41xnSMsQuM"
-};
-const VPS_VAPID_PUBLIC_KEY = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
-
 function getVapidConfig(env = {}) {
   const subject = env.VAPID_SUBJECT || "mailto:support@ridertech.online";
   const rawKey = (
@@ -140,12 +131,9 @@ function getVapidConfig(env = {}) {
     }
   }
 
-  // Fall back to exact VPS keypair if environment secrets not explicitly configured
+  // Strict Fail-Closed: Never embed private keys in source code
   if (!jwk || !jwk.d || !jwk.x || !jwk.y) {
-    jwk = VPS_VAPID_JWK;
-    if (!publicKey) {
-      publicKey = VPS_VAPID_PUBLIC_KEY;
-    }
+    throw new Error("Invalid or missing VAPID key pair. Set VAPID_PRIVATE_KEY (PEM) or VAPID_JWK_JSON (JSON) in Cloudflare Secrets.");
   }
 
   // Derive uncompressed public key if not explicitly set
