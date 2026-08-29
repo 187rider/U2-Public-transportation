@@ -791,7 +791,7 @@ export class TransitState {
       return Response.json({ ok: true, status: "subscribed", key: remKey });
     }
 
-    // 3. Reminders Unsubscribe (Cleans exact match or all reminders for subscription endpoint)
+    // 3. Reminders Unsubscribe (Strict endpoint ownership: only deletes reminders belonging to the requesting subscription)
     if (url.pathname === "/api/reminders/unsubscribe" || (url.pathname === "/api/reminders" && request.method === "DELETE")) {
       const data = await request.json();
       const sub = data.subscription;
@@ -803,7 +803,7 @@ export class TransitState {
         const keysToDelete = [];
         for (const [key, rem] of this.reminders.entries()) {
           const remEndpoint = rem.subscription && rem.subscription.endpoint ? String(rem.subscription.endpoint).trim() : "";
-          const matchEndpoint = remEndpoint === endpoint || remEndpoint.slice(-32) === endpoint.slice(-32);
+          const matchEndpoint = remEndpoint === endpoint;
           const matchSid = !sid || rem.sid === sid;
           const matchRid = !rid || rem.rid === rid;
 
@@ -825,14 +825,7 @@ export class TransitState {
       return Response.json({ active_count: this.reminders.size });
     }
 
-    // 5. Reminders Reset / Purge (HMAC Authenticated admin/client purge)
-    if (url.pathname === "/api/reminders/reset" && request.method === "POST") {
-      this.reminders.clear();
-      await this.storage.deleteAll();
-      return Response.json({ ok: true, cleared: true, active_count: 0 });
-    }
-
-    // 6. Cron Trigger Backstop & Alarm Resuscitation
+    // 5. Cron Trigger Backstop & Alarm Resuscitation
     if (url.pathname === "/api/reminders/check") {
       await this.checkRemindersAndNotify();
       if (this.reminders.size > 0 && (await this.storage.getAlarm()) === null) {
