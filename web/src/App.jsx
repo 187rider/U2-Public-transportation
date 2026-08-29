@@ -1004,10 +1004,11 @@ export default function App() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
+                subscription: sub.toJSON ? sub.toJSON() : sub,
                 endpoint: sub.endpoint,
-                sid: String(sid),
-                rid: String(rid),
-                vehid: String(vehid)
+                sid: String(sid || ""),
+                rid: String(rid || ""),
+                vehid: String(vehid || "")
               })
             }).catch(() => {});
           }

@@ -803,9 +803,9 @@ export class TransitState {
     // 3. Reminders Unsubscribe (Strict endpoint ownership: only deletes reminders belonging to the requesting subscription)
     if (url.pathname === "/api/reminders/unsubscribe" || (url.pathname === "/api/reminders" && request.method === "DELETE")) {
       const data = await request.json();
-      const sub = data.subscription;
-      if (sub && sub.endpoint) {
-        const endpoint = String(sub.endpoint).trim();
+      const rawEndpoint = (data.subscription && data.subscription.endpoint) || data.endpoint;
+      if (rawEndpoint) {
+        const endpoint = String(rawEndpoint).trim();
         const sid = data.sid ? String(data.sid) : null;
         const rid = data.rid ? String(data.rid) : null;
 
