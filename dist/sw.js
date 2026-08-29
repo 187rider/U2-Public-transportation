@@ -190,11 +190,14 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: body,
-    tag: tag,
+    tag: tag || 'bus-arrival',
     renotify: true,
+    requireInteraction: true,
+    silent: false,
+    timestamp: Date.now(),
     icon: '/icon-512.png',
     badge: '/apple-touch-icon.png',
-    vibrate: isArrival ? [400, 200, 400, 200, 600] : [250, 100, 250],
+    vibrate: isArrival ? [500, 200, 500, 200, 800] : [300, 150, 300],
     data: {
       url: url || '/',
       sid: sid || '',
@@ -203,16 +206,13 @@ self.addEventListener('push', (event) => {
     }
   };
 
-  if (isArrival) {
-    options.requireInteraction = true;
-  }
-
   event.waitUntil(
     self.registration.showNotification(title, options).catch((err) => {
       console.warn('showNotification options error, falling back to minimal:', err);
       return self.registration.showNotification(title, {
         body: body,
-        icon: '/icon-512.png'
+        icon: '/icon-512.png',
+        requireInteraction: true
       });
     })
   );
