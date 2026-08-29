@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v82';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v83';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -170,7 +170,7 @@ self.addEventListener('push', (event) => {
   if (event.data) {
     try {
       const data = event.data.json();
-      if (data) {
+      if (data && typeof data === 'object') {
         if (data.title) title = String(data.title);
         if (data.body) body = String(data.body);
         if (data.tag) tag = String(data.tag);
@@ -187,22 +187,34 @@ self.addEventListener('push', (event) => {
   }
 
   const isArrival = title.includes('прибыл') || body.includes('прибыл');
-  const activeTag = `${tag}_${Date.now()}`;
 
   const options = {
     body: body,
-    tag: activeTag,
-    icon: '/apple-touch-icon.png',
-    badge: '/apple-touch-icon.png',
+    tag: tag,
     renotify: true,
-    requireInteraction: isArrival,
-    sound: isArrival ? '/arrival-chaching.wav' : undefined,
-    vibrate: isArrival ? [400, 150, 400, 150, 600] : [250, 100, 250],
-    data: { url: url, sid: sid, rid: rid, date: Date.now() }
+    icon: '/icon-512.png',
+    badge: '/apple-touch-icon.png',
+    vibrate: isArrival ? [400, 200, 400, 200, 600] : [250, 100, 250],
+    data: {
+      url: url || '/',
+      sid: sid || '',
+      rid: rid || '',
+      date: Date.now()
+    }
   };
 
+  if (isArrival) {
+    options.requireInteraction = true;
+  }
+
   event.waitUntil(
-    self.registration.showNotification(title, options)
+    self.registration.showNotification(title, options).catch((err) => {
+      console.warn('showNotification options error, falling back to minimal:', err);
+      return self.registration.showNotification(title, {
+        body: body,
+        icon: '/icon-512.png'
+      });
+    })
   );
 });
 
