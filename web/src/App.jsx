@@ -4,7 +4,7 @@ import { Map as MapLibreMap, NavigationControl, GeolocateControl, Popup, Marker 
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./App.css";
 
-const API_SECRET = import.meta.env.VITE_API_SECRET || "";
+const API_SECRET = import.meta.env.VITE_API_SECRET || "REDACTED_SECRET";
 let rawBase = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 if (typeof window !== "undefined" && window.location.protocol === "https:" && rawBase.startsWith("http://")) {
   rawBase = "";

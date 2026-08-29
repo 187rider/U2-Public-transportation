@@ -9,6 +9,9 @@ export default {
       const forwardHeaders = new Headers(request.headers);
       forwardHeaders.set('X-Forwarded-Host', url.host);
       forwardHeaders.set('X-Forwarded-Proto', url.protocol.replace(':', ''));
+      if (!forwardHeaders.get('User-Agent')) {
+        forwardHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36');
+      }
 
       const newRequest = new Request(backendUrl.toString(), {
         method: request.method,
