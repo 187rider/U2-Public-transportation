@@ -358,7 +358,9 @@ DB_REMINDERS_FILE = os.getenv("DB_REMINDERS_FILE", "reminders.db")
 
 
 def get_reminders_db():
-    conn = sqlite3.connect(DB_REMINDERS_FILE)
+    conn = sqlite3.connect(DB_REMINDERS_FILE, timeout=10.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS push_reminders (
             rem_key TEXT PRIMARY KEY,
@@ -478,6 +480,16 @@ class PushReminderManager:
         except Exception as e:
             logger.error("Failed to remove reminder from DB: %s", e)
 
+    def remove_by_endpoint(self, endpoint: str):
+        if not endpoint:
+            return
+        try:
+            with get_reminders_db() as conn:
+                conn.execute("DELETE FROM push_reminders WHERE rem_key LIKE ?", (f"{endpoint}%",))
+                conn.commit()
+        except Exception as e:
+            logger.error("Failed to remove reminders by endpoint: %s", e)
+
     def update_last_notified(self, rem_key: str, last_time: int):
         try:
             with get_reminders_db() as conn:
@@ -496,11 +508,11 @@ class PushReminderManager:
             "rid": str(rid),
             "url": f"/?sid={sid}" if sid else "/"
         }
+        endpoint = sub.get("endpoint", "")
         try:
-            from pywebpush import webpush
+            from pywebpush import webpush, WebPushException
             from urllib.parse import urlparse
 
-            endpoint = sub.get("endpoint", "")
             parsed_url = urlparse(endpoint)
             aud = f"{parsed_url.scheme}://{parsed_url.netloc}"
             fresh_claims = {
@@ -542,6 +554,14 @@ class PushReminderManager:
             logger.info("Sent background WebPush (HTTP %s): %s - %s to %s", status, title, body, aud)
             return True
         except Exception as e:
+            # Auto-prune dead/revoked subscriptions (410 Gone / 404 Not Found)
+            from pywebpush import WebPushException
+            if isinstance(e, WebPushException) and getattr(e, "response", None) is not None:
+                status_code = getattr(e.response, "status_code", None)
+                if status_code in (404, 410):
+                    logger.info("Pruning dead/revoked WebPush subscription (HTTP %s): %s", status_code, endpoint[:60])
+                    self.remove_by_endpoint(endpoint)
+                    return False
             logger.warning("WebPush send error (%s): %s", type(e).__name__, e)
             return False
 
@@ -609,7 +629,9 @@ class PushReminderManager:
                         g_clean = str(rem.get("gosNum", "")).strip().lower()
                         matching_fc = next((f for f in forecasts if str(f.get("gosNum", "")).strip().lower() == g_clean), None)
                     if not matching_fc:
-                        matching_fc = next((f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids), None)
+                        candidate_fcs = [f for f in forecasts if str(f.get("rid", "")).strip() in rem_rids]
+                        if candidate_fcs:
+                            matching_fc = min(candidate_fcs, key=lambda x: int(x.get("time", 999)) if str(x.get("time", "")).isdigit() else 999)
 
                     rnum = rem.get("rnum", "")
                     gos_num = rem.get("gosNum", "")
