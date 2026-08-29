@@ -327,7 +327,7 @@ async function hkdfExpand(prk, info, length) {
   return new Uint8Array(hash).slice(0, length);
 }
 
-async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag = "bus-arrival") {
+async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag = "bus-arrival", isUrgent = true) {
   const userPublicKeyBytes = base64UrlToUint8Array(subscription.keys.p256dh);
   const userAuthBytes = base64UrlToUint8Array(subscription.keys.auth);
 
