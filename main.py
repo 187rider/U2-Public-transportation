@@ -801,19 +801,23 @@ async def get_stations():
     if cached:
         return cached
 
+    fallback = load_local_fallback("stations.json")
+    if fallback:
+        set_in_cache("stations", fallback, CACHE_TTL_STATIC)
+        return fallback
+
     raw_stations = None
-    candidate_urls = list(dict.fromkeys([
+    candidate_urls = [
         STATIONS_API_URL,
-        "https://api9.bus62.ru/getAllStations.php",
-        "http://bus62.ru/getAllStations.php"
-    ]))
+        "https://api9.bus62.ru/getAllStations.php"
+    ]
     for url in candidate_urls:
         try:
             r = await async_client.get(
                 url, 
                 params={"city": BUS62_CITY}, 
                 headers=get_headers(), 
-                timeout=12
+                timeout=8
             )
             r.raise_for_status()
             parsed = r.json()
@@ -824,11 +828,6 @@ async def get_stations():
             logger.warning("Upstream stations fetch failed from %s: %s", url, e)
 
     if not raw_stations:
-        fallback = load_local_fallback("stations.json")
-        if fallback:
-            logger.info("Serving local fallback snapshot for stations")
-            set_in_cache("stations", fallback, CACHE_TTL_STATIC)
-            return fallback
         raise HTTPException(status_code=502, detail="Upstream transit API unavailable")
 
     features = []
@@ -851,7 +850,8 @@ async def get_stations():
         elif l1 != 0 and a1 != 0:
             coords = [l1, a1]
 
-        if coords:
+        # Ensure coordinates are in Buryatia/Ulan-Ude (lat ~51.8, lng ~107.6)
+        if coords and (50.0 < coords[1] < 55.0) and (100.0 < coords[0] < 115.0):
             features.append({
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": coords},
@@ -868,12 +868,13 @@ async def get_stations():
         "type": "FeatureCollection",
         "features": features
     }
-    # Persist updated snapshot for future offline/fallback usage
-    try:
-        with open("stations.json", "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False)
-    except Exception as e:
-        logger.warning("Failed to persist stations.json snapshot: %s", e)
+    # Only persist if authentic Ulan-Ude stations were received
+    if len(features) > 100:
+        try:
+            with open("stations.json", "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning("Failed to persist stations.json snapshot: %s", e)
 
     set_in_cache("stations", result, CACHE_TTL_STATIC)
     return result
@@ -885,19 +886,23 @@ async def get_routes():
     if cached:
         return cached
 
+    fallback = load_local_fallback("routes.json")
+    if fallback:
+        set_in_cache("routes", fallback, CACHE_TTL_STATIC)
+        return fallback
+
     raw_routes = None
-    candidate_urls = list(dict.fromkeys([
+    candidate_urls = [
         ROUTES_API_URL,
-        "https://api9.bus62.ru/getAllRoutes.php",
-        "http://bus62.ru/getAllRoutes.php"
-    ]))
+        "https://api9.bus62.ru/getAllRoutes.php"
+    ]
     for url in candidate_urls:
         try:
             r = await async_client.get(
                 url, 
                 params={"city": BUS62_CITY}, 
                 headers=get_headers(), 
-                timeout=12
+                timeout=8
             )
             r.raise_for_status()
             parsed = r.json()
@@ -908,11 +913,6 @@ async def get_routes():
             logger.warning("Routes fetch failed from %s: %s", url, e)
 
     if not raw_routes:
-        fallback = load_local_fallback("routes.json")
-        if fallback:
-            logger.info("Serving local fallback snapshot for routes")
-            set_in_cache("routes", fallback, CACHE_TTL_STATIC)
-            return fallback
         raise HTTPException(status_code=502, detail="Upstream transit API unavailable")
 
     routes_by_num = {}
@@ -962,26 +962,24 @@ async def get_routes():
     for route_item in formatted_routes:
         route_item["id"] = ",".join(str(i) for i in route_item["id"])
 
-    def sort_key(item):
-        num = item["number"]
-        return (item["type"], int(num) if num.isdigit() else 999, num)
-
-    formatted_routes.sort(key=sort_key)
+    formatted_routes.sort(key=lambda r: (
+        0 if r["type"] == "bus" else (1 if r["type"] == "tram" else 2),
+        int(r["number"]) if r["number"].isdigit() else 999,
+        r["number"]
+    ))
 
     result = {
         "count": len(formatted_routes),
         "routes": formatted_routes
     }
-    # Persist updated snapshot for future offline/fallback usage
-    try:
-        with open("routes.json", "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False)
-    except Exception as e:
-        logger.warning("Failed to persist routes.json snapshot: %s", e)
+    if len(formatted_routes) > 20:
+        try:
+            with open("routes.json", "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning("Failed to persist routes.json snapshot: %s", e)
 
     set_in_cache("routes", result, CACHE_TTL_STATIC)
-    return result
-
 
 @app.get("/api/vehicles", dependencies=[Depends(verify_signature)])
 async def get_vehicles(rids: str = "", curk: str = "0"):
