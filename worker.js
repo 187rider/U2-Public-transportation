@@ -738,7 +738,16 @@ async function handleDeleteReminder(request, env) {
   return Response.json({ success: true, status: "ok" });
 }
 
+let LAST_REMINDER_CHECK_TIME = 0;
+
 async function checkRemindersAndNotify(env) {
+  const now = Date.now();
+  // Global 10-second cooldown: never check upstream more than once per 10 seconds
+  if (now - LAST_REMINDER_CHECK_TIME < 10000) {
+    return;
+  }
+  LAST_REMINDER_CHECK_TIME = now;
+
   let reminders = [];
 
   // 1. Fetch all active reminders from Cloudflare KV
