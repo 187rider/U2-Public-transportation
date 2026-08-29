@@ -18,10 +18,15 @@ function getUpstreamConfig(env = {}) {
 
 function parsePemToJwk(pemStr) {
   try {
-    const b64 = pemStr.replace(/-----[^\n]+-----/g, "").replace(/\s+/g, "");
-    const raw = atob(b64);
-    const der = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) der[i] = raw.charCodeAt(i);
+    const cleanStr = pemStr.replace(/\\n/g, "\n").trim();
+    if (cleanStr.startsWith("{")) {
+      return JSON.parse(cleanStr);
+    }
+
+    const b64 = cleanStr.replace(/-----[^\n]+-----/g, "").replace(/\s+/g, "");
+    const rawStr = atob(b64);
+    const der = new Uint8Array(rawStr.length);
+    for (let i = 0; i < rawStr.length; i++) der[i] = rawStr.charCodeAt(i);
 
     const toB64Url = (buf) => {
       let bin = "";
@@ -30,6 +35,8 @@ function parsePemToJwk(pemStr) {
     };
 
     let d = null, x = null, y = null, pub = null;
+
+    // 1. Search for private scalar d (0x04 0x20 [32 bytes])
     for (let i = 0; i < der.length - 34; i++) {
       if (der[i] === 0x04 && der[i + 1] === 0x20) {
         d = toB64Url(der.subarray(i + 2, i + 34));
@@ -37,12 +44,25 @@ function parsePemToJwk(pemStr) {
       }
     }
 
+    // 2. Search for uncompressed public point in SEC1 bitstring (0x03 0x42 0x00 0x04 [64 bytes])
     for (let i = 0; i < der.length - 66; i++) {
       if (der[i] === 0x03 && der[i + 1] === 0x42 && der[i + 2] === 0x00 && der[i + 3] === 0x04) {
         pub = toB64Url(der.subarray(i + 3, i + 68));
         x = toB64Url(der.subarray(i + 4, i + 36));
         y = toB64Url(der.subarray(i + 36, i + 68));
         break;
+      }
+    }
+
+    // 3. Fallback search for OCTET STRING public point (0x04 0x41 0x04 [64 bytes])
+    if (!x || !y) {
+      for (let i = 0; i < der.length - 66; i++) {
+        if (der[i] === 0x04 && (der[i + 1] === 0x41 || der[i + 1] === 0x42) && der[i + 2] === 0x04) {
+          pub = toB64Url(der.subarray(i + 2, i + 67));
+          x = toB64Url(der.subarray(i + 3, i + 35));
+          y = toB64Url(der.subarray(i + 35, i + 67));
+          break;
+        }
       }
     }
 
@@ -60,11 +80,7 @@ function getVapidConfig(env = {}) {
   let jwk = null;
   let publicKey = env.VAPID_PUBLIC_KEY || "";
 
-  if (rawKey.startsWith("{")) {
-    try {
-      jwk = JSON.parse(rawKey);
-    } catch (e) {}
-  } else if (rawKey.includes("-----BEGIN")) {
+  if (rawKey) {
     const parsed = parsePemToJwk(rawKey);
     if (parsed) {
       jwk = { kty: "EC", crv: "P-256", x: parsed.x, y: parsed.y, d: parsed.d };
