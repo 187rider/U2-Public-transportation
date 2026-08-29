@@ -791,7 +791,6 @@ async function checkRemindersAndNotify(env) {
     })
   );
 
-  const now = Date.now();
   for (const rem of reminders) {
     // Evict reminders older than 2 hours
     if (now - rem.createdAt > 7200 * 1000) {
