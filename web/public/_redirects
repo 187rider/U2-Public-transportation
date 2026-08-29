@@ -1,3 +1,0 @@
-/api/* http://localhost:8000/api/:splat 200
-/tiles/* http://localhost:8000/tiles/:splat 200
-/* /index.html 200
