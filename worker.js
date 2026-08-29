@@ -603,14 +603,20 @@ export class TransitState {
       if (!matching && rem.gosNum) {
         matching = forecasts.find((f) => String(f.gos_num || f.gosNum || "").toLowerCase() === rem.gosNum.toLowerCase());
       }
-      if (!matching && !rem.vehid && !rem.gosNum) {
+      // Re-lock fallback: If locked vehicle dropped out of forecast and was not close to arrival, re-lock to nearest live bus on same route
+      if (!matching) {
         const candidates = forecasts.filter((f) => String(f.rid) === rem.rid);
         if (candidates.length) {
-          matching = candidates.reduce((min, c) => (parseInt(c.arrt || c.time, 10) < parseInt(min.arrt || min.time, 10) ? c : min), candidates[0]);
+          if (rem.lastNotifiedTime === null || rem.lastNotifiedTime > 3) {
+            matching = candidates.reduce((min, c) => (parseInt(c.arrt || c.time, 10) < parseInt(min.arrt || min.time, 10) ? c : min), candidates[0]);
+            rem.vehid = String(matching.obj_id || matching.vehid || "");
+            rem.gosNum = String(matching.gosNum || matching.gos_num || "");
+            await this.storage.put(remKey, rem);
+          }
         }
       }
 
-      // Auto-lock to specific vehicle
+      // Auto-lock to specific vehicle on initial registration
       if (!rem.vehid && matching && (matching.obj_id || matching.vehid)) {
         rem.vehid = String(matching.obj_id || matching.vehid);
         rem.gosNum = String(matching.gosNum || matching.gos_num || "");

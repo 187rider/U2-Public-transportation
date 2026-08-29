@@ -1194,7 +1194,7 @@ export default function App() {
         try {
           const reg = await navigator.serviceWorker.ready;
           if (reg && reg.pushManager) {
-            let vapidKey = "BIXzDjpsB1MtIw0XKWIZG-5ugMwqqj3lkptzyFAeMbBPkWuaMc4H9AKy0AxUHCejIXmPskURHUbYKJsA-DaG1uE";
+            let vapidKey = "";
             try {
               const kRes = await apiFetch('/api/vapid_public_key');
               if (kRes.ok) {
@@ -1203,7 +1203,19 @@ export default function App() {
                   vapidKey = kData.publicKey || kData.public_key;
                 }
               }
-            } catch {}
+            } catch (e) {
+              console.warn("Failed to fetch VAPID key:", e);
+            }
+
+            if (!vapidKey) {
+              console.warn("VAPID key fetch failed — postponing subscribe");
+              setAlertToast({
+                title: "⚠️ Сервис уведомлений недоступен",
+                body: "Не удалось получить ключ сервера. Попробуйте позже."
+              });
+              setTimeout(() => setAlertToast(null), 5000);
+              return;
+            }
 
             const padding = '='.repeat((4 - (vapidKey.length % 4)) % 4);
             const base64 = (vapidKey + padding).replace(/-/g, '+').replace(/_/g, '/');
