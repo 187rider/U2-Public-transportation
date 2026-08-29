@@ -10,11 +10,5 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
-  },
-  "kv_namespaces": [
-    {
-      "binding": "REMINDERS_KV",
-      "id": "REMINDERS_KV"
-    }
-  ]
+  }
 }

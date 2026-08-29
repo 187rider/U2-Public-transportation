@@ -1086,26 +1086,30 @@ async function handleGetVehicleForecasts(url, env = {}) {
   }
 }
 
-let LAST_KV_CHECK_TIME = 0;
+const MEM_REMINDERS = new Map();
+let LAST_REMINDERS_CHECK_TIME = 0;
 
 async function checkRemindersAndNotifyKV(env = {}) {
-  if (!env.REMINDERS_KV) return;
   const now = Date.now();
-  if (now - LAST_KV_CHECK_TIME < 12000) return;
-  LAST_KV_CHECK_TIME = now;
+  if (now - LAST_REMINDERS_CHECK_TIME < 10000) return;
+  LAST_REMINDERS_CHECK_TIME = now;
 
   try {
-    const listRes = await env.REMINDERS_KV.list({ prefix: "rem_" });
-    if (!listRes.keys || listRes.keys.length === 0) return;
-
-    const reminders = [];
-    for (const k of listRes.keys) {
-      const raw = await env.REMINDERS_KV.get(k.name);
-      if (raw) {
-        try {
-          reminders.push(JSON.parse(raw));
-        } catch (e) {}
-      }
+    const reminders = Array.from(MEM_REMINDERS.values());
+    if (env.REMINDERS_KV) {
+      try {
+        const listRes = await env.REMINDERS_KV.list({ prefix: "rem_" });
+        for (const k of listRes.keys || []) {
+          const raw = await env.REMINDERS_KV.get(k.name);
+          if (raw) {
+            const obj = JSON.parse(raw);
+            if (!MEM_REMINDERS.has(obj.remKey)) {
+              reminders.push(obj);
+              MEM_REMINDERS.set(obj.remKey, obj);
+            }
+          }
+        }
+      } catch (e) {}
     }
 
     if (reminders.length === 0) return;
@@ -1135,7 +1139,8 @@ async function checkRemindersAndNotifyKV(env = {}) {
     for (const rem of reminders) {
       const remKey = rem.remKey;
       if (now - rem.createdAt > 7200 * 1000) {
-        await env.REMINDERS_KV.delete(remKey);
+        MEM_REMINDERS.delete(remKey);
+        if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(remKey).catch(() => {});
         continue;
       }
 
@@ -1159,7 +1164,8 @@ async function checkRemindersAndNotifyKV(env = {}) {
       if (!rem.vehid && matching && (matching.obj_id || matching.vehid)) {
         rem.vehid = String(matching.obj_id || matching.vehid);
         rem.gosNum = String(matching.gosNum || matching.gos_num || "");
-        await env.REMINDERS_KV.put(remKey, JSON.stringify(rem), { expirationTtl: 7200 });
+        MEM_REMINDERS.set(remKey, rem);
+        if (env.REMINDERS_KV) await env.REMINDERS_KV.put(remKey, JSON.stringify(rem), { expirationTtl: 7200 }).catch(() => {});
       }
 
       const rnum = rem.rnum;
@@ -1176,7 +1182,8 @@ async function checkRemindersAndNotifyKV(env = {}) {
             sid: rem.sid,
             rid: rem.rid
           }, env, tag);
-          await env.REMINDERS_KV.delete(remKey);
+          MEM_REMINDERS.delete(remKey);
+          if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(remKey).catch(() => {});
         }
         continue;
       }
@@ -1193,7 +1200,8 @@ async function checkRemindersAndNotifyKV(env = {}) {
           sid: rem.sid,
           rid: rem.rid
         }, env, tag);
-        await env.REMINDERS_KV.delete(remKey);
+        MEM_REMINDERS.delete(remKey);
+        if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(remKey).catch(() => {});
         continue;
       }
 
@@ -1210,7 +1218,8 @@ async function checkRemindersAndNotifyKV(env = {}) {
 
       if (shouldFire) {
         rem.lastNotifiedTime = curTime;
-        await env.REMINDERS_KV.put(remKey, JSON.stringify(rem), { expirationTtl: 7200 });
+        MEM_REMINDERS.set(remKey, rem);
+        if (env.REMINDERS_KV) await env.REMINDERS_KV.put(remKey, JSON.stringify(rem), { expirationTtl: 7200 }).catch(() => {});
 
         const timeWord = curTime === 1 ? "1 минуту" : curTime < 5 ? `${curTime} минуты` : `${curTime} минут`;
         const res = await sendWebPush(sub, {
@@ -1223,7 +1232,8 @@ async function checkRemindersAndNotifyKV(env = {}) {
         }, env, tag);
 
         if (!res.ok && [403, 404, 410].includes(res.status)) {
-          await env.REMINDERS_KV.delete(remKey);
+          MEM_REMINDERS.delete(remKey);
+          if (env.REMINDERS_KV) await env.REMINDERS_KV.delete(remKey).catch(() => {});
         }
       }
     }
@@ -1251,8 +1261,11 @@ async function handleRemindersKV(request, env = {}) {
       createdAt: Date.now(),
       lastNotifiedTime: null
     };
+    MEM_REMINDERS.set(remKey, remObj);
     if (env.REMINDERS_KV) {
-      await env.REMINDERS_KV.put(remKey, JSON.stringify(remObj), { expirationTtl: 7200 });
+      try {
+        await env.REMINDERS_KV.put(remKey, JSON.stringify(remObj), { expirationTtl: 7200 });
+      } catch (e) {}
     }
     return Response.json({ ok: true, status: "subscribed", key: remKey });
   }
@@ -1260,18 +1273,25 @@ async function handleRemindersKV(request, env = {}) {
   if (url.pathname === "/api/reminders/unsubscribe" || (url.pathname === "/api/reminders" && request.method === "DELETE")) {
     const data = await request.json();
     const sub = data.subscription;
-    if (sub && sub.endpoint && data.sid && data.rid && env.REMINDERS_KV) {
+    if (sub && sub.endpoint && data.sid && data.rid) {
       const remKey = `rem_${data.sid}_${data.rid}_${encodeURIComponent(sub.endpoint.slice(-16))}`;
-      await env.REMINDERS_KV.delete(remKey);
+      MEM_REMINDERS.delete(remKey);
+      if (env.REMINDERS_KV) {
+        try {
+          await env.REMINDERS_KV.delete(remKey);
+        } catch (e) {}
+      }
     }
     return Response.json({ ok: true, status: "unsubscribed" });
   }
 
   if (url.pathname === "/api/reminders" && request.method === "GET") {
-    let count = 0;
+    let count = MEM_REMINDERS.size;
     if (env.REMINDERS_KV) {
-      const kvList = await env.REMINDERS_KV.list({ prefix: "rem_" });
-      count = kvList.keys ? kvList.keys.length : 0;
+      try {
+        const kvList = await env.REMINDERS_KV.list({ prefix: "rem_" });
+        count = kvList.keys ? kvList.keys.length : count;
+      } catch (e) {}
     }
     return Response.json({ active_count: count });
   }
