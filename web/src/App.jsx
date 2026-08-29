@@ -2107,6 +2107,7 @@ export default function App() {
 
     const vId = String(item.id || (live && live.id) || "").trim();
     const vPlate = formatGosNum(item.gosNum || (live && live.gosNum) || "").toLowerCase().trim();
+    const vRoute = String(item.route || (live && (live.route || live.rnum)) || "").trim().toLowerCase();
 
     return activeRems.find(r => {
       // 1. Exact Reminder ID match
@@ -2115,6 +2116,8 @@ export default function App() {
       if (r.vehid && vId && String(r.vehid).trim() === vId) return true;
       // 3. Exact License Plate / Board Number match
       if (r.gosNum && vPlate && formatGosNum(r.gosNum).toLowerCase().trim() === vPlate) return true;
+      // 4. Match by route number if route matches
+      if (r.rnum && vRoute && String(r.rnum).trim().toLowerCase() === vRoute) return true;
       return false;
     }) || null;
   }, [reminders]);
@@ -4975,43 +4978,20 @@ export default function App() {
                       {sortedVehicleHistory.map((item) => {
                         const itemPlate = formatGosNum(item.gosNum).toLowerCase();
                         const itemRoute = String(item.route || '').trim().toLowerCase();
-                        const live = (() => {
-                          if (item.id && !String(item.id).includes('_') && knownVehiclesRef.current[item.id]) {
-                            const directVeh = knownVehiclesRef.current[item.id];
-                            const dRoute = String(directVeh.route || directVeh.rnum || '').trim().toLowerCase();
-                            if (!itemRoute || dRoute === itemRoute) {
-                              return directVeh;
-                            }
-                          }
-                          return Object.values(knownVehiclesRef.current).find(v => {
-                            const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
-                            if (itemRoute && vRoute && itemRoute !== vRoute) return false;
-                            if (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) return true;
-                            if (item.id && !String(item.id).includes('_') && v.id && String(v.id) === String(item.id)) return true;
-                            return false;
-                          }) || (() => {
-                            if (!itemRoute && !item.rid) return null;
-                            const candidates = Object.values(knownVehiclesRef.current).filter(v => {
-                              const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
-                              if (itemRoute && vRoute && itemRoute === vRoute) return true;
-                              if (item.rid && v.rid && String(item.rid) === String(v.rid)) return true;
-                              return false;
-                            });
-                            return candidates.length > 0 ? candidates[0] : null;
-                          })();
-                        })();
-                        const activeReminder = getActiveReminderForVehicle(item, live);
-                        const isLiveOnMap = (!!live && (Date.now() - (live._lastSeen || 0) < 60000)) || !!activeReminder;
-                        const isSelected = selectedVehicle?.id === item.id || (live && selectedVehicle?.id === live.id);
-
-                        const vehType = normalizeVehicleType(item.type, item.route);
-                        const iconName = vehType === "tram" ? "tram" : (vehType === "minibus" ? "airport_shuttle" : "directions_bus");
-                        const itemNextStation = (isSelected && nextStationInfo?.name) || item.nextStation || (live && (live.nextStation || live.destination)) || (activeReminder && activeReminder.stationName ? (activeReminder.currentTime != null ? `${activeReminder.stationName} (${activeReminder.currentTime} мин)` : activeReminder.stationName) : '');
+                                              const itemNextStation = (isSelected && nextStationInfo?.name) || (activeReminder && activeReminder.stationName ? (activeReminder.currentTime != null ? `${activeReminder.stationName} (${activeReminder.currentTime} мин)` : (activeReminder.lastTime ? `${activeReminder.stationName} (${activeReminder.lastTime} мин)` : activeReminder.stationName)) : '') || item.nextStation || (live && (live.nextStation || live.destination)) || '';
                         const isNextStLong = (itemNextStation || "").length > 13;
 
                         const itemProgress = (() => {
                           if (isSelected && typeof routeProgressPercent === "number") {
                             return routeProgressPercent;
+                          }
+                          if (activeReminder) {
+                            const initM = parseInt(activeReminder.initialTime, 10) || 10;
+                            const curM = typeof activeReminder.currentTime === 'number' ? activeReminder.currentTime : (parseInt(activeReminder.lastTime || activeReminder.lastNotifiedTime, 10) || initM);
+                            if (initM > 0) {
+                              return Math.min(95, Math.max(10, Math.round(((initM - Math.min(curM, initM)) / initM) * 100)));
+                            }
+                            return 35;
                           }
                           const target = live || item;
                           if (target) {
@@ -5023,13 +5003,6 @@ export default function App() {
                             }
                             if (typeof item.progress === "number" && !isNaN(item.progress)) {
                               return Math.min(100, Math.max(0, Math.round(item.progress)));
-                            }
-                          }
-                          if (activeReminder) {
-                            const initM = parseInt(activeReminder.initialTime, 10) || 10;
-                            const curM = typeof activeReminder.currentTime === 'number' ? activeReminder.currentTime : (parseInt(activeReminder.lastTime, 10) || initM);
-                            if (initM > 0) {
-                              return Math.min(95, Math.max(10, Math.round(((initM - Math.min(curM, initM)) / initM) * 100)));
                             }
                           }
                           if (itemNextStation) {
@@ -5050,7 +5023,7 @@ export default function App() {
                               }
                             }
                           }
-                          return activeReminder ? 40 : null;
+                          return null;
                         })();
 
                         return (
@@ -5064,7 +5037,7 @@ export default function App() {
                             <div className="history-card-left">
                               <div className={`hud-badge hud-badge-${vehType}`} style={{ padding: "6px 10px", borderRadius: "12px" }}>
                                 <span className="material-symbols-outlined" style={{ fontSize: "18px" }}>
-                                  {iconName}
+                                   {iconName}
                                 </span>
                                 <span className="hud-route-num" style={{ fontSize: "15px", fontWeight: "800" }}>{item.route || '—'}</span>
                               </div>
@@ -5080,7 +5053,7 @@ export default function App() {
                                   />
                                 </div>
 
-                                {isLiveOnMap && itemNextStation && (
+                                {itemNextStation && (
                                   <div className="history-next-station-row">
                                     <span className="material-symbols-outlined history-next-icon">
                                       {itemNextStation.includes('Конечная') ? 'flag' : 'arrow_forward'}
@@ -5110,7 +5083,7 @@ export default function App() {
                                   </span>
                                 </button>
                               )}
-                              {itemProgress != null && isLiveOnMap && (
+                              {itemProgress != null && (
                                 <RouteProgressRing percent={itemProgress} />
                               )}
                               <button
