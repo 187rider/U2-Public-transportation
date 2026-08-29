@@ -282,29 +282,123 @@ async function sendWebPush(subscription, payload) {
 // 4. API Endpoints Implementation
 // -------------------------------------------------------------
 async function handleGetRoutes() {
-  const cached = getFromCache("all_routes", 3600);
+  const cached = getFromCache("all_routes_grouped", 3600);
   if (cached) return Response.json(cached);
 
   const headers = await getBus62Headers();
   const res = await fetch(`${BUS62_URL}/getAllRoutes.php?city=${BUS62_CITY}`, { headers });
   if (!res.ok) return new Response("Failed to fetch routes", { status: 502 });
 
-  const data = await res.json();
-  setInCache("all_routes", data);
-  return Response.json(data);
+  const rawRoutes = await res.json();
+  if (!Array.isArray(rawRoutes)) return Response.json({ count: 0, routes: [] });
+
+  const routesByNum = new Map();
+  for (const rt of rawRoutes) {
+    const num = String(rt.number || "").trim();
+    const name = String(rt.name || "").trim();
+    const rawType = String(rt.type || "").trim();
+
+    let rtType = "bus";
+    if (["Т", "Тм", "Трамвай"].includes(rawType) || name.startsWith("Т-") || name.startsWith("Тм-")) {
+      rtType = "tram";
+    } else if (["М", "М-"].includes(rawType) || name.startsWith("М-")) {
+      rtType = "minibus";
+    }
+
+    const key = `${rtType}_${num}`;
+    const rtId = String(rt.id || "").trim();
+    const fromSt = String(rt.from_station_name || rt.from_station || "").trim();
+    const toSt = String(rt.to_station_name || rt.to_station || "").trim();
+
+    if (!routesByNum.has(key)) {
+      routesByNum.set(key, {
+        id: rtId ? [rtId] : [],
+        number: num,
+        name,
+        type: rtType,
+        from_station: fromSt,
+        to_station: toSt,
+        subroutes: []
+      });
+    } else {
+      const item = routesByNum.get(key);
+      if (rtId && !item.id.includes(rtId)) item.id.push(rtId);
+      if (!item.from_station && fromSt) item.from_station = fromSt;
+      if (!item.to_station && toSt) item.to_station = toSt;
+    }
+
+    routesByNum.get(key).subroutes.push({
+      id: rtId,
+      from_station: fromSt,
+      to_station: toSt
+    });
+  }
+
+  const formattedRoutes = Array.from(routesByNum.values()).map((r) => ({
+    ...r,
+    id: r.id.join(",")
+  }));
+
+  formattedRoutes.sort((a, b) => {
+    const typeOrder = { bus: 0, tram: 1, minibus: 2 };
+    if (typeOrder[a.type] !== typeOrder[b.type]) return typeOrder[a.type] - typeOrder[b.type];
+    const numA = parseInt(a.number, 10), numB = parseInt(b.number, 10);
+    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+    return a.number.localeCompare(b.number);
+  });
+
+  const result = { count: formattedRoutes.length, routes: formattedRoutes };
+  setInCache("all_routes_grouped", result);
+  return Response.json(result);
 }
 
 async function handleGetStations() {
-  const cached = getFromCache("all_stations", 3600);
+  const cached = getFromCache("all_stations_geojson", 3600);
   if (cached) return Response.json(cached);
 
   const headers = await getBus62Headers();
   const res = await fetch(`${BUS62_URL}/getAllStations.php?city=${BUS62_CITY}`, { headers });
   if (!res.ok) return new Response("Failed to fetch stations", { status: 502 });
 
-  const data = await res.json();
-  setInCache("all_stations", data);
-  return Response.json(data);
+  const rawStations = await res.json();
+  if (!Array.isArray(rawStations)) return Response.json({ type: "FeatureCollection", features: [] });
+
+  const features = [];
+  for (const station of rawStations) {
+    const stType = String(station.type) === "0" ? "bus" : "tram";
+    const stName = String(station.name || "").trim();
+    const stId = String(station.id || "");
+    const isWarm = String(station.is_warm || "0");
+    const description = String(station.description || "").trim();
+
+    const l0 = parseFloat(station.lon0 || 0) / 1000000.0;
+    const a0 = parseFloat(station.lat0 || 0) / 1000000.0;
+    const l1 = parseFloat(station.lon1 || 0) / 1000000.0;
+    const a1 = parseFloat(station.lat1 || 0) / 1000000.0;
+
+    let coords = null;
+    if (l0 && a0 && l1 && a1) coords = [(l0 + l1) / 2.0, (a0 + a1) / 2.0];
+    else if (l0 && a0) coords = [l0, a0];
+    else if (l1 && a1) coords = [l1, a1];
+
+    if (coords && coords[1] > 50.0 && coords[1] < 55.0 && coords[0] > 100.0 && coords[0] < 115.0) {
+      features.push({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: coords },
+        properties: {
+          id: stId,
+          name: stName,
+          type: stType,
+          is_warm: isWarm,
+          description: description
+        }
+      });
+    }
+  }
+
+  const result = { type: "FeatureCollection", features };
+  setInCache("all_stations_geojson", result);
+  return Response.json(result);
 }
 
 async function handleGetRouteNodes(url) {
@@ -370,13 +464,13 @@ async function handleGetVehicles(url) {
 
   // If no specific routes requested, fetch all known city route IDs
   if (!rids) {
-    let routes = getFromCache("all_routes", 3600);
+    let routes = getFromCache("all_routes_raw", 3600);
     if (!routes) {
       const h = await getBus62Headers();
       const r = await fetch(`${BUS62_URL}/getAllRoutes.php?city=${BUS62_CITY}`, { headers: h });
       if (r.ok) {
         routes = await r.json();
-        setInCache("all_routes", routes);
+        setInCache("all_routes_raw", routes);
       }
     }
     if (Array.isArray(routes) && routes.length) {
