@@ -708,6 +708,116 @@ function getTransitDO(env) {
   return env.TRANSIT_STATE.get(id);
 }
 
+let FALLBACK_VEHICLE_POLL_TIME = 0;
+let FALLBACK_VEHICLE_SNAPSHOT = null;
+
+async function handleGetVehicles(url, env = {}) {
+  const requestedRids = url.searchParams.get("rids") || "";
+  const curk = url.searchParams.get("curk") || "0";
+  const now = Date.now();
+
+  if (FALLBACK_VEHICLE_SNAPSHOT && now - FALLBACK_VEHICLE_POLL_TIME < 8000) {
+    return filterAndReturnVehicles(FALLBACK_VEHICLE_SNAPSHOT, requestedRids, curk);
+  }
+
+  const cfg = getUpstreamConfig(env);
+  if (!cfg.url) return Response.json({ vehicles: [], next_curk: curk });
+
+  try {
+    let rids = requestedRids;
+    if (!rids) {
+      let routes = getFromCache("all_routes_raw", 3600);
+      if (!routes) {
+        const h = await getBus62Headers(env);
+        const r = await fetch(`${cfg.url}/getAllRoutes.php?city=${cfg.city}`, {
+          headers: h,
+          signal: AbortSignal.timeout(4000)
+        });
+        if (r.ok) {
+          routes = await r.json();
+          setInCache("all_routes_raw", routes);
+        }
+      }
+      if (Array.isArray(routes) && routes.length) {
+        rids = routes.map((rt) => rt.id).filter(Boolean).slice(0, 50).join(",");
+      }
+    }
+
+    const headers = await getBus62Headers(env);
+    const apiUrl = `${cfg.url}/getVehicleAnimations.php?curk=0&city=${cfg.city}&rids=${rids}`;
+    const res = await fetch(apiUrl, {
+      headers,
+      signal: AbortSignal.timeout(6000)
+    });
+    if (res.ok) {
+      const items = await res.json();
+      if (Array.isArray(items) && items.length > 0) {
+        FALLBACK_VEHICLE_SNAPSHOT = items;
+        FALLBACK_VEHICLE_POLL_TIME = Date.now();
+        return filterAndReturnVehicles(items, requestedRids, curk);
+      }
+    }
+  } catch (e) {}
+
+  if (FALLBACK_VEHICLE_SNAPSHOT) {
+    return filterAndReturnVehicles(FALLBACK_VEHICLE_SNAPSHOT, requestedRids, curk);
+  }
+
+  return Response.json({ vehicles: [], next_curk: curk });
+}
+
+async function handleRemindersFallback(request, env = {}) {
+  const url = new URL(request.url);
+  if (url.pathname === "/api/reminders/subscribe" || (url.pathname === "/api/reminders" && request.method === "POST")) {
+    const data = await request.json();
+    const sub = data.subscription;
+    if (!sub || !sub.endpoint || !data.sid || !data.rid) {
+      return Response.json({ error: "Invalid reminder payload" }, { status: 400 });
+    }
+    const remKey = `rem_${data.sid}_${data.rid}_${encodeURIComponent(sub.endpoint.slice(-16))}`;
+    const remObj = {
+      remKey,
+      sid: String(data.sid),
+      rid: String(data.rid),
+      rnum: String(data.rnum || ""),
+      stationName: String(data.stationName || data.stname || ""),
+      vehid: data.vehid ? String(data.vehid) : null,
+      gosNum: data.gosNum ? String(data.gosNum) : null,
+      subscription: sub,
+      createdAt: Date.now(),
+      lastNotifiedTime: null
+    };
+    if (env.REMINDERS_KV) {
+      await env.REMINDERS_KV.put(remKey, JSON.stringify(remObj), { expirationTtl: 7200 });
+    }
+    return Response.json({ ok: true, status: "subscribed", key: remKey });
+  }
+
+  if (url.pathname === "/api/reminders/unsubscribe" || (url.pathname === "/api/reminders" && request.method === "DELETE")) {
+    const data = await request.json();
+    const sub = data.subscription;
+    if (sub && sub.endpoint && data.sid && data.rid && env.REMINDERS_KV) {
+      const remKey = `rem_${data.sid}_${data.rid}_${encodeURIComponent(sub.endpoint.slice(-16))}`;
+      await env.REMINDERS_KV.delete(remKey);
+    }
+    return Response.json({ ok: true, status: "unsubscribed" });
+  }
+
+  if (url.pathname === "/api/reminders" && request.method === "GET") {
+    const list = [];
+    if (env.REMINDERS_KV) {
+      const kvList = await env.REMINDERS_KV.list({ prefix: "rem_" });
+      for (const k of kvList.keys || []) {
+        const item = await env.REMINDERS_KV.get(k.name);
+        if (item) list.push(JSON.parse(item));
+      }
+    }
+    return Response.json({ reminders: list });
+  }
+
+  return Response.json({ error: "Not found" }, { status: 404 });
+}
+
 // -------------------------------------------------------------
 // 7. Edge API Endpoints (Cached in Worker isolates)
 // -------------------------------------------------------------
@@ -1060,11 +1170,15 @@ export default {
       if (url.pathname === "/api/route_stations") return handleGetRouteStations(url, env);
 
       // Delegate /api/vehicles to the TransitState Durable Object (Global 10s Single-Writer Floor)
+      // Or fallback gracefully to worker-level handler
       if (url.pathname === "/api/vehicles") {
         const doStub = getTransitDO(env);
         if (doStub) {
-          return doStub.fetch(request);
+          try {
+            return await doStub.fetch(request);
+          } catch (e) {}
         }
+        return handleGetVehicles(url, env);
       }
 
       if (url.pathname === "/api/forecasts" || url.pathname === "/api/station_forecasts") {
@@ -1077,7 +1191,7 @@ export default {
         return Response.json({ publicKey: vapidCfg.publicKey, public_key: vapidCfg.publicKey });
       }
 
-      // Delegate Reminders to the TransitState Durable Object
+      // Delegate Reminders to the TransitState Durable Object or KV fallback
       if (
         url.pathname === "/api/reminders/subscribe" ||
         url.pathname === "/api/reminders/unsubscribe" ||
@@ -1085,9 +1199,11 @@ export default {
       ) {
         const doStub = getTransitDO(env);
         if (doStub) {
-          return doStub.fetch(request);
+          try {
+            return await doStub.fetch(request);
+          } catch (e) {}
         }
-        return Response.json({ error: "Durable Object not bound" }, { status: 500 });
+        return handleRemindersFallback(request, env);
       }
 
       if (url.pathname === "/api/test_push" && request.method === "POST") {
