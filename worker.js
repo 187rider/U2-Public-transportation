@@ -1045,7 +1045,8 @@ export default {
       // 2. Fallback to Cloudflare Workers Static Assets
       try {
         const assetRes = await env.ASSETS.fetch(request);
-        if (assetRes.status === 200) {
+        const contentType = assetRes.headers.get("Content-Type") || "";
+        if (assetRes.status === 200 && !contentType.includes("text/html")) {
           const newHeaders = new Headers(assetRes.headers);
           newHeaders.set("Content-Type", "application/x-protobuf");
           newHeaders.set("Content-Encoding", "gzip");
