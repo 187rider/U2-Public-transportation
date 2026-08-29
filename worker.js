@@ -457,44 +457,14 @@ async function handleGetRouteStations(url) {
   return Response.json(result);
 }
 
-async function handleGetVehicles(url) {
-  const requestedRids = url.searchParams.get("rids") || "";
-  let rids = requestedRids;
-  const curk = url.searchParams.get("curk") || "0";
+// -------------------------------------------------------------
+// Rate Limiter & Global In-Memory Vehicle Cache (10s Cooldown)
+// -------------------------------------------------------------
+let LAST_VEHICLE_POLL_TIME = 0;
+let LAST_VEHICLE_SNAPSHOT = null;
+let VEHICLE_FETCH_PROMISE = null;
 
-  // If no specific routes requested, fetch all known city route IDs
-  if (!rids) {
-    let routes = getFromCache("all_routes_raw", 3600);
-    if (!routes) {
-      const h = await getBus62Headers();
-      const r = await fetch(`${BUS62_URL}/getAllRoutes.php?city=${BUS62_CITY}`, { headers: h });
-      if (r.ok) {
-        routes = await r.json();
-        setInCache("all_routes_raw", routes);
-      }
-    }
-    if (Array.isArray(routes) && routes.length) {
-      rids = routes.map((rt) => rt.id).filter(Boolean).join(",");
-    }
-  }
-
-  if (!rids) {
-    return Response.json({ vehicles: [], next_curk: curk });
-  }
-
-  const headers = await getBus62Headers();
-  const apiUrl = `${BUS62_URL}/getVehicleAnimations.php?curk=${curk}&city=${BUS62_CITY}&rids=${rids}`;
-  const res = await fetch(apiUrl, { headers });
-
-  if (!res.ok) {
-    return Response.json({ vehicles: [], next_curk: curk });
-  }
-
-  const items = await res.json();
-  if (!Array.isArray(items)) {
-    return Response.json({ vehicles: [], next_curk: curk });
-  }
-
+function filterAndReturnVehicles(items, requestedRids, curk) {
   const ridSet = requestedRids ? new Set(requestedRids.split(",").map((r) => r.trim()).filter(Boolean)) : null;
   let maxCurk = parseInt(curk, 10) || 0;
   const vehicles = [];
@@ -556,9 +526,67 @@ async function handleGetVehicles(url) {
   });
 }
 
+async function handleGetVehicles(url) {
+  const requestedRids = url.searchParams.get("rids") || "";
+  const curk = url.searchParams.get("curk") || "0";
+  const now = Date.now();
+
+  // 1. Strict 10-second floor cooldown: if last poll was < 10 seconds ago, return cached snapshot immediately
+  if (LAST_VEHICLE_SNAPSHOT && now - LAST_VEHICLE_POLL_TIME < 10000) {
+    return filterAndReturnVehicles(LAST_VEHICLE_SNAPSHOT, requestedRids, curk);
+  }
+
+  // 2. Coalesce concurrent in-flight requests (prevent dogpiling to api9.bus62.ru)
+  if (!VEHICLE_FETCH_PROMISE) {
+    VEHICLE_FETCH_PROMISE = (async () => {
+      try {
+        let rids = "";
+        let routes = getFromCache("all_routes_raw", 3600);
+        if (!routes) {
+          const h = await getBus62Headers();
+          const r = await fetch(`${BUS62_URL}/getAllRoutes.php?city=${BUS62_CITY}`, { headers: h });
+          if (r.ok) {
+            routes = await r.json();
+            setInCache("all_routes_raw", routes);
+          }
+        }
+        if (Array.isArray(routes) && routes.length) {
+          rids = routes.map((rt) => rt.id).filter(Boolean).join(",");
+        }
+
+        const headers = await getBus62Headers();
+        const apiUrl = `${BUS62_URL}/getVehicleAnimations.php?curk=0&city=${BUS62_CITY}&rids=${rids}`;
+        const res = await fetch(apiUrl, { headers });
+        if (res.ok) {
+          const items = await res.json();
+          if (Array.isArray(items) && items.length > 0) {
+            LAST_VEHICLE_SNAPSHOT = items;
+            LAST_VEHICLE_POLL_TIME = Date.now();
+          }
+        }
+      } catch (e) {
+      } finally {
+        VEHICLE_FETCH_PROMISE = null;
+      }
+    })();
+  }
+
+  await VEHICLE_FETCH_PROMISE;
+
+  if (LAST_VEHICLE_SNAPSHOT) {
+    return filterAndReturnVehicles(LAST_VEHICLE_SNAPSHOT, requestedRids, curk);
+  }
+
+  return Response.json({ vehicles: [], next_curk: curk });
+}
+
 async function handleGetStationForecasts(url) {
   const sid = url.searchParams.get("sid") || "";
   if (!sid) return Response.json({ forecasts: [], sid: "" });
+
+  const cacheKey = `forecasts_sid_${sid}`;
+  const cached = getFromCache(cacheKey, 8); // 8-second cache
+  if (cached) return Response.json(cached);
 
   const headers = await getBus62Headers();
   const res = await fetch(`${BUS62_URL}/getStationForecasts.php?sid=${sid}&city=${BUS62_CITY}`, { headers });
@@ -587,12 +615,18 @@ async function handleGetStationForecasts(url) {
     };
   });
 
-  return Response.json({ forecasts, sid });
+  const result = { forecasts, sid };
+  setInCache(cacheKey, result);
+  return Response.json(result);
 }
 
 async function handleGetVehicleForecasts(url) {
   const vehid = url.searchParams.get("vehid") || "";
   if (!vehid) return Response.json({ forecasts: [], vehid: "" });
+
+  const cacheKey = `vehicle_forecasts_${vehid}`;
+  const cached = getFromCache(cacheKey, 8); // 8-second cache
+  if (cached) return Response.json(cached);
 
   const headers = await getBus62Headers();
   const res = await fetch(`${BUS62_URL}/getVehicleForecasts.php?vehid=${vehid}&city=${BUS62_CITY}`, { headers });
@@ -614,7 +648,9 @@ async function handleGetVehicleForecasts(url) {
     };
   });
 
-  return Response.json({ forecasts, vehid });
+  const result = { forecasts, vehid };
+  setInCache(cacheKey, result);
+  return Response.json(result);
 }
 
 // -------------------------------------------------------------
