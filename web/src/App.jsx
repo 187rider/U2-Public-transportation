@@ -4978,7 +4978,38 @@ export default function App() {
                       {sortedVehicleHistory.map((item) => {
                         const itemPlate = formatGosNum(item.gosNum).toLowerCase();
                         const itemRoute = String(item.route || '').trim().toLowerCase();
-                                              const itemNextStation = (isSelected && nextStationInfo?.name) || (activeReminder && activeReminder.stationName ? (activeReminder.currentTime != null ? `${activeReminder.stationName} (${activeReminder.currentTime} мин)` : (activeReminder.lastTime ? `${activeReminder.stationName} (${activeReminder.lastTime} мин)` : activeReminder.stationName)) : '') || item.nextStation || (live && (live.nextStation || live.destination)) || '';
+                        const live = (() => {
+                          if (item.id && !String(item.id).includes('_') && knownVehiclesRef.current[item.id]) {
+                            const directVeh = knownVehiclesRef.current[item.id];
+                            const dRoute = String(directVeh.route || directVeh.rnum || '').trim().toLowerCase();
+                            if (!itemRoute || dRoute === itemRoute) {
+                              return directVeh;
+                            }
+                          }
+                          return Object.values(knownVehiclesRef.current).find(v => {
+                            const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+                            if (itemRoute && vRoute && itemRoute !== vRoute) return false;
+                            if (itemPlate && v.gosNum && formatGosNum(v.gosNum).toLowerCase() === itemPlate) return true;
+                            if (item.id && !String(item.id).includes('_') && v.id && String(v.id) === String(item.id)) return true;
+                            return false;
+                          }) || (() => {
+                            if (!itemRoute && !item.rid) return null;
+                            const candidates = Object.values(knownVehiclesRef.current).filter(v => {
+                              const vRoute = String(v.route || v.rnum || '').trim().toLowerCase();
+                              if (itemRoute && vRoute && itemRoute === vRoute) return true;
+                              if (item.rid && v.rid && String(item.rid) === String(v.rid)) return true;
+                              return false;
+                            });
+                            return candidates.length > 0 ? candidates[0] : null;
+                          })();
+                        })();
+                        const activeReminder = getActiveReminderForVehicle(item, live);
+                        const isLiveOnMap = (!!live && (Date.now() - (live._lastSeen || 0) < 60000)) || !!activeReminder;
+                        const isSelected = selectedVehicle?.id === item.id || (live && selectedVehicle?.id === live.id);
+
+                        const vehType = normalizeVehicleType(item.type, item.route);
+                        const iconName = vehType === "tram" ? "tram" : (vehType === "minibus" ? "airport_shuttle" : "directions_bus");
+                        const itemNextStation = (isSelected && nextStationInfo?.name) || (activeReminder && activeReminder.stationName ? (activeReminder.currentTime != null ? `к «${activeReminder.stationName}» (${activeReminder.currentTime} мин)` : (activeReminder.lastTime ? `к «${activeReminder.stationName}» (${activeReminder.lastTime} мин)` : `к «${activeReminder.stationName}»`)) : '') || item.nextStation || (live && (live.nextStation || live.destination)) || '';
                         const isNextStLong = (itemNextStation || "").length > 13;
 
                         const itemProgress = (() => {
