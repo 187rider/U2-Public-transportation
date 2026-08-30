@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v85';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v86';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -190,9 +190,8 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: body,
-    // Omitting tag delivers distinct, separate notification cards on Android instead of silent in-place edits
-    tag: undefined,
-    renotify: false,
+    tag: `arrival_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    renotify: true,
     requireInteraction: true,
     silent: false,
     timestamp: Date.now(),

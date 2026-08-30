@@ -550,11 +550,17 @@ export class TransitState {
 
   async alarm() {
     await this.ensureLoaded();
-    await this.checkRemindersAndNotify();
-
-    // Reschedule alarm every 15 seconds if active reminders exist
-    if (this.reminders.size > 0) {
-      await this.storage.setAlarm(Date.now() + 15000);
+    try {
+      await this.checkRemindersAndNotify();
+    } catch (err) {
+      console.error("TransitState.alarm error:", err);
+    } finally {
+      // Always reschedule alarm every 15 seconds if active reminders exist
+      if (this.reminders.size > 0) {
+        try {
+          await this.storage.setAlarm(Date.now() + 15000);
+        } catch (e) {}
+      }
     }
   }
 
@@ -793,11 +799,8 @@ export class TransitState {
       this.reminders.set(remKey, remObj);
       await this.storage.put(remKey, remObj);
 
-      // Start alarm immediately if not scheduled
-      const currentAlarm = await this.storage.getAlarm();
-      if (currentAlarm === null) {
-        await this.storage.setAlarm(Date.now() + 1000);
-      }
+      // Start alarm immediately
+      await this.storage.setAlarm(Date.now() + 500);
 
       return Response.json({ ok: true, status: "subscribed", key: remKey });
     }
