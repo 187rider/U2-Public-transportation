@@ -649,12 +649,17 @@ export class TransitState {
         continue;
       }
 
-      const rawTime = matching.arrt || matching.arrtime || matching.time || 0;
-      const curTime = Math.ceil(parseInt(rawTime, 10) / 60);
+      const rawVal = matching.time != null ? matching.time : (matching.arrt != null ? matching.arrt : matching.arrtime);
+      const parsedTime = parseInt(rawVal, 10);
+      let curTime = 0;
+      if (!isNaN(parsedTime)) {
+        // If > 60, it is in seconds (e.g. 180s = 3m); otherwise it is already in minutes (e.g. 3m)
+        curTime = parsedTime > 60 ? Math.ceil(parsedTime / 60) : parsedTime;
+      }
       const last = rem.lastNotifiedTime;
 
-      // Arrival threshold: 0 minutes or departure bounce (time jumped by >= 2 min while close)
-      if (curTime <= 0 || (last !== null && last <= 4 && curTime >= last + 2)) {
+      // Arrival threshold: 0 minutes or departure bounce (time jumped by >= 3 min while close)
+      if (curTime <= 0 || (last !== null && last <= 3 && curTime >= last + 3)) {
         await sendWebPush(sub, {
           title: `🚌 Маршрут ${rnum} прибыл!`,
           body: `Остановка «${stname}»`,
