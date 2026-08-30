@@ -415,14 +415,14 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag
     "Content-Type": "application/octet-stream",
     "Content-Encoding": "aes128gcm",
     "TTL": isApple ? "300" : "3600", // Android Doze tolerance: 1 hour ensures FCM delivers without early discard
-    "Urgency": isUrgent ? "high" : "normal", // High priority for arrival / <= 2m
+    "Urgency": "high", // High priority ensures FCM wakes device in real time with screen off
     "Authorization": `vapid t=${jwt}, k=${vapidConfig.publicKey}`
   };
 
   // Apple APNs format support
   if (isApple) {
     headers["apns-push-type"] = "alert";
-    headers["apns-priority"] = isUrgent ? "10" : "5";
+    headers["apns-priority"] = "10";
     if (tag) headers["apns-collapse-id"] = tag;
   }
 
@@ -661,18 +661,22 @@ export class TransitState {
         continue;
       }
 
-      // Exact VPS cadence rules:
-      // - If curTime > 10: notify every 5 minutes (e.g. 25, 20, 15, 10) or on initial registration
-      // - If crossing from > 10 to <= 10: notify
-      // - If curTime <= 10: notify every single minute when time decreases
+      // Smart Doze-friendly Cadence:
+      // Paces notifications cleanly across the countdown without burning OEM battery quotas:
+      // - Initial registration (last === null)
+      // - If curTime > 10: notify every 5 minutes (e.g. 20, 15, 10)
+      // - If curTime <= 10 && curTime > 3: notify every 2 minutes (e.g. 8m, 6m, 4m)
+      // - If curTime <= 3: notify every single minute (3m, 2m, 1m) and 0m (прибыл)
       let shouldFire = false;
       if (last === null) {
         shouldFire = true;
-      } else if (last > 10 && curTime <= 10) {
-        shouldFire = true;
       } else if (curTime > 10 && curTime <= last - 5) {
         shouldFire = true;
-      } else if (curTime <= 10 && curTime < last) {
+      } else if (last > 10 && curTime <= 10) {
+        shouldFire = true;
+      } else if (curTime <= 10 && curTime > 3 && curTime <= last - 2) {
+        shouldFire = true;
+      } else if (curTime <= 3 && curTime < last) {
         shouldFire = true;
       }
 
@@ -681,7 +685,6 @@ export class TransitState {
         await this.storage.put(remKey, rem);
 
         const timeWord = curTime === 1 ? "1 минуту" : curTime < 5 ? `${curTime} минуты` : `${curTime} минут`;
-        const isUrgent = curTime <= 2; // High urgency only for arrival / final approach
         const res = await sendWebPush(sub, {
           title: `🚌 Маршрут ${rnum} через ${timeWord}`,
           body: `Остановка «${stname}»`,
@@ -689,7 +692,7 @@ export class TransitState {
           sid: rem.sid,
           rid: rem.rid,
           minutes: curTime
-        }, this.env, tag, isUrgent);
+        }, this.env, tag, true);
 
         // Dead subscription cleanup (HTTP 403, 404, 410 from FCM/APNs)
         if (!res.ok && [403, 404, 410].includes(res.status)) {
