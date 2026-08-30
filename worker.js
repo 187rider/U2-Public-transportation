@@ -414,9 +414,8 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag
   const headers = {
     "Content-Type": "application/octet-stream",
     "Content-Encoding": "aes128gcm",
-    "TTL": isApple ? "300" : "3600", // Android Doze queue tolerance: 1 hour prevents FCM discarding during idle
-    "Urgency": isUrgent ? "high" : "normal", // High priority reserved for arrival / <= 2m to conserve Doze budget
-    "Topic": tag || "bus-arrival",
+    "TTL": isApple ? "300" : "3600", // Android Doze tolerance: 1 hour ensures FCM delivers without early discard
+    "Urgency": isUrgent ? "high" : "normal", // High priority for arrival / <= 2m
     "Authorization": `vapid t=${jwt}, k=${vapidConfig.publicKey}`
   };
 
@@ -424,7 +423,7 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag
   if (isApple) {
     headers["apns-push-type"] = "alert";
     headers["apns-priority"] = isUrgent ? "10" : "5";
-    headers["apns-collapse-id"] = tag || "bus-arrival";
+    if (tag) headers["apns-collapse-id"] = tag;
   }
 
   return {
