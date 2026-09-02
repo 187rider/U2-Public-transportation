@@ -406,7 +406,10 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag
   body.set(ciphertext, header.length);
 
   const endpointUrl = new URL(subscription.endpoint);
-  const audience = `${endpointUrl.protocol}//${endpointUrl.host}`;
+  let audience = `${endpointUrl.protocol}//${endpointUrl.host}`;
+  if (endpointUrl.host.includes("android.googleapis.com")) {
+    audience = "https://fcm.googleapis.com";
+  }
   const jwt = await createVapidJwt(audience, vapidConfig.subject, vapidConfig.jwk);
 
   const isApple = subscription.endpoint.includes("apple.com") || subscription.endpoint.includes("push.apple.com");
@@ -414,7 +417,7 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag
   const headers = {
     "Content-Type": "application/octet-stream",
     "Content-Encoding": "aes128gcm",
-    "TTL": isApple ? "300" : "3600", // Android Doze tolerance: 1 hour ensures FCM delivers without early discard
+    "TTL": "300", // 300s (5 minutes) signals to both APNs and FCM that this is time-critical real-time transit telemetry
     "Urgency": "high", // High priority ensures FCM wakes device in real time with screen off
     "Authorization": `vapid t=${jwt}, k=${vapidConfig.publicKey}`
   };
@@ -443,6 +446,11 @@ async function sendWebPush(subscription, payload, env = {}, tag = "bus-arrival",
       headers,
       body
     });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      console.warn(`WebPush delivery error (${res.status}) for ${subscription.endpoint.slice(0, 45)}...:`, errText);
+    }
 
     return { ok: res.ok, status: res.status };
   } catch (err) {
@@ -696,13 +704,9 @@ export class TransitState {
 
       if (last === null) {
         shouldFire = true;
-      } else if (curTime > 10 && curTime <= last - 5) {
+      } else if (curTime > 5 && curTime <= last - 5) {
         shouldFire = true;
-      } else if (last > 10 && curTime <= 10) {
-        shouldFire = true;
-      } else if (curTime <= 10 && curTime > 3 && curTime <= last - 2) {
-        shouldFire = true;
-      } else if (curTime <= 3 && curTime > 1 && curTime < last) {
+      } else if (last > 5 && curTime <= 5 && curTime > 1) {
         shouldFire = true;
       } else if (curTime <= 1 && (last > 1 || last === null)) {
         // GUARANTEED 1-MINUTE WARNING: Always notify for 1 minute before arrival!
