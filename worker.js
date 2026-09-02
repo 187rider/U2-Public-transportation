@@ -839,7 +839,36 @@ export class TransitState {
       return Response.json({ ok: true, status: "unsubscribed", active_count: this.reminders.size });
     }
 
-    // 4. Reminders Stats (Sanitized - Zero Credentials / Zero PII)
+    // 4. Reminders Active Query by subscriber endpoint (Allows iOS/Android client to recover state when app is closed/reopened)
+    if (url.pathname === "/api/reminders/active" && request.method === "POST") {
+      const data = await request.json();
+      const rawEndpoint = (data.subscription && data.subscription.endpoint) || data.endpoint;
+      const results = [];
+      if (rawEndpoint) {
+        const endpoint = String(rawEndpoint).trim();
+        for (const [key, rem] of this.reminders.entries()) {
+          const remEndpoint = rem.subscription && rem.subscription.endpoint ? String(rem.subscription.endpoint).trim() : "";
+          if (remEndpoint === endpoint) {
+            results.push({
+              id: rem.vehid ? `${rem.sid}_${rem.rid}_${rem.vehid}` : `${rem.sid}_${rem.rid}`,
+              sid: rem.sid,
+              stationName: rem.stationName,
+              rid: rem.rid,
+              rnum: rem.rnum,
+              vehid: rem.vehid || "",
+              gosNum: rem.gosNum || "",
+              initialTime: rem.initialTime || 10,
+              createdAt: rem.createdAt,
+              lastNotifiedTime: rem.lastNotifiedTime,
+              triggered: false
+            });
+          }
+        }
+      }
+      return Response.json({ ok: true, reminders: results });
+    }
+
+    // 5. Reminders Stats (Sanitized - Zero Credentials / Zero PII)
     if (url.pathname === "/api/reminders" && request.method === "GET") {
       return Response.json({ active_count: this.reminders.size });
     }

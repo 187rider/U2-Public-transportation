@@ -977,6 +977,53 @@ export default function App() {
     } catch {}
   }, [reminders]);
 
+  // Sync active reminders with Cloudflare Worker on startup and on tab foreground/visibility change
+  useEffect(() => {
+    const syncWithServer = async () => {
+      try {
+        if ('serviceWorker' in navigator) {
+          const reg = await navigator.serviceWorker.ready;
+          if (reg && reg.pushManager) {
+            const sub = await reg.pushManager.getSubscription();
+            if (sub && sub.endpoint) {
+              const res = await apiFetch('/api/reminders/active', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ endpoint: sub.endpoint })
+              });
+              if (res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data.reminders)) {
+                  if (data.reminders.length > 0) {
+                    setReminders(prev => {
+                      const currentIds = new Set(prev.map(r => r.id));
+                      const missing = data.reminders.filter(r => !currentIds.has(r.id));
+                      if (missing.length > 0) {
+                        return [...prev, ...missing];
+                      }
+                      return prev;
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("syncWithServer error:", err);
+      }
+    };
+
+    syncWithServer();
+    const handleVisChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncWithServer();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisChange);
+    return () => document.removeEventListener('visibilitychange', handleVisChange);
+  }, []);
+
   const alertToast = null;
   const setAlertToast = () => {}; // disabled – no black info messages
 
@@ -1415,7 +1462,7 @@ export default function App() {
 
             if (!match) {
               const wasClose = rem.lastNotifiedTime != null && rem.lastNotifiedTime <= 4;
-              const timePassed = initMin > 0 && elapsedMin >= (initMin - 1);
+              const timePassed = initMin > 0 && elapsedMin >= (initMin + 1);
 
               if (wasClose || timePassed) {
                 triggerArrivalPush(
@@ -1429,10 +1476,11 @@ export default function App() {
                   body: `Остановка «${rem.stationName}»`
                 });
                 setTimeout(() => setAlertToast(null), 8000);
+                // Clean up reminder from UI state and unregister from server only on genuine arrival
+                setReminders(prev => prev.filter(r => r.id !== rem.id));
+                cancelArrivalReminder(rem.id, rem.rnum);
               }
-              // Clean up reminder from UI state and unregister from server
-              setReminders(prev => prev.filter(r => r.id !== rem.id));
-              cancelArrivalReminder(rem.id, rem.rnum);
+              // If not close, do NOT cancel the reminder! The bus is still en route and may reappear on next poll
               return;
             }
 
