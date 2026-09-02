@@ -633,9 +633,9 @@ export class TransitState {
       const sub = rem.subscription;
       const tag = `arrival_${rem.sid}_${rem.rid}`;
 
-      // Vehicle vanished after being close (<= 4 min) -> Arrival event!
+      // Vehicle vanished after reaching stop (<= 1 min) -> Genuine arrival event!
       if (!matching) {
-        if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 4) {
+        if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 1) {
           await sendWebPush(sub, {
             title: `🚌 Маршрут ${rnum} прибыл!`,
             body: `Остановка «${stname}»`,
@@ -658,8 +658,8 @@ export class TransitState {
       }
       const last = rem.lastNotifiedTime;
 
-      // Arrival threshold: 0 minutes or departure bounce (time jumped by >= 3 min while close)
-      if (curTime <= 0 || (last !== null && last <= 3 && curTime >= last + 3)) {
+      // Arrival threshold: 0 minutes or departure bounce (was at <= 1 min and time jumped to >= 3 min)
+      if (curTime <= 0 || (last !== null && last <= 1 && curTime >= 3)) {
         await sendWebPush(sub, {
           title: `🚌 Маршрут ${rnum} прибыл!`,
           body: `Остановка «${stname}»`,

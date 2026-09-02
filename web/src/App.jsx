@@ -1461,7 +1461,7 @@ export default function App() {
             const initMin = parseInt(rem.initialTime, 10) || 0;
 
             if (!match) {
-              const wasClose = rem.lastNotifiedTime != null && rem.lastNotifiedTime <= 4;
+              const wasClose = rem.lastNotifiedTime != null && rem.lastNotifiedTime <= 1;
               const timePassed = initMin > 0 && elapsedMin >= (initMin + 1);
 
               if (wasClose || timePassed) {
@@ -1498,9 +1498,9 @@ export default function App() {
             rem.lastTime = match.time;
             const last = rem.lastNotifiedTime;
 
-            // If the bus was close (<= 3 min) and forecast time suddenly jumps by >= 3 min,
-            // the tracked bus arrived and upstream is now showing the NEXT vehicle behind it
-            if (last != null && last <= 3 && curTime >= last + 3) {
+            // If the bus reached the stop (<= 1 min) and forecast time suddenly jumps by >= 3 min,
+            // the tracked bus departed and upstream is now showing the NEXT vehicle behind it
+            if (last != null && last <= 1 && curTime >= 3) {
               triggerArrivalPush(
                 `🚌 Маршрут ${rem.rnum} прибыл!`,
                 `Остановка «${rem.stationName}»`,
