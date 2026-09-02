@@ -628,23 +628,27 @@ export class TransitState {
       const sub = rem.subscription;
       const tag = `arrival_${rem.sid}_${rem.rid}`;
 
-      // Vehicle disappeared from forecast: wait 180 seconds before deleting notification
+      // 1. Vehicle missing from forecast:
       if (!matching) {
+        // If the vehicle was already at the stop (<= 1 min), its disappearance means it arrived!
+        if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 1) {
+          await sendWebPush(sub, {
+            title: `🚌 Маршрут ${rnum} прибыл!`,
+            body: `Остановка «${stname}»`,
+            tag,
+            sid: rem.sid,
+            rid: rem.rid
+          }, this.env, tag, true);
+          await this.storage.delete(remKey);
+          this.reminders.delete(remKey);
+          continue;
+        }
+
+        // If the vehicle disappeared while en route, wait 180s before deleting
         if (!rem.disappearedAt) {
           rem.disappearedAt = now;
           await this.storage.put(remKey, rem);
         } else if (now - rem.disappearedAt >= 180000) {
-          // If vehicle has been missing for >= 180 seconds:
-          // If it was at the stop (<= 1 min) before vanishing, trigger arrival notification
-          if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 1) {
-            await sendWebPush(sub, {
-              title: `🚌 Маршрут ${rnum} прибыл!`,
-              body: `Остановка «${stname}»`,
-              tag,
-              sid: rem.sid,
-              rid: rem.rid
-            }, this.env, tag, true);
-          }
           await this.storage.delete(remKey);
           this.reminders.delete(remKey);
         }
@@ -666,8 +670,14 @@ export class TransitState {
       }
       const last = rem.lastNotifiedTime;
 
-      // Arrival threshold: 0 minutes or departure bounce (was at <= 1 min and time jumped to >= 3 min)
-      if (curTime <= 0 || (last !== null && last <= 1 && curTime >= 3)) {
+      // 2. Arrival Trigger:
+      // If we ALREADY sent the 1-minute warning (last <= 1):
+      // Then when 50s have elapsed since 1-min alert, or departure bounce (curTime >= 3), trigger ARRIVAL!
+      const isOneMinAlreadySent = last !== null && last <= 1;
+      const oneMinElapsed = rem.oneMinNotifiedAt && (now - rem.oneMinNotifiedAt >= 50000);
+      const departureBounce = isOneMinAlreadySent && curTime >= 3;
+
+      if (isOneMinAlreadySent && (oneMinElapsed || departureBounce)) {
         await sendWebPush(sub, {
           title: `🚌 Маршрут ${rnum} прибыл!`,
           body: `Остановка «${stname}»`,
@@ -680,13 +690,10 @@ export class TransitState {
         continue;
       }
 
-      // Smart Doze-friendly Cadence:
-      // Paces notifications cleanly across the countdown without burning OEM battery quotas:
-      // - Initial registration (last === null)
-      // - If curTime > 10: notify every 5 minutes (e.g. 20, 15, 10)
-      // - If curTime <= 10 && curTime > 3: notify every 2 minutes (e.g. 8m, 6m, 4m)
-      // - If curTime <= 3: notify every single minute (3m, 2m, 1m) and 0m (прибыл)
+      // 3. Smart Cadence: guaranteed 1-minute notification even if upstream jumps from 2m to 0m
       let shouldFire = false;
+      let effectiveTime = curTime;
+
       if (last === null) {
         shouldFire = true;
       } else if (curTime > 10 && curTime <= last - 5) {
@@ -695,22 +702,29 @@ export class TransitState {
         shouldFire = true;
       } else if (curTime <= 10 && curTime > 3 && curTime <= last - 2) {
         shouldFire = true;
-      } else if (curTime <= 3 && curTime < last) {
+      } else if (curTime <= 3 && curTime > 1 && curTime < last) {
         shouldFire = true;
+      } else if (curTime <= 1 && (last > 1 || last === null)) {
+        // GUARANTEED 1-MINUTE WARNING: Always notify for 1 minute before arrival!
+        shouldFire = true;
+        effectiveTime = 1;
       }
 
       if (shouldFire) {
-        rem.lastNotifiedTime = curTime;
+        rem.lastNotifiedTime = effectiveTime;
+        if (effectiveTime === 1) {
+          rem.oneMinNotifiedAt = now;
+        }
         await this.storage.put(remKey, rem);
 
-        const timeWord = curTime === 1 ? "1 минуту" : curTime < 5 ? `${curTime} минуты` : `${curTime} минут`;
+        const timeWord = effectiveTime === 1 ? "1 минуту" : effectiveTime < 5 ? `${effectiveTime} минуты` : `${effectiveTime} минут`;
         const res = await sendWebPush(sub, {
           title: `🚌 Маршрут ${rnum} через ${timeWord}`,
           body: `Остановка «${stname}»`,
           tag,
           sid: rem.sid,
           rid: rem.rid,
-          minutes: curTime
+          minutes: effectiveTime
         }, this.env, tag, true);
 
         // Dead subscription cleanup (HTTP 403, 404, 410 from FCM/APNs)

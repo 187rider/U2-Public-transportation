@@ -1474,6 +1474,11 @@ export default function App() {
             const initMin = parseInt(rem.initialTime, 10) || 0;
 
             if (!match) {
+              if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 1) {
+                setReminders(prev => prev.filter(r => r.id !== rem.id));
+                cancelArrivalReminder(rem.id, rem.rnum);
+                return;
+              }
               if (!rem.disappearedAt) {
                 rem.disappearedAt = now;
               } else if (now - rem.disappearedAt >= 180000) {
@@ -1503,39 +1508,52 @@ export default function App() {
             rem.lastTime = match.time;
             const last = rem.lastNotifiedTime;
 
-            // If the bus reached the stop (<= 1 min) and forecast time suddenly jumps by >= 3 min,
-            // the tracked bus departed and upstream is now showing the NEXT vehicle behind it.
-            // Clean up silently without playing delayed audio.
+            // Departure bounce: bus was at stop and departed, upstream showing next vehicle
             if (last != null && last <= 1 && curTime >= 3) {
               setReminders(prev => prev.filter(r => r.id !== rem.id));
               cancelArrivalReminder(rem.id, rem.rnum);
               return;
             }
 
-            let shouldFire = false;
+            // Arrival trigger: 50s elapsed after 1-minute alert was sent, or vehicle confirmed at stop
+            const isOneMinAlreadySent = last !== null && last <= 1;
+            const oneMinElapsed = rem.oneMinNotifiedAt && (now - rem.oneMinNotifiedAt >= 50000);
+            if (isOneMinAlreadySent && (oneMinElapsed || timeStr.includes("прибыв"))) {
+              triggerArrivalPush(
+                `🚌 Маршрут ${rem.rnum} прибыл!`,
+                `Остановка «${rem.stationName}»`,
+                `arrival_${rem.sid}_${rem.rid}`,
+                true
+              );
+              setReminders(prev => prev.filter(r => r.id !== rem.id));
+              cancelArrivalReminder(rem.id, rem.rnum);
+              return;
+            }
 
-            if (curTime <= 0 || timeStr.includes("прибыв")) {
+            let shouldFire = false;
+            let effectiveTime = curTime;
+
+            if (last == null) {
               shouldFire = true;
-            } else if (last == null) {
-              rem.lastNotifiedTime = curTime;
-            } else if (curTime > last) {
-              rem.lastNotifiedTime = curTime;
-            } else if (last >= 10 && curTime >= 10) {
-              if (curTime <= last - 5) {
-                shouldFire = true;
-              }
-            } else if (last >= 10 && curTime < 10) {
-              if (curTime <= last - 5 || curTime <= 9) {
-                shouldFire = true;
-              }
-            } else if (curTime < 10) {
-              if (curTime <= last - 1) {
-                shouldFire = true;
-              }
+            } else if (curTime > 10 && curTime <= last - 5) {
+              shouldFire = true;
+            } else if (last > 10 && curTime <= 10) {
+              shouldFire = true;
+            } else if (curTime <= 10 && curTime > 3 && curTime <= last - 2) {
+              shouldFire = true;
+            } else if (curTime <= 3 && curTime > 1 && curTime < last) {
+              shouldFire = true;
+            } else if (curTime <= 1 && (last > 1 || last === null)) {
+              // Guaranteed 1-minute countdown warning
+              shouldFire = true;
+              effectiveTime = 1;
             }
 
             if (shouldFire) {
-              rem.lastNotifiedTime = curTime;
+              rem.lastNotifiedTime = effectiveTime;
+              if (effectiveTime === 1) {
+                rem.oneMinNotifiedAt = now;
+              }
 
               if (curTime <= 0 || timeStr.includes("прибыв")) {
                 // Final arrival push & reset memory
