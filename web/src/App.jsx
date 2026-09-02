@@ -1456,15 +1456,13 @@ export default function App() {
               const cleanG = formatGosNum(rem.gosNum).toLowerCase();
               match = forecasts.find(f => f.gosNum && formatGosNum(f.gosNum).toLowerCase() === cleanG);
             }
-            // Re-lock fallback: If vehicle dropped out of forecast and was not close to arrival, re-lock to nearest live bus on same route (Worker v11 parity)
-            if (!match) {
+            // Hard link strictly to current vehicle only: NEVER re-lock or switch to the next bus
+            if (!rem.vehid && !rem.gosNum && !match) {
               const candidates = forecasts.filter(f => String(f.rid) === String(rem.rid));
               if (candidates.length) {
-                if (rem.lastNotifiedTime == null || rem.lastNotifiedTime > 3) {
-                  match = candidates.reduce((min, c) => (parseInt(c.time || c.arrt, 10) < parseInt(min.time || min.arrt, 10) ? c : min), candidates[0]);
-                  rem.vehid = String(match.vehid || match.obj_id || "");
-                  rem.gosNum = String(match.gosNum || match.gos_num || "");
-                }
+                match = candidates.reduce((min, c) => (parseInt(c.time || c.arrt, 10) < parseInt(min.time || min.arrt, 10) ? c : min), candidates[0]);
+                rem.vehid = String(match.vehid || match.obj_id || "");
+                rem.gosNum = String(match.gosNum || match.gos_num || "");
               }
             }
             if (match && match.gosNum && !rem.gosNum) {

@@ -608,21 +608,16 @@ export class TransitState {
       if (!matching && rem.gosNum) {
         matching = forecasts.find((f) => String(f.gos_num || f.gosNum || "").toLowerCase() === rem.gosNum.toLowerCase());
       }
-      // Re-lock fallback: If locked vehicle dropped out of forecast and was not close to arrival (last > 4), re-lock to nearest live bus on same route
-      if (!matching) {
+      // Hard link to initial vehicle only if not yet set; NEVER re-lock or switch to the next bus
+      if (!rem.vehid && !rem.gosNum && !matching) {
         const candidates = forecasts.filter((f) => String(f.rid) === rem.rid);
         if (candidates.length) {
-          if (rem.lastNotifiedTime === null || rem.lastNotifiedTime > 4) {
-            matching = candidates.reduce((min, c) => (parseInt(c.arrt || c.time, 10) < parseInt(min.arrt || min.time, 10) ? c : min), candidates[0]);
-            rem.vehid = String(matching.obj_id || matching.vehid || "");
-            rem.gosNum = String(matching.gosNum || matching.gos_num || "");
-            await this.storage.put(remKey, rem);
-          }
+          matching = candidates.reduce((min, c) => (parseInt(c.arrt || c.time, 10) < parseInt(min.arrt || min.time, 10) ? c : min), candidates[0]);
+          rem.vehid = String(matching.obj_id || matching.vehid || "");
+          rem.gosNum = String(matching.gosNum || matching.gos_num || "");
+          await this.storage.put(remKey, rem);
         }
-      }
-
-      // Auto-lock to specific vehicle on initial registration
-      if (!rem.vehid && matching && (matching.obj_id || matching.vehid)) {
+      } else if (!rem.vehid && matching && (matching.obj_id || matching.vehid)) {
         rem.vehid = String(matching.obj_id || matching.vehid);
         rem.gosNum = String(matching.gosNum || matching.gos_num || "");
         await this.storage.put(remKey, rem);
