@@ -310,7 +310,7 @@ const style = {
     openmaptiles: {
       type: "vector",
       tiles: [TILE_URL],
-      minzoom: 0,
+      minzoom: 4,
       maxzoom: 14
     }
   },

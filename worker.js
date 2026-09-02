@@ -1284,11 +1284,14 @@ export default {
         const assetRes = await env.ASSETS.fetch(request);
         const contentType = assetRes.headers.get("Content-Type") || "";
         if (assetRes.status === 200 && !contentType.includes("text/html")) {
+          const bodyBuf = await assetRes.arrayBuffer();
+          if (bodyBuf.byteLength === 0) {
+            return new Response(null, { status: 204, statusText: "No Content" });
+          }
           const newHeaders = new Headers(assetRes.headers);
           newHeaders.set("Content-Type", "application/x-protobuf");
-          newHeaders.set("Content-Encoding", "gzip");
           newHeaders.set("Cache-Control", "public, max-age=2592000, immutable");
-          return new Response(assetRes.body, {
+          return new Response(bodyBuf, {
             status: 200,
             headers: newHeaders
           });

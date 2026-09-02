@@ -1,5 +1,5 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v87';
-const TILES_CACHE_NAME = 'u2-mbtiles-cache-v2';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v88';
+const TILES_CACHE_NAME = 'u2-mbtiles-cache-v3';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
 const STATIC_ASSETS = [
@@ -60,29 +60,41 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 1. Vector Map Tiles (.pbf): Cache with guaranteed Content-Encoding: gzip & Content-Type: application/x-protobuf
+  // 1. Vector Map Tiles (.pbf): Cache uncompressed Protobuf directly, return 204 on empty
   if (url.pathname.startsWith('/tiles/') || url.pathname.endsWith('.pbf')) {
     event.respondWith(
       caches.open(TILES_CACHE_NAME).then((cache) => {
         return cache.match(event.request).then((cachedTile) => {
-          if (cachedTile && cachedTile.headers.get('Content-Encoding') === 'gzip') {
+          if (cachedTile) {
             return cachedTile;
           }
           return fetch(event.request)
-            .then((networkTile) => {
+            .then(async (networkTile) => {
               if (networkTile && networkTile.status === 200) {
+                let buf = await networkTile.arrayBuffer();
+                // If upstream delivered raw gzip bytes (magic 0x1f, 0x8b), decompress in worker
+                const u8 = new Uint8Array(buf);
+                if (u8.length >= 2 && u8[0] === 0x1f && u8[1] === 0x8b) {
+                  try {
+                    const ds = new DecompressionStream('gzip');
+                    const writer = ds.writable.getWriter();
+                    writer.write(u8);
+                    writer.close();
+                    buf = await new Response(ds.readable).arrayBuffer();
+                  } catch (e) {
+                    console.warn('Tile decompression fallback failed:', e);
+                  }
+                }
+                if (buf.byteLength === 0) {
+                  return new Response(null, { status: 204, statusText: 'No Content' });
+                }
                 const h = new Headers(networkTile.headers);
                 h.set('Content-Type', 'application/x-protobuf');
-                h.set('Content-Encoding', 'gzip');
+                h.delete('Content-Encoding');
                 h.set('Cache-Control', 'public, max-age=2592000, immutable');
-                return networkTile.arrayBuffer().then((buf) => {
-                  const enrichedRes = new Response(buf, {
-                    status: 200,
-                    headers: h
-                  });
-                  cache.put(event.request, enrichedRes.clone()).catch(() => {});
-                  return enrichedRes;
-                });
+                const cleanTile = new Response(buf, { status: 200, headers: h });
+                cache.put(event.request, cleanTile.clone()).catch(() => {});
+                return cleanTile;
               }
               return networkTile;
             })
