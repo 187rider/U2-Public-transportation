@@ -483,17 +483,28 @@ function closeAllStationPopups() {
   setPopupState(false);
 }
 
-// Sound Effect for Final Arrival (eBay sound)
-let arrivalAudioInstance = null;
+// Sound Effect for Final Arrival using Web Audio API (ambient SFX - NEVER spawns iOS Lock Screen Media Player widget)
+let audioCtxInstance = null;
+let arrivalAudioBuffer = null;
 
-function initAudioOnUserGesture() {
+async function initAudioOnUserGesture() {
   try {
-    if (!arrivalAudioInstance && typeof Audio !== 'undefined') {
-      arrivalAudioInstance = new Audio('/arrival-chaching.wav');
-      arrivalAudioInstance.preload = 'auto';
+    if (!audioCtxInstance && typeof window !== 'undefined') {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        audioCtxInstance = new AudioCtx();
+      }
+    }
+    if (audioCtxInstance && audioCtxInstance.state === 'suspended') {
+      await audioCtxInstance.resume();
+    }
+    if (audioCtxInstance && !arrivalAudioBuffer) {
+      const res = await fetch('/arrival-chaching.wav');
+      const arrayBuf = await res.arrayBuffer();
+      arrivalAudioBuffer = await audioCtxInstance.decodeAudioData(arrayBuf);
     }
   } catch (e) {
-    console.warn("Audio init error:", e);
+    console.warn("WebAudio init error:", e);
   }
 }
 
@@ -504,17 +515,20 @@ if (typeof window !== 'undefined') {
 
 function playChaChingSound() {
   try {
+    // Only play in-app audio if the app is currently in foreground/visible;
+    // when phone is locked, native WebPush notification sound plays without lock-screen media widget
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      return;
+    }
     initAudioOnUserGesture();
-    if (arrivalAudioInstance) {
-      arrivalAudioInstance.currentTime = 0;
-      arrivalAudioInstance.play().catch(e => {
-        console.warn("Could not play arrival sound:", e);
-      });
-    } else if (typeof Audio !== 'undefined') {
-      const audio = new Audio('/arrival-chaching.wav');
-      audio.play().catch(e => {
-        console.warn("Could not play arrival sound:", e);
-      });
+    if (audioCtxInstance && arrivalAudioBuffer) {
+      if (audioCtxInstance.state === 'suspended') {
+        audioCtxInstance.resume();
+      }
+      const src = audioCtxInstance.createBufferSource();
+      src.buffer = arrivalAudioBuffer;
+      src.connect(audioCtxInstance.destination);
+      src.start(0);
     }
   } catch (e) {
     console.warn("Audio playback error:", e);

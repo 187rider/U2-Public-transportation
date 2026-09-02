@@ -423,7 +423,7 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag
   if (isApple) {
     headers["apns-push-type"] = "alert";
     headers["apns-priority"] = "10";
-    if (tag) headers["apns-collapse-id"] = tag;
+    // Omit apns-collapse-id so each countdown step (e.g. 2m, 1m, arrival) delivers as an individual card with full sound on iOS
   }
 
   return {
