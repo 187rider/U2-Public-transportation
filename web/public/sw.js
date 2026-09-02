@@ -98,7 +98,10 @@ self.addEventListener('fetch', (event) => {
               }
               return networkTile;
             })
-            .catch(() => {
+            .catch((err) => {
+              if (err && err.name === 'AbortError') {
+                throw err;
+              }
               return new Response(null, { status: 204, statusText: 'No Content' });
             });
         });
