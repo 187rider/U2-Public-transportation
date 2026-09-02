@@ -1008,16 +1008,17 @@ export default function App() {
               if (res.ok) {
                 const data = await res.json();
                 if (Array.isArray(data.reminders)) {
-                  if (data.reminders.length > 0) {
-                    setReminders(prev => {
-                      const currentIds = new Set(prev.map(r => r.id));
-                      const missing = data.reminders.filter(r => !currentIds.has(r.id));
-                      if (missing.length > 0) {
-                        return [...prev, ...missing];
-                      }
-                      return prev;
-                    });
-                  }
+                  const serverMap = new Map(data.reminders.map(r => [r.id, r]));
+                  setReminders(prev => {
+                    const now = Date.now();
+                    // Drop reminders that the server has already finished and removed,
+                    // preserving only newly created ones (< 20s old)
+                    const kept = prev.filter(r => serverMap.has(r.id) || (now - (r.createdAt || now)) < 20000);
+                    // Also add any server reminders not yet in local state
+                    const localIds = new Set(kept.map(r => r.id));
+                    const missing = data.reminders.filter(r => !localIds.has(r.id));
+                    return [...kept, ...missing];
+                  });
                 }
               }
             }
@@ -1479,18 +1480,8 @@ export default function App() {
               const timePassed = initMin > 0 && elapsedMin >= (initMin + 1);
 
               if (wasClose || timePassed) {
-                triggerArrivalPush(
-                  `🚌 Маршрут ${rem.rnum} прибыл!`,
-                  `Остановка «${rem.stationName}»`,
-                  `arrival_${rem.sid}_${rem.rid}`,
-                  true
-                );
-                setAlertToast({
-                  title: `🚌 Маршрут ${rem.rnum} прибыл!`,
-                  body: `Остановка «${rem.stationName}»`
-                });
-                setTimeout(() => setAlertToast(null), 8000);
-                // Clean up reminder from UI state and unregister from server only on genuine arrival
+                // The bus arrived and departed while app was in background.
+                // Clean up state cleanly without playing delayed sound 30-60s after the fact.
                 setReminders(prev => prev.filter(r => r.id !== rem.id));
                 cancelArrivalReminder(rem.id, rem.rnum);
               }
@@ -1513,20 +1504,11 @@ export default function App() {
             const last = rem.lastNotifiedTime;
 
             // If the bus reached the stop (<= 1 min) and forecast time suddenly jumps by >= 3 min,
-            // the tracked bus departed and upstream is now showing the NEXT vehicle behind it
+            // the tracked bus departed and upstream is now showing the NEXT vehicle behind it.
+            // Clean up silently without playing delayed audio.
             if (last != null && last <= 1 && curTime >= 3) {
-              triggerArrivalPush(
-                `🚌 Маршрут ${rem.rnum} прибыл!`,
-                `Остановка «${rem.stationName}»`,
-                `arrival_${rem.sid}_${rem.rid}`,
-                true
-              );
-              setAlertToast({
-                title: `🚌 Маршрут ${rem.rnum} прибыл!`,
-                body: `Остановка «${rem.stationName}»`
-              });
-              setTimeout(() => setAlertToast(null), 8000);
               setReminders(prev => prev.filter(r => r.id !== rem.id));
+              cancelArrivalReminder(rem.id, rem.rnum);
               return;
             }
 
