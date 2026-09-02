@@ -628,13 +628,13 @@ export class TransitState {
       const sub = rem.subscription;
       const tag = `arrival_${rem.sid}_${rem.rid}`;
 
-      // Vehicle disappeared from forecast: wait 60 seconds before deleting notification
+      // Vehicle disappeared from forecast: wait 180 seconds before deleting notification
       if (!matching) {
         if (!rem.disappearedAt) {
           rem.disappearedAt = now;
           await this.storage.put(remKey, rem);
-        } else if (now - rem.disappearedAt >= 60000) {
-          // If vehicle has been missing for >= 60 seconds:
+        } else if (now - rem.disappearedAt >= 180000) {
+          // If vehicle has been missing for >= 180 seconds:
           // If it was at the stop (<= 1 min) before vanishing, trigger arrival notification
           if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 1) {
             await sendWebPush(sub, {
@@ -651,7 +651,7 @@ export class TransitState {
         continue;
       }
 
-      // Reappeared within 60s grace period -> clear disappearedAt timestamp
+      // Reappeared within 180s grace period -> clear disappearedAt timestamp
       if (rem.disappearedAt) {
         rem.disappearedAt = null;
         await this.storage.put(remKey, rem);

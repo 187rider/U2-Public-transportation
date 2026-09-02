@@ -1476,15 +1476,15 @@ export default function App() {
             if (!match) {
               if (!rem.disappearedAt) {
                 rem.disappearedAt = now;
-              } else if (now - rem.disappearedAt >= 60000) {
-                // Bus missing from forecast for >= 60 seconds -> delete notification cleanly
+              } else if (now - rem.disappearedAt >= 180000) {
+                // Bus missing from forecast for >= 180 seconds -> delete notification cleanly
                 setReminders(prev => prev.filter(r => r.id !== rem.id));
                 cancelArrivalReminder(rem.id, rem.rnum);
               }
               return;
             }
 
-            // Bus reappeared within 60s -> reset disappearedAt
+            // Bus reappeared within 180s -> reset disappearedAt
             if (rem.disappearedAt) {
               rem.disappearedAt = null;
             }
