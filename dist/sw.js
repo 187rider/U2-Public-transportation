@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v83';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v86';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -190,7 +190,7 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: body,
-    tag: tag || 'bus-arrival',
+    tag: `arrival_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     renotify: true,
     requireInteraction: true,
     silent: false,
@@ -231,9 +231,6 @@ self.addEventListener('notificationclick', (event) => {
         if (client.url && 'focus' in client) {
           if (sid) {
             client.postMessage({ type: 'OPEN_STATION_POPUP', sid: sid, rid: rid });
-          }
-          if ('navigate' in client && targetUrl !== '/') {
-            client.navigate(targetUrl);
           }
           return client.focus();
         }
