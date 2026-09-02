@@ -1,5 +1,5 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v86';
-const TILES_CACHE_NAME = 'u2-mbtiles-cache-v1';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v87';
+const TILES_CACHE_NAME = 'u2-mbtiles-cache-v2';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
 const STATIC_ASSETS = [
@@ -60,18 +60,29 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 1. Vector Map Tiles (.pbf): CACHE-FIRST (0ms load from disk, 204 offline fallback)
+  // 1. Vector Map Tiles (.pbf): Cache with guaranteed Content-Encoding: gzip & Content-Type: application/x-protobuf
   if (url.pathname.startsWith('/tiles/') || url.pathname.endsWith('.pbf')) {
     event.respondWith(
       caches.open(TILES_CACHE_NAME).then((cache) => {
         return cache.match(event.request).then((cachedTile) => {
-          if (cachedTile) {
-            return cachedTile; // Return cached tile instantly
+          if (cachedTile && cachedTile.headers.get('Content-Encoding') === 'gzip') {
+            return cachedTile;
           }
           return fetch(event.request)
             .then((networkTile) => {
               if (networkTile && networkTile.status === 200) {
-                cache.put(event.request, networkTile.clone()).catch(() => {});
+                const h = new Headers(networkTile.headers);
+                h.set('Content-Type', 'application/x-protobuf');
+                h.set('Content-Encoding', 'gzip');
+                h.set('Cache-Control', 'public, max-age=2592000, immutable');
+                return networkTile.arrayBuffer().then((buf) => {
+                  const enrichedRes = new Response(buf, {
+                    status: 200,
+                    headers: h
+                  });
+                  cache.put(event.request, enrichedRes.clone()).catch(() => {});
+                  return enrichedRes;
+                });
               }
               return networkTile;
             })
