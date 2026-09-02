@@ -1474,17 +1474,19 @@ export default function App() {
             const initMin = parseInt(rem.initialTime, 10) || 0;
 
             if (!match) {
-              const wasClose = rem.lastNotifiedTime != null && rem.lastNotifiedTime <= 1;
-              const timePassed = initMin > 0 && elapsedMin >= (initMin + 1);
-
-              if (wasClose || timePassed) {
-                // The bus arrived and departed while app was in background.
-                // Clean up state cleanly without playing delayed sound 30-60s after the fact.
+              if (!rem.disappearedAt) {
+                rem.disappearedAt = now;
+              } else if (now - rem.disappearedAt >= 60000) {
+                // Bus missing from forecast for >= 60 seconds -> delete notification cleanly
                 setReminders(prev => prev.filter(r => r.id !== rem.id));
                 cancelArrivalReminder(rem.id, rem.rnum);
               }
-              // If not close, do NOT cancel the reminder! The bus is still en route and may reappear on next poll
               return;
+            }
+
+            // Bus reappeared within 60s -> reset disappearedAt
+            if (rem.disappearedAt) {
+              rem.disappearedAt = null;
             }
 
             const timeNum = parseInt(match.time, 10);

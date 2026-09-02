@@ -628,20 +628,33 @@ export class TransitState {
       const sub = rem.subscription;
       const tag = `arrival_${rem.sid}_${rem.rid}`;
 
-      // Vehicle vanished after reaching stop (<= 1 min) -> Genuine arrival event!
+      // Vehicle disappeared from forecast: wait 60 seconds before deleting notification
       if (!matching) {
-        if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 1) {
-          await sendWebPush(sub, {
-            title: `🚌 Маршрут ${rnum} прибыл!`,
-            body: `Остановка «${stname}»`,
-            tag,
-            sid: rem.sid,
-            rid: rem.rid
-          }, this.env, tag, true);
+        if (!rem.disappearedAt) {
+          rem.disappearedAt = now;
+          await this.storage.put(remKey, rem);
+        } else if (now - rem.disappearedAt >= 60000) {
+          // If vehicle has been missing for >= 60 seconds:
+          // If it was at the stop (<= 1 min) before vanishing, trigger arrival notification
+          if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 1) {
+            await sendWebPush(sub, {
+              title: `🚌 Маршрут ${rnum} прибыл!`,
+              body: `Остановка «${stname}»`,
+              tag,
+              sid: rem.sid,
+              rid: rem.rid
+            }, this.env, tag, true);
+          }
           await this.storage.delete(remKey);
           this.reminders.delete(remKey);
         }
         continue;
+      }
+
+      // Reappeared within 60s grace period -> clear disappearedAt timestamp
+      if (rem.disappearedAt) {
+        rem.disappearedAt = null;
+        await this.storage.put(remKey, rem);
       }
 
       const rawVal = matching.time != null ? matching.time : (matching.arrt != null ? matching.arrt : matching.arrtime);
