@@ -417,8 +417,7 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag
   const headers = {
     "Content-Type": "application/octet-stream",
     "Content-Encoding": "aes128gcm",
-    "TTL": "300", // 300s (5 minutes) signals to both APNs and FCM that this is time-critical real-time transit telemetry
-    "Urgency": "high", // High priority ensures FCM wakes device in real time with screen off
+    "TTL": "300",
     "Authorization": `vapid t=${jwt}, k=${vapidConfig.publicKey}`
   };
 
@@ -426,7 +425,6 @@ async function encryptWebPushPayload(subscription, payloadText, vapidConfig, tag
   if (isApple) {
     headers["apns-push-type"] = "alert";
     headers["apns-priority"] = "10";
-    // Omit apns-collapse-id so each countdown step (e.g. 2m, 1m, arrival) delivers as an individual card with full sound on iOS
   }
 
   return {
@@ -704,9 +702,13 @@ export class TransitState {
 
       if (last === null) {
         shouldFire = true;
-      } else if (curTime > 5 && curTime <= last - 5) {
+      } else if (curTime > 10 && curTime <= last - 5) {
         shouldFire = true;
-      } else if (last > 5 && curTime <= 5 && curTime > 1) {
+      } else if (last > 10 && curTime <= 10) {
+        shouldFire = true;
+      } else if (curTime <= 10 && curTime > 3 && curTime <= last - 2) {
+        shouldFire = true;
+      } else if (curTime <= 3 && curTime > 1 && curTime < last) {
         shouldFire = true;
       } else if (curTime <= 1 && (last > 1 || last === null)) {
         // GUARANTEED 1-MINUTE WARNING: Always notify for 1 minute before arrival!
