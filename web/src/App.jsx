@@ -3343,11 +3343,33 @@ export default function App() {
     setActiveTab(0);
   }, [stations, toggleFavorite]);
 
-  // Handle open station popup from push notification click or URL query param (?sid=...)
+  // Handle open station popup from push notification click, CacheStorage, or URL query param (?sid=...)
   useEffect(() => {
     if (!map.current || !stations || stations.length === 0) return;
 
-    // 1. Check URL query parameters (?sid=123 or ?station=123)
+    // 1. Check CacheStorage for pending notification click action (e.g. cold launch of PWA)
+    const checkPendingAction = async () => {
+      try {
+        if ('caches' in window) {
+          const cache = await caches.open('u2-pending-actions');
+          const res = await cache.match('/__pending_station_action');
+          if (res) {
+            const data = await res.json();
+            await cache.delete('/__pending_station_action');
+            if (data && data.sid && (Date.now() - (data.timestamp || 0) < 60000)) {
+              setTimeout(() => {
+                openStationOnMap(data.sid, '', data.rid || '');
+              }, 300);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to check pending station action:', e);
+      }
+    };
+    checkPendingAction();
+
+    // 2. Check URL query parameters (?sid=123 or ?station=123)
     try {
       const urlParams = new URLSearchParams(window.location.search);
       const sidParam = urlParams.get('sid') || urlParams.get('station');
@@ -3359,21 +3381,29 @@ export default function App() {
       }
     } catch {}
 
-    // 2. Listen for messages from Service Worker when notification is clicked while window is open
+    // 3. Listen for messages from Service Worker when notification is clicked while window is open
     const handleSwMessage = (event) => {
       if (event.data && event.data.type === 'OPEN_STATION_POPUP' && event.data.sid) {
         openStationOnMap(event.data.sid, '', event.data.rid || '');
       }
     };
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkPendingAction();
+      }
+    };
+
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('message', handleSwMessage);
     }
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.removeEventListener('message', handleSwMessage);
       }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [stations, openStationOnMap]);
 

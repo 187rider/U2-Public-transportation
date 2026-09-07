@@ -248,29 +248,59 @@ self.addEventListener('notificationclick', (event) => {
   const notifData = (event.notification && event.notification.data) || {};
   const sid = notifData.sid || '';
   const rid = notifData.rid || '';
-  const targetPath = (notifData.url && notifData.url !== '/') ? notifData.url : (sid ? `/?sid=${encodeURIComponent(sid)}` : '/');
-  const fullTargetUrl = new URL(targetPath, self.location.origin).href;
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      // 1. If an existing PWA window or tab of our app is already open, focus it
-      for (const client of clientList) {
-        if (client.url) {
-          const clientUrl = new URL(client.url, self.location.origin);
-          if (clientUrl.origin === self.location.origin) {
-            if (sid) {
-              client.postMessage({ type: 'OPEN_STATION_POPUP', sid: sid, rid: rid });
-            }
-            if ('focus' in client) {
-              return client.focus();
-            }
-          }
+    (async () => {
+      // 1. Store pending station action in CacheStorage so opening/focused app reads it reliably
+      if (sid) {
+        try {
+          const cache = await caches.open('u2-pending-actions');
+          const payload = JSON.stringify({ sid, rid, timestamp: Date.now() });
+          await cache.put(
+            new Request('/__pending_station_action'),
+            new Response(payload, { headers: { 'Content-Type': 'application/json' } })
+          );
+        } catch (e) {
+          console.warn('Failed to save pending station action:', e);
         }
       }
-      // 2. Otherwise open the full absolute URL so Android launches the installed WebAPK/standalone PWA
-      if (self.clients.openWindow) {
-        return self.clients.openWindow(fullTargetUrl);
+
+      // 2. Look for open client windows belonging to our origin
+      const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      let matchingClient = null;
+
+      for (const client of clientList) {
+        try {
+          if (client.url) {
+            const clientUrl = new URL(client.url, self.location.origin);
+            if (clientUrl.origin === self.location.origin) {
+              matchingClient = client;
+              if (client.focused || client.visibilityState === 'visible') {
+                break;
+              }
+            }
+          }
+        } catch {}
       }
-    })
+
+      if (matchingClient) {
+        if (sid) {
+          matchingClient.postMessage({ type: 'OPEN_STATION_POPUP', sid, rid });
+        }
+        if ('focus' in matchingClient) {
+          const focusedClient = await matchingClient.focus().catch(() => null);
+          if (focusedClient && sid) {
+            focusedClient.postMessage({ type: 'OPEN_STATION_POPUP', sid, rid });
+          }
+          return;
+        }
+      }
+
+      // 3. If no window is open, open the root standalone PWA URL (no extra query params that break WebAPK/iOS standalone intents)
+      if (self.clients.openWindow) {
+        const rootUrl = (self.registration && self.registration.scope) ? self.registration.scope : '/';
+        await self.clients.openWindow(rootUrl);
+      }
+    })()
   );
 });
