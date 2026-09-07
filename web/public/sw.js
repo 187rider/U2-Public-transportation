@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v90';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v92';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v3';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -8,6 +8,7 @@ const STATIC_ASSETS = [
   '/favicon.svg',
   '/manifest.json',
   '/apple-touch-icon.png',
+  '/icon-192.png',
   '/icon-512.png',
   '/ulan_ude.gif',
   '/arrival-chaching.wav'
