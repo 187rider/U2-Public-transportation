@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v89';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v90';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v3';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -248,20 +248,28 @@ self.addEventListener('notificationclick', (event) => {
   const notifData = (event.notification && event.notification.data) || {};
   const sid = notifData.sid || '';
   const rid = notifData.rid || '';
-  const targetUrl = (notifData.url && notifData.url !== '/') ? notifData.url : (sid ? `/?sid=${encodeURIComponent(sid)}` : '/');
+  const targetPath = (notifData.url && notifData.url !== '/') ? notifData.url : (sid ? `/?sid=${encodeURIComponent(sid)}` : '/');
+  const fullTargetUrl = new URL(targetPath, self.location.origin).href;
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // 1. If an existing PWA window or tab of our app is already open, focus it
       for (const client of clientList) {
-        if (client.url && 'focus' in client) {
-          if (sid) {
-            client.postMessage({ type: 'OPEN_STATION_POPUP', sid: sid, rid: rid });
+        if (client.url) {
+          const clientUrl = new URL(client.url, self.location.origin);
+          if (clientUrl.origin === self.location.origin) {
+            if (sid) {
+              client.postMessage({ type: 'OPEN_STATION_POPUP', sid: sid, rid: rid });
+            }
+            if ('focus' in client) {
+              return client.focus();
+            }
           }
-          return client.focus();
         }
       }
+      // 2. Otherwise open the full absolute URL so Android launches the installed WebAPK/standalone PWA
       if (self.clients.openWindow) {
-        return self.clients.openWindow(targetUrl);
+        return self.clients.openWindow(fullTargetUrl);
       }
     })
   );
