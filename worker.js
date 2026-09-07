@@ -636,8 +636,8 @@ export class TransitState {
 
       // 1. Vehicle missing from forecast:
       if (!matching) {
-        // If the vehicle was already at the stop (<= 1 min), its disappearance means it arrived!
-        if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 1) {
+        // If the vehicle was already near the stop (<= 2 min), its disappearance means it reached the stop!
+        if (rem.lastNotifiedTime !== null && rem.lastNotifiedTime <= 2) {
           await sendWebPush(sub, {
             title: `🚌 Маршрут ${rnum} прибыл!`,
             body: `Остановка «${stname}»`,
@@ -650,7 +650,7 @@ export class TransitState {
           continue;
         }
 
-        // If the vehicle disappeared while en route, wait 180s before deleting
+        // If the vehicle disappeared while en route (> 2 min away), wait 180s before deleting
         if (!rem.disappearedAt) {
           rem.disappearedAt = now;
           await this.storage.put(remKey, rem);
@@ -667,23 +667,26 @@ export class TransitState {
         await this.storage.put(remKey, rem);
       }
 
-      const rawVal = matching.time != null ? matching.time : (matching.arrt != null ? matching.arrt : matching.arrtime);
-      const parsedTime = parseInt(rawVal, 10);
+      const rawVal = matching.time != null ? matching.time : (matching.arrt != null ? matching.arrt : (matching.arrtime != null ? matching.arrtime : ""));
+      const rawStr = String(rawVal).trim().toLowerCase();
       let curTime = 0;
-      if (!isNaN(parsedTime)) {
-        // If > 60, it is in seconds (e.g. 180s = 3m); otherwise it is already in minutes (e.g. 3m)
-        curTime = parsedTime > 60 ? Math.ceil(parsedTime / 60) : parsedTime;
+      if (rawStr === "0" || rawStr === "прибывает" || rawStr === "прибыл" || rawStr === "на остановке") {
+        curTime = 0;
+      } else {
+        const parsedTime = parseInt(rawStr, 10);
+        if (!isNaN(parsedTime)) {
+          curTime = parsedTime > 60 ? Math.ceil(parsedTime / 60) : parsedTime;
+        }
       }
       const last = rem.lastNotifiedTime;
 
-      // 2. Arrival Trigger:
-      // If we ALREADY sent the 1-minute warning (last <= 1):
-      // Then when 50s have elapsed since 1-min alert, or departure bounce (curTime >= 3), trigger ARRIVAL!
+      // 2. Direct Arrival Trigger (curTime === 0 or 40s elapsed after 1-min alert):
       const isOneMinAlreadySent = last !== null && last <= 1;
-      const oneMinElapsed = rem.oneMinNotifiedAt && (now - rem.oneMinNotifiedAt >= 50000);
+      const oneMinElapsed = rem.oneMinNotifiedAt && (now - rem.oneMinNotifiedAt >= 40000);
       const departureBounce = isOneMinAlreadySent && curTime >= 3;
+      const isZeroMin = curTime === 0;
 
-      if (isOneMinAlreadySent && (oneMinElapsed || departureBounce)) {
+      if (isZeroMin || (isOneMinAlreadySent && (oneMinElapsed || departureBounce))) {
         await sendWebPush(sub, {
           title: `🚌 Маршрут ${rnum} прибыл!`,
           body: `Остановка «${stname}»`,
@@ -696,7 +699,7 @@ export class TransitState {
         continue;
       }
 
-      // 3. Smart Cadence: guaranteed 1-minute notification even if upstream jumps from 2m to 0m
+      // 3. Cadence and 1-Minute Warning:
       let shouldFire = false;
       let effectiveTime = curTime;
 
@@ -711,7 +714,6 @@ export class TransitState {
       } else if (curTime <= 3 && curTime > 1 && curTime < last) {
         shouldFire = true;
       } else if (curTime <= 1 && (last > 1 || last === null)) {
-        // GUARANTEED 1-MINUTE WARNING: Always notify for 1 minute before arrival!
         shouldFire = true;
         effectiveTime = 1;
       }

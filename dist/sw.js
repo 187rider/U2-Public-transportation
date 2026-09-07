@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'u2-transport-shell-v93';
+const SHELL_CACHE_NAME = 'u2-transport-shell-v94';
 const TILES_CACHE_NAME = 'u2-mbtiles-cache-v3';
 const STATIC_API_CACHE_NAME = 'u2-static-api-v1';
 
@@ -217,7 +217,7 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: body,
-    tag: `arrival_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    tag: tag || 'arrival-alarm',
     renotify: true,
     requireInteraction: true,
     silent: false,
