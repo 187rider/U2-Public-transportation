@@ -667,15 +667,17 @@ export class TransitState {
         await this.storage.put(remKey, rem);
       }
 
-      const rawVal = matching.time != null ? matching.time : (matching.arrt != null ? matching.arrt : (matching.arrtime != null ? matching.arrtime : ""));
+      const rawVal = matching.arrt != null ? matching.arrt : (matching.time != null ? matching.time : (matching.arrtime != null ? matching.arrtime : ""));
       const rawStr = String(rawVal).trim().toLowerCase();
       let curTime = 0;
       if (rawStr === "0" || rawStr === "прибывает" || rawStr === "прибыл" || rawStr === "на остановке") {
         curTime = 0;
       } else {
-        const parsedTime = parseInt(rawStr, 10);
-        if (!isNaN(parsedTime)) {
-          curTime = parsedTime > 60 ? Math.ceil(parsedTime / 60) : parsedTime;
+        const parsedSeconds = parseInt(rawStr, 10);
+        if (!isNaN(parsedSeconds) && parsedSeconds > 0) {
+          curTime = Math.ceil(parsedSeconds / 60);
+        } else {
+          curTime = 0;
         }
       }
       const last = rem.lastNotifiedTime;
